@@ -23,6 +23,7 @@ services:
       - ./letsencrypt:/etc/letsencrypt
     networks:
       - nginx-proxy-manager
+      - coolify
 networks:
   nginx-proxy-manager:
     # Specify driver options
@@ -30,3 +31,6 @@ networks:
     name: nginx-proxy-manager
     driver_opts:
       com.docker.network.bridge.host_binding_ipv4: "127.0.0.1"
+  coolify:
+    name: coolify
+    external: true
