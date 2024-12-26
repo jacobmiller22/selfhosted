@@ -9,3 +9,9 @@ services:
       - ./vw-data/:/data/
     ports:
       - 7277:80
+    networks:
+      - nginx-proxy-manager
+networks:
+  nginx-proxy-manager:
+    name: nginx-proxy-manager
+    external: true
