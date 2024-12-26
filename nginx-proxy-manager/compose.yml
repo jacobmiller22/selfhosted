@@ -21,6 +21,8 @@ services:
     volumes:
       - ./data:/data
       - ./letsencrypt:/etc/letsencrypt
+    networks:
+      - nginx-proxy-manager
 networks:
   nginx-proxy-manager:
     # Specify driver options
