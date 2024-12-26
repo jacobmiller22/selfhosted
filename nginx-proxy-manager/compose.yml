@@ -25,3 +25,6 @@ networks:
   nginx-proxy-manager:
     # Specify driver options
     driver: bridge
+    name: nginx-proxy-manager
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: "127.0.0.1"
