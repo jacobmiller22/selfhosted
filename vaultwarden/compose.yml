@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     environment:
       DOMAIN: "https://vw.cloud.jacobmiller22.com"
+      SIGNUPS_ALLOWED: "true"
     volumes:
       - ./vw-data/:/data/
     ports:
