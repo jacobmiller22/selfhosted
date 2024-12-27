@@ -1,19 +1,23 @@
 services:
-  serve:
-    container_name: serve
-    build:
-      context: ./serve
+  # serve:
+  #   container_name: serve
+  #   build:
+  #     context: ./serve
+  #   networks:
+  #     - nginx-proxy-manager
+  # stream:
+  #   container_name: stream
+  #   build:
+  #     context: ./stream
+  #   devices:
+  #     - /dev/video0:/dev/video0
+  #   networks:
+  #     - nginx-proxy-manager
+  mediamtx:
+    container_name: mediamtx
+    image: bluenviron/mediamtx
     networks:
       - nginx-proxy-manager
-  stream:
-    container_name: stream
-    build:
-      context: ./stream
-    devices:
-      - /dev/video0:/dev/video0
-    networks:
-      - nginx-proxy-manager
-
 networks:
   nginx-proxy-manager:
     name: nginx-proxy-manager
