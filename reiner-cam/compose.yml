@@ -1,23 +1,15 @@
 services:
-  # serve:
-  #   container_name: serve
-  #   build:
-  #     context: ./serve
-  #   networks:
-  #     - nginx-proxy-manager
-  stream:
-    container_name: stream
-    build:
-      context: ./stream
+  restreamer:
+    container_name: restreamer
+    image: datarhei/restreamer:latest
+    networks:
+      - nginx-proxy-manager
+    volumes:
+      - ./data/restreamer/config:/core/config
+      - ./data/restreamer/data:/core/data
+    privileged: true
     devices:
       - /dev/video0:/dev/video0
-    networks:
-      - nginx-proxy-manager
-  mediamtx:
-    container_name: mediamtx
-    image: bluenviron/mediamtx
-    networks:
-      - nginx-proxy-manager
 networks:
   nginx-proxy-manager:
     name: nginx-proxy-manager
