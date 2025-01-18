@@ -1,5 +1,5 @@
 FROM ubuntu
 
-RUN apt update && apt install motion
+RUN apt update -y && apt install -y motion
 
 CMD ["motion"]
