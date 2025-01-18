@@ -5,8 +5,8 @@ services:
       context: .
     networks:
       - nginx-proxy-manager
-    volumes:
-      - ./data/motion/motion.conf:/etc/motion/motion.conf
+    # volumes:
+    #   - ./data/motion/motion.conf:/etc/motion/motion.conf
     privileged: true
     devices:
       - /dev/video0:/dev/video0
