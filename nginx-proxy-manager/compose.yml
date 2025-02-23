@@ -8,6 +8,7 @@ services:
       - '80:80' # Public HTTP Port
       - '443:443' # Public HTTPS Port
       - '81:81' # Admin Web Port
+      - '8096:8096' # Jellyfin
       # Add any other Stream port you want to expose
       # - '21:21' # FTP
     # Uncomment the next line if you uncomment anything in the section
