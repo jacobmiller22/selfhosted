@@ -1,5 +1,6 @@
 set -e
 
+mkdir -p /run/secrets
 # Write only the secrets you need into a file
 cat <<EOF > /run/secrets/env_vars
 BACKUP_DEST_ENDPOINT=${BACKUP_DEST_ENDPOINT}
