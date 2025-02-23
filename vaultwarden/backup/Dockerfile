@@ -20,6 +20,7 @@ WORKDIR /app
 COPY backup.sh /app/backup.sh
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod 0755 /app/backup.sh
+RUN chmod 0755 /app/entrypoint.sh
 
 ADD volbackcron /etc/cronjob
 RUN crontab /etc/cronjob
