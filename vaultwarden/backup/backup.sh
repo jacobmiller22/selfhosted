@@ -3,16 +3,12 @@ echo "Running backup!!"
 echo "Sourcing secrets"
 source /run/secrets/env_vars
 
-echo "Environment: "
-echo "$(env)"
 echo "Backing up sqlite db!"
 mkdir -p "/app/backups/"
 sqlite3 /tmp/vw-data/db.sqlite3 ".backup '/app/backups/vw-db-backup.sqlite3'"
 chmod 755 "/app/backups/vw-db-backup.sqlite3"
 echo "Backup created!"
 
-echo "$(pwd)"
-echo "$(ls)"
 echo "Saving backup to cloud!"
 /app/volback \
 	--path="/app/backups/vw-db-backup.sqlite3" \
