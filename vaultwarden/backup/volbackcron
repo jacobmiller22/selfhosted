@@ -1,2 +1,3 @@
 # Run the backup script daily at 2:00 AM
-0 2 * * * root sh /app/backup.sh > /proc/1/fd/1 2>/proc/1/fd/2
+# 0 2 * * * root sh /app/backup.sh > /proc/1/fd/1 2>/proc/1/fd/2
+*/10 * * * * * root sh /app/backup.sh > /proc/1/fd/1 2>/proc/1/fd/2
