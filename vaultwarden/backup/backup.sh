@@ -1,5 +1,7 @@
 echo "Running backup!!"
 
+echo "Sourcing secrets"
+source /run/secrets/env_vars
 
 echo "Environment: "
 echo "$(env)"
