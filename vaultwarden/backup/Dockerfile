@@ -23,6 +23,7 @@ WORKDIR /app
 RUN rm -rf /app/staging
 
 COPY backup.sh /app/backup.sh
+RUN chmod 0755 /app/backup.sh
 ADD volbackcron /etc/cronjob
 
 RUN crontab /etc/cronjob

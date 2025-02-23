@@ -1,2 +1,3 @@
 # Run the backup script daily at 2:00 AM
-*/10 * * * * /bin/bash -c "/app/backup.sh" > /proc/$(pgrep cron)/fd/1 2>/proc/$(pgrep cron)/fd/2
+# */10 * * * * /bin/bash -c "/app/backup.sh" > /proc/$(pgrep cron)/fd/1 2>/proc/$(pgrep cron)/fd/2
+* * * * * /bin/bash -c "/app/backup.sh" >> /proc/1/fd/1 2>&1
