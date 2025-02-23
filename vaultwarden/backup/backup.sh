@@ -1,6 +1,8 @@
 echo "Running backup!!"
 
 
+echo "Environment: "
+echo "$(env)"
 echo "Backing up sqlite db!"
 mkdir -p "/app/backups/"
 sqlite3 /tmp/vw-data/db.sqlite3 ".backup '/app/backups/vw-db-backup.sqlite3'"
