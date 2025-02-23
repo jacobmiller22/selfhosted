@@ -18,6 +18,7 @@ RUN cp bin/volume-backup /app/volback;
 WORKDIR /app
 
 COPY backup.sh /app/backup.sh
+COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod 0755 /app/backup.sh
 
 ADD volbackcron /etc/cronjob
@@ -39,4 +40,4 @@ ENV BACKUP_DEST_SECRET_ACCESS_KEY=$BACKUP_DEST_SECRET_ACCESS_KEY
 ARG BACKUP_ENCRYPTION_KEY
 ENV BACKUP_ENCRYPTION_KEY=$BACKUP_ENCRYPTION_KEY
 
-CMD ["/bin/bash/", "/app/entrypoint.sh"]
+CMD ["/app/entrypoint.sh"]
