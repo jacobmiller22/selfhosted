@@ -16,14 +16,17 @@ RUN make build;
 
 RUN cp bin/volume-backup /app/volback;
 
+
+WORKDIR /app
+
+
+RUN rm -rf /app/staging
+
 COPY volbackcron /etc/cron.d/volbackcron
+COPY backup.sh /app/backup.sh
 
 RUN chmod 0644 /etc/cron.d/volbackcron;
 
 RUN crontab /etc/cron.d/volbackcron;
-
-WORKDIR /app
-
-RUN rm -rf /app/staging
 
 CMD ["cron", "-f"]
