@@ -4,7 +4,6 @@ RUN apt-get update && apt-get -y --no-install-recommends install cron tar wget b
 
 WORKDIR /app/staging
 
-
 RUN wget --no-check-certificate "https://github.com/jacobmiller22/volback/archive/refs/tags/v0.0.1.tar.gz"
 
 # Creates a volback-0.0.1 directory
@@ -16,16 +15,12 @@ RUN make build;
 
 RUN cp bin/volume-backup /app/volback;
 
-
 WORKDIR /app
-
-
-RUN rm -rf /app/staging
 
 COPY backup.sh /app/backup.sh
 RUN chmod 0755 /app/backup.sh
-ADD volbackcron /etc/cronjob
 
+ADD volbackcron /etc/cronjob
 RUN crontab /etc/cronjob
 
 CMD ["cron", "-f"]
