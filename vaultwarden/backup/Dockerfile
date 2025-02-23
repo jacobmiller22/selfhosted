@@ -22,11 +22,11 @@ WORKDIR /app
 
 RUN rm -rf /app/staging
 
-COPY volbackcron /etc/cron.d/volbackcron
 COPY backup.sh /app/backup.sh
+ADD volbackcron /etc/cronjob
 
 RUN chmod 0644 /etc/cron.d/volbackcron;
 
-RUN crontab /etc/cron.d/volbackcron;
+RUN crontab /etc/cronjob
 
 CMD ["cron", "-f"]
