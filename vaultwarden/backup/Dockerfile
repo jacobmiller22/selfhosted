@@ -13,7 +13,7 @@ WORKDIR /app/staging/volback-0.0.1
 
 RUN make build;
 
-RUN cp bin/volume-backup /app/volback;
+RUN cp bin/volback /app/volback;
 
 WORKDIR /app
 
