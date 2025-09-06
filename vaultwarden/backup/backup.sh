@@ -11,10 +11,10 @@ backup_filename="vw-db-backup-$(date +'%Y-%m-%d_%H-%M-%S').sqlite3"
 backup_path="/app/backups/${backup_filename}"
 backup_parent_path=$(dirname "$backup_path")
 
-echo "Backing up sqlite db to ${backup_path}"
+echo "Backing up sqlite db at ${target_path} to ${backup_path}"
 
 mkdir -p $backup_parent_path
-sqlite3 /tmp/vw-data/db.sqlite3 ".backup '$backup_path'"
+sqlite3 "$target_path" ".backup '$backup_path'"
 chmod 755 "$backup_path"
 
 echo "Backup created!"
@@ -22,7 +22,7 @@ echo "Backup created!"
 echo "Saving backup to cloud!"
 /app/volback \
 	--src.kind="fs" \
-	--src.path="$target_path" \
+	--src.path="$backup_path" \
 	--enc.key="${BACKUP_ENCRYPTION_KEY}"  \
 	--dst.kind="s3" \
 	--dst.path="$backup_path" \
@@ -38,3 +38,12 @@ echo "Cleaning up!"
 rm $backup_path
 
 echo "Finished running backup!"
+
+
+
+---
+echo "Backing up sqlite db!"
+mkdir -p "/app/backups/"
+sqlite3 /tmp/vw-data/db.sqlite3 ".backup '/app/backups/vw-db-backup.sqlite3'"
+chmod 755 "/app/backups/vw-db-backup.sqlite3"
+echo "Backup created!"
