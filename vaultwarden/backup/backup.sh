@@ -5,7 +5,7 @@ echo "Running backup!!"
 echo "Sourcing secrets"
 source /run/secrets/env_vars
 
-target_path="/app/backups/vw-db-backup.sqlite3"
+target_path="/tmp/vw-data/db.sqlite3"
 
 backup_filename="vw-db-backup-$(date +'%Y-%m-%d_%H-%M-%S').sqlite3"
 backup_path="/app/backups/${backup_filename}"
