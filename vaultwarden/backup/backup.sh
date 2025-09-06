@@ -39,11 +39,3 @@ rm $backup_path
 
 echo "Finished running backup!"
 
-
-
----
-echo "Backing up sqlite db!"
-mkdir -p "/app/backups/"
-sqlite3 /tmp/vw-data/db.sqlite3 ".backup '/app/backups/vw-db-backup.sqlite3'"
-chmod 755 "/app/backups/vw-db-backup.sqlite3"
-echo "Backup created!"
