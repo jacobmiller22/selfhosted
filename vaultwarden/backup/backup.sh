@@ -15,7 +15,7 @@ echo "Backing up sqlite db at ${target_path} to ${backup_path}"
 
 mkdir -p $backup_parent_path
 sqlite3 "$target_path" ".backup '$backup_path'"
-chmod 755 "$backup_path"
+chmod 777 "$backup_path"
 
 echo "Backup created!"
 
@@ -25,7 +25,7 @@ echo "Saving backup to cloud!"
 	--src.path="$backup_path" \
 	--enc.key="${BACKUP_ENCRYPTION_KEY}"  \
 	--dst.kind="s3" \
-	--dst.path="$backup_path" \
+	--dst.path="backups/vw/vw-db-backup.sqlite3.enc" \
 	--dst.s3-endpoint="${BACKUP_DEST_ENDPOINT}" \
 	--dst.s3-bucket="${BACKUP_DEST_BUCKET}" \
 	--dst.s3-access-key-id="${BACKUP_DEST_ACCESS_KEY_ID}" \
@@ -38,4 +38,3 @@ echo "Cleaning up!"
 rm $backup_path
 
 echo "Finished running backup!"
-
