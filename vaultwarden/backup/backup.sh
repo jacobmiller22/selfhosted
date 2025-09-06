@@ -23,7 +23,7 @@ echo "Saving backup to cloud!"
 	--src.path="$backup_path" \
 	--enc.key="${BACKUP_ENCRYPTION_KEY}"  \
 	--dst.kind="s3" \
-	--dst.path="backups/vw" \
+	--dst.path="${backup_path}" \
 	--dst.s3-endpoint="${BACKUP_DEST_ENDPOINT}" \
 	--dst.s3-bucket="${BACKUP_DEST_BUCKET}" \
 	--dst.s3-access-key-id="${BACKUP_DEST_ACCESS_KEY_ID}" \
