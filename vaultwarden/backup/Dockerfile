@@ -4,12 +4,14 @@ RUN apt-get update && apt-get -y --no-install-recommends install cron tar wget b
 
 WORKDIR /app/staging
 
-RUN wget --no-check-certificate "https://github.com/jacobmiller22/volback/archive/refs/tags/v0.0.1.tar.gz"
+ARG VOLBACK_VERSION=0.1.0
 
-# Creates a volback-0.0.1 directory
-RUN tar -xzf v0.0.1.tar.gz;
+RUN wget --no-check-certificate "https://github.com/jacobmiller22/volback/archive/refs/tags/v${VOLBACK_VERSION}.tar.gz"
 
-WORKDIR /app/staging/volback-0.0.1
+# Creates a volback-0.1.0 directory
+RUN tar -xzf "v${VOLBACK_VERSION}.tar.gz";
+
+WORKDIR "/app/staging/volback-${VOLBACK_VERSION}"
 
 RUN make build;
 
