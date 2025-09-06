@@ -17,6 +17,9 @@ RUN cp bin/volume-backup /app/volback;
 
 WORKDIR /app
 
+# Clean up staging area
+RUN rm -rf /app/staging 
+
 COPY backup.sh /app/backup.sh
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod 0755 /app/backup.sh
@@ -24,7 +27,6 @@ RUN chmod 0755 /app/entrypoint.sh
 
 ADD volbackcron /etc/cronjob
 RUN crontab /etc/cronjob
-
 
 ARG BACKUP_DEST_ENDPOINT 
 ENV BACKUP_DEST_ENDPOINT=$BACKUP_DEST_ENDPOINT
