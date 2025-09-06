@@ -5,6 +5,8 @@ echo "Running backup!!"
 echo "Sourcing secrets"
 source /run/secrets/env_vars
 
+target_path="/app/backups/vw-db-backup.sqlite3"
+
 backup_filename="vw-db-backup-$(date +'%Y-%m-%d_%H-%M-%S').sqlite3"
 backup_path="/app/backups/${backup_filename}"
 backup_parent_path=$(dirname "$backup_path")
@@ -20,10 +22,10 @@ echo "Backup created!"
 echo "Saving backup to cloud!"
 /app/volback \
 	--src.kind="fs" \
-	--src.path="$backup_path" \
+	--src.path="$target_path" \
 	--enc.key="${BACKUP_ENCRYPTION_KEY}"  \
 	--dst.kind="s3" \
-	--dst.path="${backup_path}" \
+	--dst.path="$backup_path" \
 	--dst.s3-endpoint="${BACKUP_DEST_ENDPOINT}" \
 	--dst.s3-bucket="${BACKUP_DEST_BUCKET}" \
 	--dst.s3-access-key-id="${BACKUP_DEST_ACCESS_KEY_ID}" \
