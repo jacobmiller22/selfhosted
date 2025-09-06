@@ -1,27 +1,38 @@
+#!/bin/bash
+
 echo "Running backup!!"
 
 echo "Sourcing secrets"
 source /run/secrets/env_vars
 
-echo "Backing up sqlite db!"
-mkdir -p "/app/backups/"
-sqlite3 /tmp/vw-data/db.sqlite3 ".backup '/app/backups/vw-db-backup.sqlite3'"
-chmod 755 "/app/backups/vw-db-backup.sqlite3"
+backup_filename="vw-db-backup-$(date +'%Y-%m-%d_%H-%M-%S').sqlite3"
+backup_path="/app/backups/${backup_filename}"
+backup_parent_path=$(dirname "$backup_path")
+
+echo "Backing up sqlite db to ${backup_path}"
+
+mkdir -p $backup_parent_path
+sqlite3 /tmp/vw-data/db.sqlite3 ".backup '$backup_path'"
+chmod 755 "$backup_path"
+
 echo "Backup created!"
 
 echo "Saving backup to cloud!"
 /app/volback \
-	--path="/app/backups/vw-db-backup.sqlite3" \
-	--dest.kind="s3" \
-	--dest.prefix="backups/vw" \
-	--dest.endpoint="${BACKUP_DEST_ENDPOINT}" \
-	--dest.bucket="${BACKUP_DEST_BUCKET}" \
-	--dest.access-key-id="${BACKUP_DEST_ACCESS_KEY_ID}" \
-	--dest.secret-access-key="${BACKUP_DEST_SECRET_ACCESS_KEY}" \
-	--enc.key="${BACKUP_ENCRYPTION_KEY}" 
+	--src.kind="fs" \
+	--src.path="$backup_path" \
+	--enc.key="${BACKUP_ENCRYPTION_KEY}"  \
+	--dst.kind="s3" \
+	--dst.path="backups/vw" \
+	--dst.s3-endpoint="${BACKUP_DEST_ENDPOINT}" \
+	--dst.s3-bucket="${BACKUP_DEST_BUCKET}" \
+	--dst.s3-access-key-id="${BACKUP_DEST_ACCESS_KEY_ID}" \
+	--dst.s3-secret-access-key="${BACKUP_DEST_SECRET_ACCESS_KEY}" \
+	--dst.s3-region="us-east-1" 
+
 echo "Backup saved to cloud!"
 
 echo "Cleaning up!"
-rm "/app/backups/vw-db-backup.sqlite3"
+rm $backup_path
 
-echo "Finished running backup!!"
+echo "Finished running backup!"
