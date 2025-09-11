@@ -10,11 +10,10 @@ backup_filename="actual-data-backup-$(date +'%Y-%m-%d_%H-%M-%S').zip"
 destination_path="backups/actual/data-backup.zip.enc"
 
 backup_path="/app/backups/${backup_filename}"
-backup_parent_path=$(dirname "$backup_path")
 
 echo "Backing up sqlite db at ${target_path} to ${backup_path}"
 
-mkdir -p $backup_parent_path
+mkdir -p $backup_path
 sqlite3 "$target_path" ".backup '$backup_path'"
 chmod 777 "$backup_path"
 
