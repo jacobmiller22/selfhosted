@@ -14,10 +14,19 @@ services:
     volumes:
       # Change './actual-data' below to the path to the folder you want Actual to store its data in on your server.
       # '/data' is the path Actual will look for its files in by default, so leave that as-is.
-      - ./data:/data
+      - actual-data:/data/
     restart: unless-stopped
     networks:
       - nginx-proxy-manager
+  actual-backup:
+    build:
+      context: ./backup
+    container_name: actual-backup
+    volumes:
+      - actual-data:/tmp/actual-data
 networks:
   nginx-proxy-manager:
     external: true
+
+volumes:
+  actual-data:
