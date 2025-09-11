@@ -15,7 +15,6 @@ backup_parent_path=$(dirname "$backup_path")
 echo "Backing up sqlite db at ${target_path} to ${backup_path}"
 
 mkdir -p $backup_parent_path
-dirname "$backup_path"
 
 cp -r $target_path "$backup_path"
 chmod 777 "$backup_path"
