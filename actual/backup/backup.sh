@@ -5,7 +5,7 @@ echo "Running backup!!"
 echo "Sourcing secrets"
 source /run/secrets/env_vars
 
-target_path="/data"
+target_path="/tmp/actual-data"
 backup_filename="actual-data-backup-$(date +'%Y-%m-%d_%H-%M-%S').zip"
 destination_path="backups/actual/data-backup.zip.enc"
 
