@@ -1,0 +1,20 @@
+name: obsidian
+services:
+  couchdb:
+    container_name: livesync-db
+    image: couchdb:3.3.3
+    environment:
+      - COUCHDB_SINGLE_NODE=true
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=$COUCHDB_PASSWORD
+    volumes:
+      - ./db/data:/opt/couchdb/data
+    ports:
+      - "5984:5984"
+    restart: unless-stopped
+    networks:
+      - nginx-proxy-manager
+networks:
+  nginx-proxy-manager:
+    name: nginx-proxy-manager
+    external: true
