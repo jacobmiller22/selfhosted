@@ -4,7 +4,7 @@ RUN apt-get update && apt-get -y --no-install-recommends install cron tar wget b
 
 WORKDIR /app/staging
 
-ARG VOLBACK_VERSION=0.1.3
+ARG VOLBACK_VERSION=0.1.4
 
 RUN wget --no-check-certificate "https://github.com/jacobmiller22/volback/archive/refs/tags/v${VOLBACK_VERSION}.tar.gz"
 
@@ -20,7 +20,7 @@ RUN cp bin/volback /app/volback;
 WORKDIR /app
 
 # Clean up staging area
-RUN rm -rf /app/staging 
+RUN rm -rf /app/staging
 
 COPY backup.sh /app/backup.sh
 COPY entrypoint.sh /app/entrypoint.sh
@@ -30,7 +30,7 @@ RUN chmod 0755 /app/entrypoint.sh
 ADD volbackcron /etc/cronjob
 RUN crontab /etc/cronjob
 
-ARG BACKUP_DEST_ENDPOINT 
+ARG BACKUP_DEST_ENDPOINT
 ENV BACKUP_DEST_ENDPOINT=$BACKUP_DEST_ENDPOINT
 
 ARG BACKUP_DEST_BUCKET

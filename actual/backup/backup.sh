@@ -32,11 +32,11 @@ echo "Saving backup to cloud!"
 	--dst.s3-bucket="${BACKUP_DEST_BUCKET}" \
 	--dst.s3-access-key-id="${BACKUP_DEST_ACCESS_KEY_ID}" \
 	--dst.s3-secret-access-key="${BACKUP_DEST_SECRET_ACCESS_KEY}" \
-	--dst.s3-region="us-east-1" 
+	--dst.s3-region="us-east-1"
 
 echo "Backup saved to cloud!"
 
 echo "Cleaning up!"
-rm $backup_path
+rm -rf $backup_path
 
 echo "Finished running backup!"
