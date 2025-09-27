@@ -31,7 +31,7 @@ echo "Saving backup to cloud!"
 	--dst.b2-endpoint="${BACKUP_DEST_ENDPOINT}" \
 	--dst.b2-bucket="${BACKUP_DEST_BUCKET}" \
 	--dst.b2-application-key-id="${BACKUP_DEST_ACCESS_KEY_ID}" \
-	--dst.b2-application--key="${BACKUP_DEST_SECRET_ACCESS_KEY}" \
+	--dst.b2-application-key="${BACKUP_DEST_SECRET_ACCESS_KEY}" \
 
 echo "Backup saved to cloud!"
 
