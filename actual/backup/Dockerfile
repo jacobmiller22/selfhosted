@@ -4,7 +4,7 @@ RUN apt-get update && apt-get -y --no-install-recommends install cron tar wget b
 
 WORKDIR /app/staging
 
-ARG VOLBACK_VERSION=0.1.7
+ARG VOLBACK_VERSION=0.1.8
 
 RUN wget --no-check-certificate "https://github.com/jacobmiller22/volback/archive/refs/tags/v${VOLBACK_VERSION}.tar.gz"
 
