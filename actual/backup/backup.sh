@@ -12,7 +12,7 @@ destination_path="backups/actual/data-backup.zip.enc"
 backup_path="/app/backups/${backup_dirname}"
 backup_parent_path=$(dirname "$backup_path")
 
-echo "Backing up sqlite db at ${target_path} to ${backup_path}"
+echo "Backing up directory at ${target_path} to ${backup_path}"
 
 mkdir -p $backup_parent_path
 
@@ -26,13 +26,12 @@ echo "Saving backup to cloud!"
 	--src.kind="fs" \
 	--src.path="$backup_path" \
 	--enc.key="${BACKUP_ENCRYPTION_KEY}"  \
-	--dst.kind="s3" \
+	--dst.kind="b2" \
 	--dst.path="${destination_path}" \
-	--dst.s3-endpoint="${BACKUP_DEST_ENDPOINT}" \
-	--dst.s3-bucket="${BACKUP_DEST_BUCKET}" \
-	--dst.s3-access-key-id="${BACKUP_DEST_ACCESS_KEY_ID}" \
-	--dst.s3-secret-access-key="${BACKUP_DEST_SECRET_ACCESS_KEY}" \
-	--dst.s3-region="us-east-1"
+	--dst.b2-endpoint="${BACKUP_DEST_ENDPOINT}" \
+	--dst.b2-bucket="${BACKUP_DEST_BUCKET}" \
+	--dst.b2-application-key-id="${BACKUP_DEST_ACCESS_KEY_ID}" \
+	--dst.b2-application--key="${BACKUP_DEST_SECRET_ACCESS_KEY}" \
 
 echo "Backup saved to cloud!"
 
