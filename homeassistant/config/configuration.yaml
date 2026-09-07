@@ -1,0 +1,23 @@
+# Home Assistant Configuration File
+# Loads default set of integrations with UI support
+default_config:
+
+# Load frontend themes if present
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# Reverse Proxy configuration for Nginx Proxy Manager
+# Domain: ha.cloud.jacobmiller22.com
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 172.16.0.0/12
+    - 172.17.0.0/16
+    - 172.18.0.0/16
+    - 172.19.0.0/16
+    - 10.0.0.0/8
+    - 127.0.0.1

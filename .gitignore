@@ -1,1 +1,12 @@
 .DS_Store
+
+# Home Assistant runtime files and secrets
+homeassistant/config/.storage/
+homeassistant/config/secrets.yaml
+homeassistant/config/*.db
+homeassistant/config/*.db-shm
+homeassistant/config/*.db-wal
+homeassistant/config/home-assistant.log*
+homeassistant/config/deps/
+homeassistant/config/tts/
+homeassistant/config/.HA_RESTORE
