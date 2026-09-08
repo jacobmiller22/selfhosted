@@ -70,8 +70,8 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
     for (const pair of transferPairs) {
       if (!pair.txA.transfer_id && !pair.txB.transfer_id) {
         // Link transactions in Actual
-        await updateTransaction(pair.txA.id, { transfer_id: pair.txB.id });
-        await updateTransaction(pair.txB.id, { transfer_id: pair.txA.id });
+        await updateTransaction(pair.txA.id, { transfer_id: pair.txB.id, account: pair.txA.account });
+        await updateTransaction(pair.txB.id, { transfer_id: pair.txA.id, account: pair.txB.account });
         transferCount++;
         console.log(`  🔗 Linked Transfer: ${pair.txA.date} ($${(Math.abs(pair.txA.amount)/100).toFixed(2)}) across accounts.`);
       }
@@ -93,7 +93,7 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
       // Predict Category
       const catPred = await predictor.predictCategory(rawPayee, tx.account, tx.amount, tx.date);
 
-      const updates: { payee?: string; category?: string; notes?: string } = {};
+      const updates: { payee?: string; category?: string; notes?: string; account?: string } = {};
 
       if (!tx.payee && payeePred.confidence >= CONFIDENCE_THRESHOLD) {
         updates.payee = payeePred.label;
@@ -110,6 +110,7 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
       }
 
       if (Object.keys(updates).length > 0) {
+        updates.account = tx.account;
         await updateTransaction(tx.id, updates);
         updatedCount++;
       }

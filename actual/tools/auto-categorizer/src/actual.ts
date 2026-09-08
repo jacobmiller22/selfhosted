@@ -94,7 +94,7 @@ export async function fetchAllTransactions(sinceDate?: string): Promise<ActualTr
 
 export async function updateTransaction(
   id: string,
-  updates: { payee?: string; category?: string; notes?: string; transfer_id?: string }
+  updates: { payee?: string; category?: string; notes?: string; transfer_id?: string; account?: string }
 ): Promise<void> {
   await api.updateTransaction(id, updates);
 }
