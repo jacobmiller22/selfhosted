@@ -209,11 +209,11 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
         transferCount++;
 
         if (dryRun) {
-          const noteA = appendRecommendationNote(pair.txA.notes, `[ML Recommended Transfer: Matched with ${acctBName} $${(Math.abs(pair.txA.amount)/100).toFixed(2)} on ${pair.txB.date}]`);
-          const noteB = appendRecommendationNote(pair.txB.notes, `[ML Recommended Transfer: Matched with ${acctAName} $${(Math.abs(pair.txB.amount)/100).toFixed(2)} on ${pair.txA.date}]`);
+          const noteA = `[ML Recommended Transfer: Matched with ${acctBName} $${(Math.abs(pair.txA.amount)/100).toFixed(2)} on ${pair.txB.date}]`;
+          const noteB = `[ML Recommended Transfer: Matched with ${acctAName} $${(Math.abs(pair.txB.amount)/100).toFixed(2)} on ${pair.txA.date}]`;
           await updateTransaction(pair.txA.id, { notes: noteA, account: pair.txA.account });
           await updateTransaction(pair.txB.id, { notes: noteB, account: pair.txB.account });
-          console.log(`  🧪 [DRY-RUN NOTES UPDATED] Recommended Transfer: ${pair.txA.date} ($${(Math.abs(pair.txA.amount)/100).toFixed(2)}) between [${acctAName}] and [${acctBName}]`);
+          console.log(`  🧪 [DRY-RUN NOTES OVERWRITTEN] Recommended Transfer: ${pair.txA.date} ($${(Math.abs(pair.txA.amount)/100).toFixed(2)}) between [${acctAName}] and [${acctBName}]`);
         } else {
           await updateTransaction(pair.txA.id, { transfer_id: pair.txB.id, account: pair.txA.account, category: null });
           await updateTransaction(pair.txB.id, { transfer_id: pair.txA.id, account: pair.txB.account, category: null });
@@ -272,9 +272,9 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
         });
 
         if (dryRun) {
-          const recNote = appendRecommendationNote(tx.notes, `[ML Recommended Category: ${catName} (${(catPred.confidence * 100).toFixed(0)}%)]`);
+          const recNote = `[ML Recommended Category: ${catName} (${(catPred.confidence * 100).toFixed(0)}%)]`;
           await updateTransaction(tx.id, { notes: recNote, account: tx.account });
-          console.log(`  🧪 [DRY-RUN NOTES UPDATED] "${rawPayee}" -> Recommended Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
+          console.log(`  🧪 [DRY-RUN NOTES OVERWRITTEN] "${rawPayee}" -> Recommended Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
         } else {
           console.log(`  ✅ [LIVE AUTO-ASSIGNED] "${rawPayee}" -> Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
         }
@@ -290,9 +290,9 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
         });
 
         if (dryRun) {
-          const recNote = appendRecommendationNote(tx.notes, `[ML Suggested Category: ${catName} (${(catPred.confidence * 100).toFixed(0)}%)]`);
+          const recNote = `[ML Suggested Category: ${catName} (${(catPred.confidence * 100).toFixed(0)}%)]`;
           await updateTransaction(tx.id, { notes: recNote, account: tx.account });
-          console.log(`  💡 [DRY-RUN NOTES UPDATED] "${rawPayee}" -> Suggested Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
+          console.log(`  💡 [DRY-RUN NOTES OVERWRITTEN] "${rawPayee}" -> Suggested Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
         } else {
           console.log(`  💡 [LIVE SUGGESTION NOTE] "${rawPayee}" -> ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
         }
