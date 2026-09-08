@@ -19,7 +19,10 @@ import { findMatchingTransfers } from "./transfer.js";
 
 dotenv.config();
 
-const SERVER_URL = process.env.ACTUAL_SERVER_URL || "http://localhost:5006";
+let SERVER_URL = process.env.ACTUAL_SERVER_URL || "https://budget.cloud.jacobmiller22.com";
+if (SERVER_URL.includes("actual_server")) {
+  SERVER_URL = "https://budget.cloud.jacobmiller22.com";
+}
 const PASSWORD = process.env.ACTUAL_PASSWORD || "";
 const SYNC_ID = process.env.ACTUAL_SYNC_ID || "";
 const CONFIDENCE_THRESHOLD = parseFloat(process.env.CONFIDENCE_THRESHOLD || "0.85");
