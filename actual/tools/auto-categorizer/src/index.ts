@@ -64,7 +64,8 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
 
     // --- STAGE 1: Transfer Detection ---
     console.log("\n🔍 Stage 1: Checking for cross-account transfers...");
-    const transferPairs = findMatchingTransfers(transactions);
+    const nonSplitTxs = transactions.filter((t) => !t.is_parent && !t.is_child);
+    const transferPairs = findMatchingTransfers(nonSplitTxs);
     console.log(`✓ Found ${transferPairs.length} matched transfer pairs.`);
 
     for (const pair of transferPairs) {
@@ -79,7 +80,7 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
 
     // --- STAGE 2 & 3: Uncategorized Payee & Category Auto-Classification ---
     console.log("\n🤖 Stage 2 & 3: Running ML Inference on Uncategorized Transactions...");
-    const uncategorizedTxs = transactions.filter((t) => !t.category && !t.transfer_id);
+    const uncategorizedTxs = transactions.filter((t) => !t.category && !t.transfer_id && !t.is_parent && !t.is_child);
     console.log(`📋 Found ${uncategorizedTxs.length} uncategorized transactions.`);
 
     for (const tx of uncategorizedTxs) {

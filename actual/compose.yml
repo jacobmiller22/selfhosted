@@ -40,6 +40,8 @@ services:
       - PORT=${AUTO_CATEGORIZER_PORT:-3080}
     volumes:
       - ./auto-categorizer-models:/app/src/models
+    ports:
+      - "3080:3080"
     restart: unless-stopped
     networks:
       - nginx-proxy-manager

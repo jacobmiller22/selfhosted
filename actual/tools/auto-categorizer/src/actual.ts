@@ -88,7 +88,10 @@ export async function fetchAllTransactions(sinceDate?: string): Promise<ActualTr
     category: t.category,
     imported_payee: t.imported_payee || t.payee_name || "",
     transfer_id: t.transfer_id,
-    cleared: !!t.cleared
+    cleared: !!t.cleared,
+    is_parent: !!t.is_parent,
+    is_child: !!t.is_child,
+    parent_id: t.parent_id
   }));
 }
 

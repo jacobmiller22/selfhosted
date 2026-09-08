@@ -8,6 +8,9 @@ export interface ActualTransaction {
   imported_payee?: string;
   transfer_id?: string;
   cleared?: boolean;
+  is_parent?: boolean;
+  is_child?: boolean;
+  parent_id?: string;
 }
 
 export interface MatchedTransferPair {
