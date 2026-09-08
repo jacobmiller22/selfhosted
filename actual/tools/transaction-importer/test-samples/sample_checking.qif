@@ -1,0 +1,36 @@
+!Account
+N555444333
+TBank
+^
+!Type:Bank
+D09/01/2026
+T-42.50
+PTarget Superstore
+MGroceries
+LSupplies
+N1001
+C*
+^
+D09/02'2026
+T1500.00
+PDirect Deposit Payroll
+C*
+^
+D09/03'26
+T-1,234.56
+PTech Electronics
+MNew Laptop
+N1002
+Cc
+^
+D2026-09-04
+T-15.99
+PStreaming Service
+MSubscription
+C
+^
+D20260905
+T50.00
+PPeer Transfer
+MRefund
+^

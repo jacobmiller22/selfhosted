@@ -28,7 +28,7 @@ services:
 
   actual-auto-categorizer:
     build:
-      context: ./auto-categorizer
+      context: ./tools/auto-categorizer
       dockerfile: Dockerfile
     container_name: actual-auto-categorizer
     environment:

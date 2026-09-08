@@ -1,0 +1,21 @@
+{
+  "accountNumbers": {
+    "6404": "6243aa92-178b-48cb-9332-197db4057b86",
+    "9661": "6fd7b088-005e-4254-9d3c-3eb231a3f66c"
+  },
+  "filenamePatterns": {},
+  "csvProfiles": {
+    "Checking...9661": {
+      "dateHeader": "Transaction Date",
+      "payeeHeader": "Transaction Description",
+      "amountHeader": "Transaction Amount",
+      "notesHeader": "Transaction Description"
+    },
+    "JointSavings...6404": {
+      "dateHeader": "Transaction Date",
+      "payeeHeader": "Transaction Description",
+      "amountHeader": "Transaction Amount",
+      "notesHeader": "Transaction Description"
+    }
+  }
+}
