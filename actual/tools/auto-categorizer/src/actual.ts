@@ -31,9 +31,10 @@ export async function connectActual(
   dataDir?: string
 ): Promise<void> {
   const cacheDir = dataDir || path.resolve(process.cwd(), ".actual-cache");
-  if (!fs.existsSync(cacheDir)) {
-    fs.mkdirSync(cacheDir, { recursive: true });
+  if (fs.existsSync(cacheDir)) {
+    fs.rmSync(cacheDir, { recursive: true, force: true });
   }
+  fs.mkdirSync(cacheDir, { recursive: true });
 
   await api.init({
     dataDir: cacheDir,
