@@ -33,7 +33,7 @@ const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "50", 10);
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || "*/15 * * * *"; // Every 15 minutes by default
 const PORT = parseInt(process.env.PORT || "3080", 10);
 const MODELS_DIR = process.env.MODELS_DIR || path.resolve(process.cwd(), "src/models");
-const DEFAULT_DRY_RUN = process.env.DRY_RUN !== "false"; // Default to DRY RUN mode
+const DEFAULT_DRY_RUN = process.env.DRY_RUN === "true";
 
 const predictor = new OnnxPredictorEngine(MODELS_DIR);
 let isSyncing = false;

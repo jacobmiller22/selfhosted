@@ -38,7 +38,7 @@ services:
       - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.85}
       - CRON_SCHEDULE=${CRON_SCHEDULE:-*/15 * * * *}
       - PORT=${AUTO_CATEGORIZER_PORT:-3080}
-      - DRY_RUN=true
+      - DRY_RUN=false
     volumes:
       - ./auto-categorizer-models:/app/src/models
     ports:
