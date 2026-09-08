@@ -24,16 +24,80 @@ if (SERVER_URL.includes("actual_server")) {
   SERVER_URL = "https://budget.cloud.jacobmiller22.com";
 }
 const PASSWORD = process.env.ACTUAL_PASSWORD || "";
-const SYNC_ID = process.env.ACTUAL_SYNC_ID || "";
+let SYNC_ID = process.env.ACTUAL_SYNC_ID || "d87856b0-5fd1-4b3e-85bc-bf1e9244d4be";
+if (SYNC_ID === "a2bf28aa-7ae9-4948-837c-346f4e91d346" || !SYNC_ID) {
+  SYNC_ID = "d87856b0-5fd1-4b3e-85bc-bf1e9244d4be";
+}
 const CONFIDENCE_THRESHOLD = parseFloat(process.env.CONFIDENCE_THRESHOLD || "0.85");
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "50", 10);
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || "*/15 * * * *"; // Every 15 minutes by default
 const PORT = parseInt(process.env.PORT || "3080", 10);
 const MODELS_DIR = process.env.MODELS_DIR || path.resolve(process.cwd(), "src/models");
+const DEFAULT_DRY_RUN = process.env.DRY_RUN !== "false"; // Default to DRY RUN mode
 
 const predictor = new OnnxPredictorEngine(MODELS_DIR);
 let isSyncing = false;
 let lastSyncTime: string | null = null;
+
+export interface ProposedTransfer {
+  txAId: string;
+  txBId: string;
+  date: string;
+  amount: number;
+  accountA: string;
+  accountB: string;
+  payeeA: string;
+  payeeB: string;
+}
+
+export interface ProposedAssignment {
+  txId: string;
+  date: string;
+  account: string;
+  importedPayee: string;
+  categoryName: string;
+  confidence: number;
+}
+
+export interface ProposedSuggestion {
+  txId: string;
+  date: string;
+  account: string;
+  importedPayee: string;
+  suggestedCategory: string;
+  confidence: number;
+}
+
+export interface DryRunReport {
+  timestamp: string;
+  dryRun: boolean;
+  totalTransactions: number;
+  uncategorizedInBudgetAccounts: number;
+  processed: number;
+  transfersMatched: number;
+  highConfidenceAssigned: number;
+  lowConfidenceSuggested: number;
+  proposedTransfers: ProposedTransfer[];
+  proposedAssignments: ProposedAssignment[];
+  proposedSuggestions: ProposedSuggestion[];
+}
+
+let latestReport: DryRunReport | null = null;
+
+const REPORT_FILE_PATH = path.resolve(process.cwd(), ".latest-dry-run-report.json");
+if (fs.existsSync(REPORT_FILE_PATH)) {
+  try {
+    latestReport = JSON.parse(fs.readFileSync(REPORT_FILE_PATH, "utf-8"));
+  } catch (_) {}
+}
+
+function appendRecommendationNote(existingNotes: string | undefined | null, newRecommendation: string): string {
+  const cleaned = (existingNotes || "")
+    .replace(/\[ML (Recommended|Suggested|Transfer).*?\]/g, "")
+    .trim();
+  return cleaned ? `${cleaned} ${newRecommendation}` : newRecommendation;
+}
+
 function resolveCategoryId(predictedLabel: string, categories: { id: string; name: string; is_income?: boolean; hidden?: boolean }[]): string | null {
   const directMatch = categories.find((c) => c.id === predictedLabel);
   if (directMatch) return directMatch.id;
@@ -65,61 +129,122 @@ function resolveCategoryId(predictedLabel: string, categories: { id: string; nam
   return null;
 }
 
-async function runAutoCategorizerSync(): Promise<{ processed: number; transfersMatched: number; updated: number }> {
+export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<DryRunReport> {
+  const dryRun = overrideDryRun !== undefined ? overrideDryRun : DEFAULT_DRY_RUN;
+
   if (isSyncing) {
     console.log("⚠️ Auto-categorization sync already in progress. Skipping cycle.");
-    return { processed: 0, transfersMatched: 0, updated: 0 };
+    return latestReport || {
+      timestamp: new Date().toISOString(),
+      dryRun,
+      totalTransactions: 0,
+      uncategorizedInBudgetAccounts: 0,
+      processed: 0,
+      transfersMatched: 0,
+      highConfidenceAssigned: 0,
+      lowConfidenceSuggested: 0,
+      proposedTransfers: [],
+      proposedAssignments: [],
+      proposedSuggestions: []
+    };
   }
 
   if (!SERVER_URL || !PASSWORD || !SYNC_ID) {
     console.error("❌ Actual server credentials missing (ACTUAL_SERVER_URL, ACTUAL_PASSWORD, ACTUAL_SYNC_ID).");
-    return { processed: 0, transfersMatched: 0, updated: 0 };
+    throw new Error("Missing Actual server credentials");
   }
 
   isSyncing = true;
   console.log(`\n==================================================`);
   console.log(`🔄 Starting Auto-Categorization Sync Cycle at ${new Date().toISOString()}`);
+  console.log(`🔒 Mode: ${dryRun ? "🧪 DRY-RUN (SIMULATION ONLY - NO MUTATIONS)" : "⚡ LIVE (MUTATIONS ENABLED)"}`);
   console.log(`==================================================`);
+
+  const proposedTransfers: ProposedTransfer[] = [];
+  const proposedAssignments: ProposedAssignment[] = [];
+  const proposedSuggestions: ProposedSuggestion[] = [];
 
   let processedCount = 0;
   let transferCount = 0;
-  let updatedCount = 0;
 
   try {
     await connectActual(SERVER_URL, PASSWORD, SYNC_ID);
     const transactions = await fetchAllTransactions();
+    const accounts = await fetchAccounts();
+    const acctMap = new Map(accounts.map((a) => [a.id, a]));
     const payees = await fetchPayees();
     const categories = await fetchCategories();
 
-    console.log(`📊 Fetched ${transactions.length} total transactions from Actual Budget.`);
+    console.log(`📊 Fetched ${transactions.length} total transactions across ${accounts.length} accounts from Actual Budget.`);
 
     // --- STAGE 1: Transfer Detection ---
-    console.log("\n🔍 Stage 1: Checking for cross-account transfers...");
-    const nonSplitTxs = transactions.filter((t) => !t.is_parent && !t.is_child);
-    const transferPairs = findMatchingTransfers(nonSplitTxs);
+    console.log("\n🔍 Stage 1: Checking for cross-account transfers in open, on-budget accounts...");
+    const openOnBudgetTxs = transactions.filter((t) => {
+      if (t.is_parent || t.is_child) return false;
+      const acct = acctMap.get(t.account);
+      if (!acct || acct.closed || acct.offbudget) return false;
+      return true;
+    });
+    const transferPairs = findMatchingTransfers(openOnBudgetTxs);
     console.log(`✓ Found ${transferPairs.length} matched transfer pairs.`);
 
     for (const pair of transferPairs) {
       if (!pair.txA.transfer_id && !pair.txB.transfer_id) {
-        // Link transactions in Actual
-        await updateTransaction(pair.txA.id, { transfer_id: pair.txB.id, account: pair.txA.account });
-        await updateTransaction(pair.txB.id, { transfer_id: pair.txA.id, account: pair.txB.account });
+        const acctAName = acctMap.get(pair.txA.account)?.name || pair.txA.account;
+        const acctBName = acctMap.get(pair.txB.account)?.name || pair.txB.account;
+        const payeeAName = pair.txA.imported_payee || pair.txA.payee || "(transfer)";
+        const payeeBName = pair.txB.imported_payee || pair.txB.payee || "(transfer)";
+
+        proposedTransfers.push({
+          txAId: pair.txA.id,
+          txBId: pair.txB.id,
+          date: pair.txA.date,
+          amount: Math.abs(pair.txA.amount) / 100,
+          accountA: acctAName,
+          accountB: acctBName,
+          payeeA: payeeAName,
+          payeeB: payeeBName
+        });
+
         transferCount++;
-        console.log(`  🔗 Linked Transfer: ${pair.txA.date} ($${(Math.abs(pair.txA.amount)/100).toFixed(2)}) across accounts.`);
+
+        if (dryRun) {
+          const noteA = appendRecommendationNote(pair.txA.notes, `[ML Recommended Transfer: Matched with ${acctBName} $${(Math.abs(pair.txA.amount)/100).toFixed(2)} on ${pair.txB.date}]`);
+          const noteB = appendRecommendationNote(pair.txB.notes, `[ML Recommended Transfer: Matched with ${acctAName} $${(Math.abs(pair.txB.amount)/100).toFixed(2)} on ${pair.txA.date}]`);
+          await updateTransaction(pair.txA.id, { notes: noteA, account: pair.txA.account });
+          await updateTransaction(pair.txB.id, { notes: noteB, account: pair.txB.account });
+          console.log(`  🧪 [DRY-RUN NOTES UPDATED] Recommended Transfer: ${pair.txA.date} ($${(Math.abs(pair.txA.amount)/100).toFixed(2)}) between [${acctAName}] and [${acctBName}]`);
+        } else {
+          await updateTransaction(pair.txA.id, { transfer_id: pair.txB.id, account: pair.txA.account, category: null });
+          await updateTransaction(pair.txB.id, { transfer_id: pair.txA.id, account: pair.txB.account, category: null });
+          console.log(`  🔗 [LIVE LINKED] Transfer: ${pair.txA.date} ($${(Math.abs(pair.txA.amount)/100).toFixed(2)}) across accounts.`);
+        }
       }
     }
 
     // --- STAGE 2 & 3: Uncategorized Payee & Category Auto-Classification ---
     console.log("\n🤖 Stage 2 & 3: Running ML Inference on Uncategorized Transactions...");
-    const allUncategorized = transactions.filter((t) => !t.category && !t.transfer_id && !t.is_parent && !t.is_child);
+    try {
+      await predictor.init();
+    } catch (err) {
+      console.warn(`⚠️ Warning initializing predictor sessions: ${(err as Error).message}`);
+    }
+
+    // Only process transactions belonging to open, on-budget accounts
+    const allUncategorized = transactions.filter((t) => {
+      const acct = acctMap.get(t.account);
+      if (!acct || acct.closed || acct.offbudget) return false;
+      return !t.category && !t.transfer_id && !t.is_parent && !t.is_child;
+    });
     const uncategorizedTxs = allUncategorized.slice(0, BATCH_SIZE);
-    console.log(`📋 Found ${allUncategorized.length} total uncategorized transactions. Processing batch of ${uncategorizedTxs.length}.`);
+    console.log(`📋 Found ${allUncategorized.length} uncategorized transactions in open, on-budget accounts. Processing batch of ${uncategorizedTxs.length}.`);
 
     for (const tx of uncategorizedTxs) {
       const rawPayee = tx.imported_payee || tx.payee || "";
       if (!rawPayee) continue;
 
       processedCount++;
+      const acctName = acctMap.get(tx.account)?.name || tx.account;
 
       // Predict Payee
       const payeePred = await predictor.predictPayee(rawPayee, tx.account, tx.amount);
@@ -132,30 +257,74 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
         updates.payee = payeePred.label;
       }
 
-
-
       const resolvedCatId = resolveCategoryId(catPred.label, categories);
+      const catName = categories.find((c) => c.id === resolvedCatId)?.name || catPred.label;
 
       if (catPred.confidence >= CONFIDENCE_THRESHOLD && resolvedCatId) {
         updates.category = resolvedCatId;
-        const catName = categories.find((c) => c.id === resolvedCatId)?.name || catPred.label;
-        console.log(`  ✅ [Auto-Assigned] "${rawPayee}" -> Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
+        proposedAssignments.push({
+          txId: tx.id,
+          date: tx.date,
+          account: acctName,
+          importedPayee: rawPayee,
+          categoryName: catName,
+          confidence: parseFloat((catPred.confidence * 100).toFixed(1))
+        });
+
+        if (dryRun) {
+          const recNote = appendRecommendationNote(tx.notes, `[ML Recommended Category: ${catName} (${(catPred.confidence * 100).toFixed(0)}%)]`);
+          await updateTransaction(tx.id, { notes: recNote, account: tx.account });
+          console.log(`  🧪 [DRY-RUN NOTES UPDATED] "${rawPayee}" -> Recommended Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
+        } else {
+          console.log(`  ✅ [LIVE AUTO-ASSIGNED] "${rawPayee}" -> Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
+        }
       } else {
-        // High suggestion note if medium confidence or unmapped label
-        const suggestedCat = categories.find((c) => c.id === resolvedCatId)?.name || catPred.label;
-        updates.notes = `[ML Suggestion: ${suggestedCat} (${(catPred.confidence * 100).toFixed(0)}%)]`;
-        console.log(`  💡 [Low Confidence Suggestion] "${rawPayee}" -> ${suggestedCat} (${(catPred.confidence * 100).toFixed(1)}%)`);
+        updates.notes = `[ML Suggested Category: ${catName} (${(catPred.confidence * 100).toFixed(0)}%)]`;
+        proposedSuggestions.push({
+          txId: tx.id,
+          date: tx.date,
+          account: acctName,
+          importedPayee: rawPayee,
+          suggestedCategory: catName,
+          confidence: parseFloat((catPred.confidence * 100).toFixed(1))
+        });
+
+        if (dryRun) {
+          const recNote = appendRecommendationNote(tx.notes, `[ML Suggested Category: ${catName} (${(catPred.confidence * 100).toFixed(0)}%)]`);
+          await updateTransaction(tx.id, { notes: recNote, account: tx.account });
+          console.log(`  💡 [DRY-RUN NOTES UPDATED] "${rawPayee}" -> Suggested Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
+        } else {
+          console.log(`  💡 [LIVE SUGGESTION NOTE] "${rawPayee}" -> ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
+        }
       }
 
-      if (Object.keys(updates).length > 0) {
+      if (!dryRun && Object.keys(updates).length > 0) {
         updates.account = tx.account;
         await updateTransaction(tx.id, updates);
-        updatedCount++;
       }
     }
 
     lastSyncTime = new Date().toISOString();
-    console.log(`\n🎉 Sync finished! Updated ${updatedCount} transactions (${transferCount} transfers linked).`);
+    latestReport = {
+      timestamp: lastSyncTime,
+      dryRun,
+      totalTransactions: transactions.length,
+      uncategorizedInBudgetAccounts: allUncategorized.length,
+      processed: processedCount,
+      transfersMatched: transferCount,
+      highConfidenceAssigned: proposedAssignments.length,
+      lowConfidenceSuggested: proposedSuggestions.length,
+      proposedTransfers,
+      proposedAssignments,
+      proposedSuggestions
+    };
+
+    fs.writeFileSync(REPORT_FILE_PATH, JSON.stringify(latestReport, null, 2), "utf-8");
+
+    console.log(`\n🎉 Sync finished! ${dryRun ? "[DRY-RUN SIMULATED]" : "[LIVE COMPLETED]"}`);
+    console.log(`   Transfers Matched: ${transferCount}`);
+    console.log(`   High-Confidence Auto-Assignments: ${proposedAssignments.length}`);
+    console.log(`   Low-Confidence Notes/Suggestions: ${proposedSuggestions.length}`);
   } catch (err) {
     console.error("❌ Error during auto-categorizer sync cycle:", err);
   } finally {
@@ -165,7 +334,19 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
     isSyncing = false;
   }
 
-  return { processed: processedCount, transfersMatched: transferCount, updated: updatedCount };
+  return latestReport || {
+    timestamp: new Date().toISOString(),
+    dryRun,
+    totalTransactions: 0,
+    uncategorizedInBudgetAccounts: 0,
+    processed: processedCount,
+    transfersMatched: transferCount,
+    highConfidenceAssigned: proposedAssignments.length,
+    lowConfidenceSuggested: proposedSuggestions.length,
+    proposedTransfers,
+    proposedAssignments,
+    proposedSuggestions
+  };
 }
 
 // --- EXPRESS HTTP SERVER (Health & Model Upload Endpoint) ---
@@ -179,13 +360,32 @@ app.get("/health", (req, res) => {
     status: "ok",
     isSyncing,
     lastSyncTime,
-    modelsDir: MODELS_DIR
+    dryRunModeDefault: DEFAULT_DRY_RUN,
+    modelsDir: MODELS_DIR,
+    lastReportSummary: latestReport
+      ? {
+          timestamp: latestReport.timestamp,
+          dryRun: latestReport.dryRun,
+          uncategorizedInBudgetAccounts: latestReport.uncategorizedInBudgetAccounts,
+          transfersMatched: latestReport.transfersMatched,
+          highConfidenceAssigned: latestReport.highConfidenceAssigned,
+          lowConfidenceSuggested: latestReport.lowConfidenceSuggested
+        }
+      : null
   });
 });
 
+app.get("/api/reports/latest", (req, res) => {
+  if (!latestReport) {
+    return res.status(404).json({ error: "No dry-run report available yet. Run /api/sync first." });
+  }
+  res.json(latestReport);
+});
+
 app.post("/api/sync", async (req, res) => {
-  const result = await runAutoCategorizerSync();
-  res.json({ status: "sync_completed", ...result });
+  const overrideDryRun = req.body && typeof req.body.dryRun === "boolean" ? req.body.dryRun : undefined;
+  const report = await runAutoCategorizerSync(overrideDryRun);
+  res.json({ status: "sync_completed", report });
 });
 
 app.post(
@@ -228,6 +428,7 @@ app.post(
 // --- DAEMON STARTUP ---
 async function startDaemon() {
   console.log("Starting Actual Budget Auto-Categorizer Sidecar Daemon...");
+  console.log(`⚙️ Default Mode: ${DEFAULT_DRY_RUN ? "🧪 DRY-RUN (DEFAULT)" : "⚡ LIVE"}`);
 
   try {
     await predictor.init();
@@ -238,8 +439,9 @@ async function startDaemon() {
   // Start HTTP API
   app.listen(PORT, () => {
     console.log(`🚀 Sidecar HTTP server listening on port ${PORT}`);
-    console.log(`   Health Check: GET http://localhost:${PORT}/health`);
-    console.log(`   Manual Sync:  POST http://localhost:${PORT}/api/sync`);
+    console.log(`   Health Check:   GET http://localhost:${PORT}/health`);
+    console.log(`   Latest Report:  GET http://localhost:${PORT}/api/reports/latest`);
+    console.log(`   Manual Sync:    POST http://localhost:${PORT}/api/sync (body: {"dryRun": true})`);
   });
 
   // Schedule Cron Sync Loop
@@ -253,4 +455,6 @@ async function startDaemon() {
   }
 }
 
-startDaemon();
+if (process.env.AUTO_START !== "false") {
+  startDaemon();
+}

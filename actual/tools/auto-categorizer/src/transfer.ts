@@ -5,6 +5,7 @@ export interface ActualTransaction {
   amount: number;
   payee?: string;
   category?: string;
+  notes?: string;
   imported_payee?: string;
   transfer_id?: string;
   cleared?: boolean;
@@ -19,6 +20,21 @@ export interface MatchedTransferPair {
   dateDeltaDays: number;
 }
 
+const TRANSFER_KEYWORDS = [
+  "transfer",
+  "xfr",
+  "webxfr",
+  "pmt",
+  "payment",
+  "ach",
+  "mobile pmt",
+  "deposit from",
+  "withdrawal to",
+  "checking",
+  "savings",
+  "brokerage"
+];
+
 export function findMatchingTransfers(
   transactions: ActualTransaction[],
   maxDateDeltaDays: number = 3
@@ -26,8 +42,14 @@ export function findMatchingTransfers(
   const matches: MatchedTransferPair[] = [];
   const processedIds = new Set<string>();
 
-  // Filter out transactions already linked as transfers
-  const candidates = transactions.filter((t) => !t.transfer_id && t.amount !== 0);
+  // Candidates must not already be linked as transfers and must have non-zero amounts.
+  // If a transaction is already categorized, only consider it if payee explicitly indicates internal transfer/payment.
+  const candidates = transactions.filter((t) => {
+    if (t.transfer_id || t.amount === 0) return false;
+    if (!t.category) return true;
+    const rawPayee = (t.imported_payee || t.payee || "").toLowerCase();
+    return TRANSFER_KEYWORDS.some((kw) => rawPayee.includes(kw));
+  });
 
   for (let i = 0; i < candidates.length; i++) {
     const txA = candidates[i];

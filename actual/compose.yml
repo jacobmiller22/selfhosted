@@ -34,15 +34,16 @@ services:
     environment:
       - ACTUAL_SERVER_URL=${ACTUAL_SERVER_URL:-https://budget.cloud.jacobmiller22.com}
       - ACTUAL_PASSWORD=${ACTUAL_PASSWORD}
-      - ACTUAL_SYNC_ID=${ACTUAL_SYNC_ID}
+      - ACTUAL_SYNC_ID=${ACTUAL_SYNC_ID:-d87856b0-5fd1-4b3e-85bc-bf1e9244d4be}
       - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.85}
       - CRON_SCHEDULE=${CRON_SCHEDULE:-*/15 * * * *}
       - PORT=${AUTO_CATEGORIZER_PORT:-3080}
+      - DRY_RUN=true
     volumes:
       - ./auto-categorizer-models:/app/src/models
     ports:
       - "3080:3080"
-    restart: unless-stopped
+    restart: "no"
     networks:
       - nginx-proxy-manager
 

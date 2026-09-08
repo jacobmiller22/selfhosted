@@ -8,6 +8,7 @@ export interface ActualAccount {
   name: string;
   type?: string;
   closed?: boolean;
+  offbudget?: boolean;
 }
 
 export interface ActualPayee {
@@ -52,7 +53,8 @@ export async function fetchAccounts(): Promise<ActualAccount[]> {
     id: a.id,
     name: a.name,
     type: a.type,
-    closed: !!a.closed
+    closed: !!a.closed,
+    offbudget: !!a.offbudget
   }));
 }
 
@@ -78,7 +80,7 @@ export async function fetchCategories(): Promise<ActualCategory[]> {
 
 export async function fetchAllTransactions(sinceDate?: string): Promise<ActualTransaction[]> {
   // Fetch transactions from Actual Budget
-  const txs = await api.getTransactions(undefined, sinceDate, undefined);
+  const txs = await (api as any).getTransactions(undefined, sinceDate, undefined);
   return (txs || []).map((t: any) => ({
     id: t.id,
     account: t.account,
@@ -86,6 +88,7 @@ export async function fetchAllTransactions(sinceDate?: string): Promise<ActualTr
     amount: t.amount,
     payee: t.payee,
     category: t.category,
+    notes: t.notes || "",
     imported_payee: t.imported_payee || t.payee_name || "",
     transfer_id: t.transfer_id,
     cleared: !!t.cleared,
@@ -97,9 +100,9 @@ export async function fetchAllTransactions(sinceDate?: string): Promise<ActualTr
 
 export async function updateTransaction(
   id: string,
-  updates: { payee?: string; category?: string; notes?: string; transfer_id?: string; account?: string }
+  updates: { payee?: string; category?: string | null; notes?: string; transfer_id?: string; account?: string }
 ): Promise<void> {
-  await api.updateTransaction(id, updates);
+  await (api as any).updateTransaction(id, updates);
 }
 
 export async function disconnectActual(): Promise<void> {

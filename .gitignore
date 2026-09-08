@@ -10,3 +10,15 @@ homeassistant/config/home-assistant.log*
 homeassistant/config/deps/
 homeassistant/config/tts/
 homeassistant/config/.HA_RESTORE
+
+# Actual Budget cache, backups, reports & node_modules
+.actual-cache*
+.latest-dry-run-report.json
+actual/*_backup/
+actual/backup/*.db*
+actual/tools/*/.actual-cache*
+actual/tools/*/.tmp-uploads
+actual/tools/*/*.jsonl
+node_modules/
+dist/
+.tmp-uploads/
