@@ -6,5 +6,5 @@ __pycache__/
 venv/
 .venv/
 .actual-cache/
-models/
-data/
+python/models/
+python/data/

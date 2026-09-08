@@ -1,0 +1,33 @@
+{
+  "timestamp": "2026-09-08T09:52:46.461252",
+  "models": {
+    "payee_resolver": {
+      "file": "payee_resolver.onnx",
+      "classes": [
+        "payee_amazon",
+        "payee_chevron",
+        "payee_chipotle",
+        "payee_comcast",
+        "payee_employer",
+        "payee_netflix",
+        "payee_pg_e",
+        "payee_spotify",
+        "payee_starbucks",
+        "payee_trader_joes",
+        "payee_whole_foods"
+      ]
+    },
+    "category_classifier": {
+      "file": "category_classifier.onnx",
+      "classes": [
+        "cat_dining",
+        "cat_gas",
+        "cat_groceries",
+        "cat_income",
+        "cat_shopping",
+        "cat_subscriptions",
+        "cat_utilities"
+      ]
+    }
+  }
+}
