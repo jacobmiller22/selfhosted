@@ -26,6 +26,7 @@ if (SERVER_URL.includes("actual_server")) {
 const PASSWORD = process.env.ACTUAL_PASSWORD || "";
 const SYNC_ID = process.env.ACTUAL_SYNC_ID || "";
 const CONFIDENCE_THRESHOLD = parseFloat(process.env.CONFIDENCE_THRESHOLD || "0.85");
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "50", 10);
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || "*/15 * * * *"; // Every 15 minutes by default
 const PORT = parseInt(process.env.PORT || "3080", 10);
 const MODELS_DIR = process.env.MODELS_DIR || path.resolve(process.cwd(), "src/models");
@@ -80,8 +81,9 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
 
     // --- STAGE 2 & 3: Uncategorized Payee & Category Auto-Classification ---
     console.log("\n🤖 Stage 2 & 3: Running ML Inference on Uncategorized Transactions...");
-    const uncategorizedTxs = transactions.filter((t) => !t.category && !t.transfer_id && !t.is_parent && !t.is_child);
-    console.log(`📋 Found ${uncategorizedTxs.length} uncategorized transactions.`);
+    const allUncategorized = transactions.filter((t) => !t.category && !t.transfer_id && !t.is_parent && !t.is_child);
+    const uncategorizedTxs = allUncategorized.slice(0, BATCH_SIZE);
+    console.log(`📋 Found ${allUncategorized.length} total uncategorized transactions. Processing batch of ${uncategorizedTxs.length}.`);
 
     for (const tx of uncategorizedTxs) {
       const rawPayee = tx.imported_payee || tx.payee || "";
