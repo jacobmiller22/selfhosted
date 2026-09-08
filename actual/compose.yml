@@ -32,7 +32,7 @@ services:
       dockerfile: Dockerfile
     container_name: actual-auto-categorizer
     environment:
-      - ACTUAL_SERVER_URL=${ACTUAL_SERVER_URL:-http://actual_server:5006}
+      - ACTUAL_SERVER_URL=${ACTUAL_SERVER_URL:-https://budget.cloud.jacobmiller22.com}
       - ACTUAL_PASSWORD=${ACTUAL_PASSWORD}
       - ACTUAL_SYNC_ID=${ACTUAL_SYNC_ID}
       - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.85}
