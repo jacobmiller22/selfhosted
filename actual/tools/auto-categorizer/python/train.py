@@ -37,10 +37,10 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 def train_payee_resolver(df: pd.DataFrame):
     """Train Payee Resolver Pipeline mapping cleaned payee text + account + amount to canonical payee_id."""
     print("\n--- Training Model 2: Payee Resolver ---")
-    df_non_transfer = df[df["is_transfer"] == False].copy()
+    df_valid = df[(df["is_transfer"] == False) & df["payee_id"].notna() & (df["payee_id"] != "")].copy()
     
-    X = df_non_transfer[["cleaned_payee", "account_id", "amount_log", "amount_sign"]]
-    y = df_non_transfer["payee_id"]
+    X = df_valid[["cleaned_payee", "account_id", "amount_log", "amount_sign"]]
+    y = df_valid["payee_id"]
     
     counts = y.value_counts()
     stratify = y if counts.min() >= 2 else None
@@ -78,10 +78,10 @@ def train_payee_resolver(df: pd.DataFrame):
 def train_category_classifier(df: pd.DataFrame):
     """Train Category Classifier Pipeline predicting category_id from cleaned payee, account, date & amount."""
     print("\n--- Training Model 3: Category Classifier ---")
-    df_non_transfer = df[df["is_transfer"] == False].copy()
+    df_valid = df[(df["is_transfer"] == False) & df["category_id"].notna() & (df["category_id"] != "")].copy()
     
-    X = df_non_transfer[["cleaned_payee", "account_id", "amount_log", "amount_sign", "day_of_week", "day_of_month", "month"]]
-    y = df_non_transfer["category_id"]
+    X = df_valid[["cleaned_payee", "account_id", "amount_log", "amount_sign", "day_of_week", "day_of_month", "month"]]
+    y = df_valid["category_id"]
 
     counts = y.value_counts()
     stratify = y if counts.min() >= 2 else None
