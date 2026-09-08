@@ -65,10 +65,10 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
     console.log(`✓ Found ${transferPairs.length} matched transfer pairs.`);
 
     for (const pair of transferPairs) {
-      if (!pair.txA.transferred_id && !pair.txB.transferred_id) {
+      if (!pair.txA.transfer_id && !pair.txB.transfer_id) {
         // Link transactions in Actual
-        await updateTransaction(pair.txA.id, { transferred_id: pair.txB.id } as any);
-        await updateTransaction(pair.txB.id, { transferred_id: pair.txA.id } as any);
+        await updateTransaction(pair.txA.id, { transfer_id: pair.txB.id });
+        await updateTransaction(pair.txB.id, { transfer_id: pair.txA.id });
         transferCount++;
         console.log(`  🔗 Linked Transfer: ${pair.txA.date} ($${(Math.abs(pair.txA.amount)/100).toFixed(2)}) across accounts.`);
       }
@@ -76,7 +76,7 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
 
     // --- STAGE 2 & 3: Uncategorized Payee & Category Auto-Classification ---
     console.log("\n🤖 Stage 2 & 3: Running ML Inference on Uncategorized Transactions...");
-    const uncategorizedTxs = transactions.filter((t) => !t.category && !t.transferred_id);
+    const uncategorizedTxs = transactions.filter((t) => !t.category && !t.transfer_id);
     console.log(`📋 Found ${uncategorizedTxs.length} uncategorized transactions.`);
 
     for (const tx of uncategorizedTxs) {

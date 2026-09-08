@@ -87,14 +87,14 @@ export async function fetchAllTransactions(sinceDate?: string): Promise<ActualTr
     payee: t.payee,
     category: t.category,
     imported_payee: t.imported_payee || t.payee_name || "",
-    transferred_id: t.transferred_id,
+    transfer_id: t.transfer_id,
     cleared: !!t.cleared
   }));
 }
 
 export async function updateTransaction(
   id: string,
-  updates: { payee?: string; category?: string; notes?: string }
+  updates: { payee?: string; category?: string; notes?: string; transfer_id?: string }
 ): Promise<void> {
   await api.updateTransaction(id, updates);
 }

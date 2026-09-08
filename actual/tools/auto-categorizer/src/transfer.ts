@@ -6,7 +6,7 @@ export interface ActualTransaction {
   payee?: string;
   category?: string;
   imported_payee?: string;
-  transferred_id?: string;
+  transfer_id?: string;
   cleared?: boolean;
 }
 
@@ -24,7 +24,7 @@ export function findMatchingTransfers(
   const processedIds = new Set<string>();
 
   // Filter out transactions already linked as transfers
-  const candidates = transactions.filter((t) => !t.transferred_id && t.amount !== 0);
+  const candidates = transactions.filter((t) => !t.transfer_id && t.amount !== 0);
 
   for (let i = 0; i < candidates.length; i++) {
     const txA = candidates[i];
