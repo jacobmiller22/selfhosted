@@ -42,8 +42,11 @@ def train_payee_resolver(df: pd.DataFrame):
     X = df_non_transfer[["cleaned_payee", "account_id", "amount_log", "amount_sign"]]
     y = df_non_transfer["payee_id"]
     
+    counts = y.value_counts()
+    stratify = y if counts.min() >= 2 else None
+    
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+        X, y, test_size=0.2, random_state=42, stratify=stratify
     )
 
     preprocessor = ColumnTransformer(
@@ -65,7 +68,10 @@ def train_payee_resolver(df: pd.DataFrame):
     y_pred = pipeline.predict(X_test)
     
     acc = accuracy_score(y_test, y_pred)
-    print(f"✓ Payee Resolver Accuracy: {acc * 100:.2f}%")
+    print(f"✓ Payee Resolver Accuracy (validation set): {acc * 100:.2f}%")
+    
+    # Fit final model on full dataset for maximum vocabulary and class coverage
+    pipeline.fit(X, y)
     
     return pipeline, preprocessor
 
@@ -77,8 +83,11 @@ def train_category_classifier(df: pd.DataFrame):
     X = df_non_transfer[["cleaned_payee", "account_id", "amount_log", "amount_sign", "day_of_week", "day_of_month", "month"]]
     y = df_non_transfer["category_id"]
 
+    counts = y.value_counts()
+    stratify = y if counts.min() >= 2 else None
+
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+        X, y, test_size=0.2, random_state=42, stratify=stratify
     )
 
     preprocessor = ColumnTransformer(
@@ -100,7 +109,10 @@ def train_category_classifier(df: pd.DataFrame):
     y_pred = pipeline.predict(X_test)
 
     acc = accuracy_score(y_test, y_pred)
-    print(f"✓ Category Classifier Accuracy: {acc * 100:.2f}%")
+    print(f"✓ Category Classifier Accuracy (validation set): {acc * 100:.2f}%")
+
+    # Fit final model on full dataset for maximum vocabulary and class coverage
+    pipeline.fit(X, y)
 
     return pipeline, preprocessor
 

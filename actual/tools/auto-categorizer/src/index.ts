@@ -34,6 +34,36 @@ const MODELS_DIR = process.env.MODELS_DIR || path.resolve(process.cwd(), "src/mo
 const predictor = new OnnxPredictorEngine(MODELS_DIR);
 let isSyncing = false;
 let lastSyncTime: string | null = null;
+function resolveCategoryId(predictedLabel: string, categories: { id: string; name: string; is_income?: boolean; hidden?: boolean }[]): string | null {
+  const directMatch = categories.find((c) => c.id === predictedLabel);
+  if (directMatch) return directMatch.id;
+
+  const cleanLabel = predictedLabel.replace(/^cat_/, "").replace(/_/g, " ").toLowerCase();
+  const nameMatch = categories.find((c) => c.name.toLowerCase() === cleanLabel && !c.hidden) || categories.find((c) => c.name.toLowerCase() === cleanLabel);
+  if (nameMatch) return nameMatch.id;
+
+  if (predictedLabel === "cat_income") {
+    const incomeCat = categories.find((c) => c.is_income && !c.hidden) || categories.find((c) => c.is_income);
+    if (incomeCat) return incomeCat.id;
+  }
+  if (predictedLabel === "cat_groceries") {
+    const grocCat = categories.find((c) => c.name.toLowerCase().includes("grocer"));
+    if (grocCat) return grocCat.id;
+  }
+  if (predictedLabel === "cat_subscriptions") {
+    const subCat = categories.find((c) => c.name.toLowerCase().includes("subscript") && !c.hidden) || categories.find((c) => c.name.toLowerCase().includes("subscript"));
+    if (subCat) return subCat.id;
+  }
+  if (predictedLabel === "cat_utilities" || predictedLabel === "cat_bills") {
+    const utilCat = categories.find((c) => (c.name.toLowerCase().includes("bill") || c.name.toLowerCase().includes("util")) && !c.hidden);
+    if (utilCat) return utilCat.id;
+  }
+  if (predictedLabel === "cat_dining") {
+    const diningCat = categories.find((c) => (c.name.toLowerCase().includes("dining") || c.name.toLowerCase().includes("food")) && !c.hidden);
+    if (diningCat) return diningCat.id;
+  }
+  return null;
+}
 
 async function runAutoCategorizerSync(): Promise<{ processed: number; transfersMatched: number; updated: number }> {
   if (isSyncing) {
@@ -102,12 +132,17 @@ async function runAutoCategorizerSync(): Promise<{ processed: number; transfersM
         updates.payee = payeePred.label;
       }
 
-      if (catPred.confidence >= CONFIDENCE_THRESHOLD) {
-        updates.category = catPred.label;
-        console.log(`  ✅ [Auto-Assigned] "${rawPayee}" -> Category: ${catPred.label} (${(catPred.confidence * 100).toFixed(1)}%)`);
+
+
+      const resolvedCatId = resolveCategoryId(catPred.label, categories);
+
+      if (catPred.confidence >= CONFIDENCE_THRESHOLD && resolvedCatId) {
+        updates.category = resolvedCatId;
+        const catName = categories.find((c) => c.id === resolvedCatId)?.name || catPred.label;
+        console.log(`  ✅ [Auto-Assigned] "${rawPayee}" -> Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
       } else {
-        // High suggestion note if medium confidence
-        const suggestedCat = categories.find((c) => c.id === catPred.label)?.name || catPred.label;
+        // High suggestion note if medium confidence or unmapped label
+        const suggestedCat = categories.find((c) => c.id === resolvedCatId)?.name || catPred.label;
         updates.notes = `[ML Suggestion: ${suggestedCat} (${(catPred.confidence * 100).toFixed(0)}%)]`;
         console.log(`  💡 [Low Confidence Suggestion] "${rawPayee}" -> ${suggestedCat} (${(catPred.confidence * 100).toFixed(1)}%)`);
       }
