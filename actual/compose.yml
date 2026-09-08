@@ -28,7 +28,7 @@ services:
 
   actual-auto-categorizer:
     build:
-      context: ../../budgettools/tools/auto-categorizer
+      context: ./auto-categorizer
       dockerfile: Dockerfile
     container_name: actual-auto-categorizer
     environment:
