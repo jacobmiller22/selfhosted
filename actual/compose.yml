@@ -18,12 +18,32 @@ services:
     restart: unless-stopped
     networks:
       - nginx-proxy-manager
+
   actual-backup:
     build:
       context: ./backup
     container_name: actual-backup
     volumes:
       - actual-data:/tmp/actual-data
+
+  actual-auto-categorizer:
+    build:
+      context: ../../budgettools/tools/auto-categorizer
+      dockerfile: Dockerfile
+    container_name: actual-auto-categorizer
+    environment:
+      - ACTUAL_SERVER_URL=${ACTUAL_SERVER_URL:-http://actual_server:5006}
+      - ACTUAL_PASSWORD=${ACTUAL_PASSWORD}
+      - ACTUAL_SYNC_ID=${ACTUAL_SYNC_ID}
+      - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.85}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-*/15 * * * *}
+      - PORT=${AUTO_CATEGORIZER_PORT:-3080}
+    volumes:
+      - ./auto-categorizer-models:/app/src/models
+    restart: unless-stopped
+    networks:
+      - nginx-proxy-manager
+
 networks:
   nginx-proxy-manager:
     external: true
