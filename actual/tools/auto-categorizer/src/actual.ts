@@ -41,7 +41,7 @@ export async function connectActual(
     password: password
   });
 
-  await api.downloadBudget(syncId);
+  await api.downloadBudget(syncId, { password });
   console.log(`✓ Connected to Actual Server: ${serverUrl} (Sync ID: ${syncId})`);
 }
 
