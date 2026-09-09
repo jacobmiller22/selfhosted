@@ -22,7 +22,9 @@ export interface ActualCategory {
   id: string;
   name: string;
   is_income?: boolean;
+  hidden?: boolean;
   tombstone?: boolean;
+  cat_group?: string;
 }
 
 export async function connectActual(
@@ -69,13 +71,26 @@ export async function fetchPayees(): Promise<ActualPayee[]> {
 }
 
 export async function fetchCategories(): Promise<ActualCategory[]> {
+  let hiddenGroupIds = new Set<string>();
+  try {
+    const groups = await (api as any).getCategoryGroups();
+    if (Array.isArray(groups)) {
+      groups.filter((g: any) => g.hidden || g.is_hidden).forEach((g: any) => hiddenGroupIds.add(g.id));
+    }
+  } catch (_) {}
+
   const categories = await api.getCategories();
-  return (categories || []).map((c: any) => ({
-    id: c.id,
-    name: c.name,
-    is_income: !!c.is_income,
-    tombstone: !!c.tombstone
-  }));
+  return (categories || []).map((c: any) => {
+    const isHidden = !!c.hidden || !!c.is_hidden || (c.cat_group && hiddenGroupIds.has(c.cat_group));
+    return {
+      id: c.id,
+      name: c.name,
+      is_income: !!c.is_income,
+      hidden: isHidden,
+      tombstone: !!c.tombstone,
+      cat_group: c.cat_group
+    };
+  });
 }
 
 export async function fetchAllTransactions(sinceDate?: string): Promise<ActualTransaction[]> {

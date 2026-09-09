@@ -76,8 +76,15 @@ export function parseCsvContent(content, filename, profile) {
             amount = parseAmountValue(String(row[amountHeader]));
             if (typeHeader && row[typeHeader] !== undefined && row[typeHeader] !== null && String(row[typeHeader]).trim() !== '') {
                 const typeVal = String(row[typeHeader]).trim();
-                const debitPatterns = [/debit/i, /payment/i, /withdrawal/i, /charge/i, /expense/i, /outflow/i, /purchase/i, /fee/i, /sale/i];
-                const creditPatterns = [/credit/i, /deposit/i, /income/i, /refund/i, /inflow/i];
+                const debitPatterns = [
+                    /debit/i, /payment/i, /withdrawal/i, /charge/i, /expense/i,
+                    /outflow/i, /purchase/i, /fee/i, /sale/i, /card purchase/i,
+                    /atm withdrawal/i, /ach debit/i, /webxfr/i, /transfer out/i, /online transfer/i
+                ];
+                const creditPatterns = [
+                    /credit/i, /deposit/i, /income/i, /refund/i, /inflow/i,
+                    /direct deposit/i, /interest/i, /transfer in/i, /payroll/i
+                ];
                 if (debitPatterns.some(p => p.test(typeVal))) {
                     amount = -Math.abs(amount);
                 }
@@ -105,7 +112,7 @@ export function parseCsvContent(content, filename, profile) {
         }
         const payee_name = payeeHeader ? row[payeeHeader] : undefined;
         const notes = notesHeader ? row[notesHeader] : undefined;
-        const imported_id = idHeader ? String(row[idHeader]) : `${parsedDate}-${index}-${amount}`;
+        const imported_id = idHeader ? String(row[idHeader]) : `${parsedDate}-${index}`;
         transactions.push({
             date: parsedDate,
             amount,

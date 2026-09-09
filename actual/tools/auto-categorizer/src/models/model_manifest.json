@@ -1,5 +1,6 @@
 {
-  "timestamp": "2026-09-08T14:54:25.220222",
+  "timestamp": "2026-09-09T17:01:04.793707",
+  "half_life_days": 180.0,
   "models": {
     "payee_resolver": {
       "file": "payee_resolver.onnx",
@@ -393,5 +394,22 @@
         "fb5d5bfe-3f08-4696-ac8f-8f6e32f971fa"
       ]
     }
+  },
+  "hidden_to_active_map": {
+    "65cb23b6-7722-46d9-91dd-0f16fd98752c": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "69b96af7-bae4-45d2-8baa-46172e824406": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "fb5d5bfe-3f08-4696-ac8f-8f6e32f971fa": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "0f0dbd13-9aec-44cb-8c32-09969da86f9e": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "6bbd8472-25d4-4cee-8a11-5bd9f7e83d61": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "7b89c450-f16b-4386-8fff-1ff1ef612621": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "6f32216a-b44b-4056-86bd-a42c33c046f9": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "97fdd2ad-62f9-421b-a127-327b1b50add2": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "4244f961-a1b8-4ba4-97a6-82b5c32924f5": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "506e8d9d-7ed0-4397-84e4-07a9185dc6b2": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "39c7dce4-1da7-403e-add8-45591032a901": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "bbbec76e-0636-4466-98e8-ddee4f6b77c9": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "d520edc4-d5c1-439f-9ba3-8aaa37e0a882": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "173cb609-c65f-4584-88e2-3527e24565c1": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90",
+    "8de1058e-615d-42bc-a8e8-a21d8e614a7c": "6b79e925-0fe0-4f9e-a47d-c6fd1ef36d90"
   }
 }

@@ -34,19 +34,36 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
-def train_payee_resolver(df: pd.DataFrame):
-    """Train Payee Resolver Pipeline mapping cleaned payee text + account + amount to canonical payee_id."""
-    print("\n--- Training Model 2: Payee Resolver ---")
+def compute_time_weights(df: pd.DataFrame, half_life_days: float = 180.0, min_weight: float = 0.05) -> np.ndarray:
+    """Compute exponential decay sample weights based on transaction date relative to latest date in dataset.
+    Default half-life is 180 days (6 months).
+    """
+    dates = pd.to_datetime(df["date"], errors="coerce")
+    max_date = dates.max()
+    if pd.isna(max_date):
+        return np.ones(len(df), dtype=float)
+
+    days_old = (max_date - dates).dt.total_seconds() / 86400.0
+    days_old = days_old.fillna(0.0).clip(lower=0.0)
+
+    decay_rate = np.log(2.0) / half_life_days
+    weights = np.exp(-decay_rate * days_old)
+    return np.maximum(weights, min_weight)
+
+def train_payee_resolver(df: pd.DataFrame, half_life_days: float = 180.0):
+    """Train Payee Resolver Pipeline mapping cleaned payee text + account + amount to canonical payee_id with time decay weighting."""
+    print(f"\n--- Training Model 2: Payee Resolver (Time Decay Half-Life: {half_life_days} days) ---")
     df_valid = df[(df["is_transfer"] == False) & df["payee_id"].notna() & (df["payee_id"] != "")].copy()
     
     X = df_valid[["cleaned_payee", "account_id", "amount_log", "amount_sign"]]
     y = df_valid["payee_id"]
+    weights = compute_time_weights(df_valid, half_life_days=half_life_days)
     
     counts = y.value_counts()
     stratify = y if counts.min() >= 2 else None
     
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=stratify
+    X_train, X_test, y_train, y_test, w_train, w_test = train_test_split(
+        X, y, weights, test_size=0.2, random_state=42, stratify=stratify
     )
 
     preprocessor = ColumnTransformer(
@@ -64,30 +81,31 @@ def train_payee_resolver(df: pd.DataFrame):
         ]
     )
 
-    pipeline.fit(X_train, y_train)
+    pipeline.fit(X_train, y_train, classifier__sample_weight=w_train)
     y_pred = pipeline.predict(X_test)
     
     acc = accuracy_score(y_test, y_pred)
     print(f"✓ Payee Resolver Accuracy (validation set): {acc * 100:.2f}%")
     
-    # Fit final model on full dataset for maximum vocabulary and class coverage
-    pipeline.fit(X, y)
+    # Fit final model on full dataset for maximum vocabulary and class coverage with sample weights
+    pipeline.fit(X, y, classifier__sample_weight=weights)
     
     return pipeline, preprocessor
 
-def train_category_classifier(df: pd.DataFrame):
-    """Train Category Classifier Pipeline predicting category_id from cleaned payee, account, date & amount."""
-    print("\n--- Training Model 3: Category Classifier ---")
+def train_category_classifier(df: pd.DataFrame, half_life_days: float = 180.0):
+    """Train Category Classifier Pipeline predicting category_id from cleaned payee, account, date & amount with time decay weighting."""
+    print(f"\n--- Training Model 3: Category Classifier (Time Decay Half-Life: {half_life_days} days) ---")
     df_valid = df[(df["is_transfer"] == False) & df["category_id"].notna() & (df["category_id"] != "")].copy()
     
     X = df_valid[["cleaned_payee", "account_id", "amount_log", "amount_sign", "day_of_week", "day_of_month", "month"]]
     y = df_valid["category_id"]
+    weights = compute_time_weights(df_valid, half_life_days=half_life_days)
 
     counts = y.value_counts()
     stratify = y if counts.min() >= 2 else None
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=stratify
+    X_train, X_test, y_train, y_test, w_train, w_test = train_test_split(
+        X, y, weights, test_size=0.2, random_state=42, stratify=stratify
     )
 
     preprocessor = ColumnTransformer(
@@ -105,14 +123,14 @@ def train_category_classifier(df: pd.DataFrame):
         ]
     )
 
-    pipeline.fit(X_train, y_train)
+    pipeline.fit(X_train, y_train, classifier__sample_weight=w_train)
     y_pred = pipeline.predict(X_test)
 
     acc = accuracy_score(y_test, y_pred)
     print(f"✓ Category Classifier Accuracy (validation set): {acc * 100:.2f}%")
 
-    # Fit final model on full dataset for maximum vocabulary and class coverage
-    pipeline.fit(X, y)
+    # Fit final model on full dataset for maximum vocabulary and class coverage with sample weights
+    pipeline.fit(X, y, classifier__sample_weight=weights)
 
     return pipeline, preprocessor
 

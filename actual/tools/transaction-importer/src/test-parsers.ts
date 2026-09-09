@@ -514,4 +514,125 @@ if (
   process.exit(1);
 }
 
+// 15. Capital One 360 Extended Transaction Type & Stable imported_id Test
+console.log('\n🧪 Testing Capital One 360 Extended Types & Stable imported_id...');
+const extendedCapOneCsv = `Account Number,Transaction Date,Transaction Amount,Transaction Type,Transaction Description,Balance
+9661,2026-08-20,501.00,CARD PURCHASE,STORE PURCHASE,1000.00
+9661,2026-08-19,2000.00,DIRECT DEPOSIT,PAYROLL DIRECT DEPOSIT,1501.00
+9661,2026-08-18,100.00,ATM WITHDRAWAL,ATM WITHDRAWAL,3501.00
+9661,2026-08-17,429.72,WEBXFR,TRANSFER OUT,3601.00`;
+
+const parsedExtended = parseCsvContent(extendedCapOneCsv, 'Checking...9661.csv');
+const extStmt = parsedExtended.accountStatements[0];
+
+if (
+  extStmt.transactions.length === 4 &&
+  extStmt.transactions[0].amount === -50100 &&
+  extStmt.transactions[0].imported_id === '2026-08-20-0' &&
+  extStmt.transactions[1].amount === 200000 &&
+  extStmt.transactions[1].imported_id === '2026-08-19-1' &&
+  extStmt.transactions[2].amount === -10000 &&
+  extStmt.transactions[2].imported_id === '2026-08-18-2' &&
+  extStmt.transactions[3].amount === -42972 &&
+  extStmt.transactions[3].imported_id === '2026-08-17-3'
+) {
+  console.log('✅ Capital One 360 Extended Types & Stable imported_id test passed!');
+} else {
+  console.error('❌ Capital One 360 Extended Types test failed!', extStmt);
+  process.exit(1);
+}
+
+// 16. Account Balances Table Formatting Test
+console.log('\n🧪 Testing Account Balances Table Formatting...');
+const { formatAccountBalancesTable, formatCurrencyCents } = await import('./balances.js');
+
+const balanceSample = [
+  {
+    accountId: 'acc1',
+    accountName: '360 Checking',
+    currentBalanceCents: 150000,
+    netFlowCents: -50000,
+    projectedBalanceCents: 100000
+  },
+  {
+    accountId: 'acc2',
+    accountName: 'Joint Savings',
+    currentBalanceCents: 500000,
+    netFlowCents: 50000,
+    projectedBalanceCents: 550000
+  }
+];
+
+const balanceTableOutput = formatAccountBalancesTable(balanceSample);
+console.log(balanceTableOutput);
+
+if (
+  balanceTableOutput.includes('360 Checking') &&
+  balanceTableOutput.includes('$1500.00') &&
+  balanceTableOutput.includes('-$500.00') &&
+  balanceTableOutput.includes('$1000.00') &&
+  balanceTableOutput.includes('Joint Savings') &&
+  balanceTableOutput.includes('$5000.00') &&
+  balanceTableOutput.includes('+$500.00') &&
+  balanceTableOutput.includes('$5500.00')
+) {
+  console.log('✅ Account Balances Table Formatting test passed!');
+} else {
+  console.error('❌ Account Balances Table Formatting test failed!');
+  process.exit(1);
+}
+
+// 17. Intra-Batch Paired Transfer Detection Test
+console.log('\n🧪 Testing Intra-Batch Paired Transfer Detection...');
+const { detectIntraBatchTransferPairs, formatTransferPairsSummary } = await import('./transferMatcher.js');
+
+const transferStagedSample: StagedImport[] = [
+  {
+    filePath: 'checking.csv',
+    filename: 'checking.csv',
+    statement: {
+      transactions: [
+        { date: '2026-09-01', amount: -50000, payee_name: 'Online Transfer to Savings' }
+      ]
+    },
+    selectedAccount: { id: 'acc_checking', name: 'Checking Account' },
+    action: 'import'
+  },
+  {
+    filePath: 'savings.csv',
+    filename: 'savings.csv',
+    statement: {
+      transactions: [
+        { date: '2026-09-03', amount: 50000, payee_name: 'Deposit from Checking' }
+      ]
+    },
+    selectedAccount: { id: 'acc_savings', name: 'Savings Account' },
+    action: 'import'
+  }
+];
+
+const mockPayees = [
+  { id: 'payee_trf_savings', name: 'Transfer: Savings Account', transfer_acct: 'acc_savings' },
+  { id: 'payee_trf_checking', name: 'Transfer: Checking Account', transfer_acct: 'acc_checking' }
+];
+
+const detectedPairs = await detectIntraBatchTransferPairs(transferStagedSample, mockPayees, { maxDateDeltaDays: 5 });
+
+console.log(formatTransferPairsSummary(detectedPairs));
+
+if (
+  detectedPairs.length === 1 &&
+  detectedPairs[0].accountA.id === 'acc_checking' &&
+  detectedPairs[0].accountB.id === 'acc_savings' &&
+  detectedPairs[0].dateDeltaDays === 2 &&
+  transferStagedSample[0].statement.transactions[0].payee === 'payee_trf_savings' &&
+  transferStagedSample[1].statement.transactions[0].payee === 'payee_trf_checking'
+) {
+  console.log('✅ Intra-Batch Paired Transfer Detection test passed!');
+} else {
+  console.error('❌ Intra-Batch Paired Transfer Detection test failed!', detectedPairs, transferStagedSample);
+  process.exit(1);
+}
+
 console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY!');
+

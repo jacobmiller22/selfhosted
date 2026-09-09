@@ -34,10 +34,12 @@ def test_onnx_models():
         "amount_sign": np.array([[-1.0]], dtype=np.float32)
     }
 
+    payee_classes = manifest["models"]["payee_resolver"]["classes"]
     outputs_payee = session_payee.run(None, inputs_payee)
-    predicted_payee = outputs_payee[0][0]
+    predicted_payee = str(outputs_payee[0][0])
     payee_probs = outputs_payee[1][0]
-    top_payee_prob = payee_probs.get(predicted_payee, 0.0)
+    payee_idx = payee_classes.index(predicted_payee) if predicted_payee in payee_classes else 0
+    top_payee_prob = float(payee_probs[payee_idx])
 
     print(f"  Raw Input:       '{raw_tj}' ($65.00)")
     print(f"  Cleaned Text:    '{clean_tj}'")
@@ -64,10 +66,12 @@ def test_onnx_models():
         "month": np.array([[9.0]], dtype=np.float32)
     }
 
+    cat_classes = manifest["models"]["category_classifier"]["classes"]
     outputs_cat = session_cat.run(None, inputs_cat)
-    predicted_cat = outputs_cat[0][0]
+    predicted_cat = str(outputs_cat[0][0])
     cat_probs = outputs_cat[1][0]
-    top_cat_prob = cat_probs.get(predicted_cat, 0.0)
+    cat_idx = cat_classes.index(predicted_cat) if predicted_cat in cat_classes else 0
+    top_cat_prob = float(cat_probs[cat_idx])
 
     print(f"  Raw Input:          '{raw_sb}' ($5.50)")
     print(f"  Cleaned Text:       '{clean_sb}'")

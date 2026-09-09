@@ -5,6 +5,7 @@ import { cleanPayeeText } from "./textCleaner.js";
 
 export interface ModelManifest {
   timestamp: string;
+  half_life_days?: number;
   models: {
     payee_resolver: {
       file: string;
@@ -15,6 +16,7 @@ export interface ModelManifest {
       classes: string[];
     };
   };
+  hidden_to_active_map?: Record<string, string>;
 }
 
 export interface PredictionResult {
@@ -31,6 +33,10 @@ export class OnnxPredictorEngine {
 
   constructor(modelsDir?: string) {
     this.modelsDir = modelsDir || path.resolve(process.cwd(), "src/models");
+  }
+
+  public getManifest(): ModelManifest | null {
+    return this.manifest;
   }
 
   public async init(): Promise<void> {

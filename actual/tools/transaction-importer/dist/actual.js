@@ -23,6 +23,18 @@ export async function fetchAccounts() {
         closed: !!acc.closed
     }));
 }
+export async function fetchPayees() {
+    const payees = await api.getPayees();
+    return (payees || []).map((p) => ({
+        id: p.id,
+        name: p.name,
+        transfer_acct: p.transfer_acct
+    }));
+}
+export async function fetchAccountBalance(accountId) {
+    const balance = await api.getAccountBalance(accountId);
+    return typeof balance === 'number' ? balance : 0;
+}
 export async function importTransactionsToAccount(accountId, transactions) {
     const result = await api.importTransactions(accountId, transactions);
     return result || { added: [], updated: [] };

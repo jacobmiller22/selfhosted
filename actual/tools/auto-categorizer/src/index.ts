@@ -98,34 +98,175 @@ function appendRecommendationNote(existingNotes: string | undefined | null, newR
   return cleaned ? `${cleaned} ${newRecommendation}` : newRecommendation;
 }
 
-function resolveCategoryId(predictedLabel: string, categories: { id: string; name: string; is_income?: boolean; hidden?: boolean }[]): string | null {
-  const directMatch = categories.find((c) => c.id === predictedLabel);
-  if (directMatch) return directMatch.id;
+export interface CategoryInput {
+  id: string;
+  name: string;
+  is_income?: boolean;
+  hidden?: boolean;
+  tombstone?: boolean;
+}
 
-  const cleanLabel = predictedLabel.replace(/^cat_/, "").replace(/_/g, " ").toLowerCase();
-  const nameMatch = categories.find((c) => c.name.toLowerCase() === cleanLabel && !c.hidden) || categories.find((c) => c.name.toLowerCase() === cleanLabel);
-  if (nameMatch) return nameMatch.id;
+export interface PredictionInput {
+  label: string;
+  confidence: number;
+  probabilities?: Record<string, number>;
+}
 
-  if (predictedLabel === "cat_income") {
-    const incomeCat = categories.find((c) => c.is_income && !c.hidden) || categories.find((c) => c.is_income);
+export function buildHiddenToActiveMap(
+  transactions: Array<{ date: string; payee?: string; imported_payee?: string; category?: string | null }>,
+  categories: CategoryInput[],
+  manifestMap?: Record<string, string>
+): Map<string, string> {
+  const hiddenToActive = new Map<string, string>();
+  if (manifestMap) {
+    for (const [h, a] of Object.entries(manifestMap)) {
+      hiddenToActive.set(h, a);
+    }
+  }
+
+  const activeCatIds = new Set(categories.filter((c) => !c.hidden && !c.tombstone).map((c) => c.id));
+  const hiddenCatIds = new Set(categories.filter((c) => c.hidden).map((c) => c.id));
+
+  if (hiddenCatIds.size === 0) return hiddenToActive;
+
+  const now = new Date();
+  const payeeHiddenWeights = new Map<string, Map<string, number>>();
+  const payeeActiveWeights = new Map<string, Map<string, number>>();
+
+  for (const tx of transactions) {
+    if (!tx.category) continue;
+    const payee = (tx.imported_payee || tx.payee || "").toLowerCase().trim();
+    if (!payee) continue;
+
+    const txDate = tx.date ? new Date(tx.date) : now;
+    const daysOld = Math.max(0, (now.getTime() - txDate.getTime()) / (1000 * 60 * 60 * 24));
+    const weight = Math.max(0.05, Math.exp(-(Math.LN2 / 180.0) * daysOld));
+
+    if (hiddenCatIds.has(tx.category)) {
+      if (!payeeHiddenWeights.has(payee)) payeeHiddenWeights.set(payee, new Map());
+      const catWeights = payeeHiddenWeights.get(payee)!;
+      catWeights.set(tx.category, (catWeights.get(tx.category) || 0) + weight);
+    } else if (activeCatIds.has(tx.category)) {
+      if (!payeeActiveWeights.has(payee)) payeeActiveWeights.set(payee, new Map());
+      const catWeights = payeeActiveWeights.get(payee)!;
+      catWeights.set(tx.category, (catWeights.get(tx.category) || 0) + weight);
+    }
+  }
+
+  const transitionScores = new Map<string, Map<string, number>>();
+
+  for (const [payee, hMap] of payeeHiddenWeights.entries()) {
+    const aMap = payeeActiveWeights.get(payee);
+    if (!aMap) continue;
+
+    for (const [hCat, hWeight] of hMap.entries()) {
+      if (!transitionScores.has(hCat)) transitionScores.set(hCat, new Map());
+      const scores = transitionScores.get(hCat)!;
+
+      for (const [aCat, aWeight] of aMap.entries()) {
+        const score = Math.sqrt(hWeight * aWeight);
+        scores.set(aCat, (scores.get(aCat) || 0) + score);
+      }
+    }
+  }
+
+  for (const [hCat, scores] of transitionScores.entries()) {
+    let bestActiveCat: string | null = null;
+    let maxScore = -1;
+    for (const [aCat, score] of scores.entries()) {
+      if (score > maxScore) {
+        maxScore = score;
+        bestActiveCat = aCat;
+      }
+    }
+    if (bestActiveCat) {
+      hiddenToActive.set(hCat, bestActiveCat);
+    }
+  }
+
+  return hiddenToActive;
+}
+
+export function resolveCategoryId(
+  prediction: string | PredictionInput,
+  categories: CategoryInput[],
+  hiddenToActiveMap?: Map<string, string>
+): string | null {
+  const predLabel = typeof prediction === "string" ? prediction : prediction.label;
+  const probabilities = typeof prediction === "object" ? prediction.probabilities : undefined;
+
+  const activeCategories = categories.filter((c) => !c.hidden && !c.tombstone);
+  const activeCatMap = new Map(activeCategories.map((c) => [c.id, c]));
+
+  // Strategy 1 (Probability Filtering): Scan probabilities descending and pick the highest-ranked ACTIVE category
+  if (probabilities) {
+    const sortedClasses = Object.entries(probabilities)
+      .sort((a, b) => b[1] - a[1])
+      .map(([cls]) => cls);
+
+    for (const cls of sortedClasses) {
+      if (activeCatMap.has(cls)) {
+        return cls;
+      }
+      if (hiddenToActiveMap && hiddenToActiveMap.has(cls)) {
+        const mappedId = hiddenToActiveMap.get(cls)!;
+        if (activeCatMap.has(mappedId)) {
+          return mappedId;
+        }
+      }
+    }
+  }
+
+  if (activeCatMap.has(predLabel)) {
+    return predLabel;
+  }
+
+  if (hiddenToActiveMap && hiddenToActiveMap.has(predLabel)) {
+    const mappedId = hiddenToActiveMap.get(predLabel)!;
+    if (activeCatMap.has(mappedId)) {
+      return mappedId;
+    }
+  }
+
+  if (predLabel === "cat_income") {
+    const incomeCat = activeCategories.find((c) => c.is_income);
     if (incomeCat) return incomeCat.id;
   }
-  if (predictedLabel === "cat_groceries") {
-    const grocCat = categories.find((c) => c.name.toLowerCase().includes("grocer"));
+  if (predLabel === "cat_groceries") {
+    const grocCat = activeCategories.find((c) => c.name.toLowerCase().includes("grocer"));
     if (grocCat) return grocCat.id;
   }
-  if (predictedLabel === "cat_subscriptions") {
-    const subCat = categories.find((c) => c.name.toLowerCase().includes("subscript") && !c.hidden) || categories.find((c) => c.name.toLowerCase().includes("subscript"));
+  if (predLabel === "cat_subscriptions") {
+    const subCat = activeCategories.find((c) => c.name.toLowerCase().includes("subscript"));
     if (subCat) return subCat.id;
   }
-  if (predictedLabel === "cat_utilities" || predictedLabel === "cat_bills") {
-    const utilCat = categories.find((c) => (c.name.toLowerCase().includes("bill") || c.name.toLowerCase().includes("util")) && !c.hidden);
+  if (predLabel === "cat_utilities" || predLabel === "cat_bills") {
+    const utilCat = activeCategories.find((c) => c.name.toLowerCase().includes("bill") || c.name.toLowerCase().includes("util"));
     if (utilCat) return utilCat.id;
   }
-  if (predictedLabel === "cat_dining") {
-    const diningCat = categories.find((c) => (c.name.toLowerCase().includes("dining") || c.name.toLowerCase().includes("food")) && !c.hidden);
+  if (predLabel === "cat_dining") {
+    const diningCat = activeCategories.find((c) => c.name.toLowerCase().includes("dining") || c.name.toLowerCase().includes("food"));
     if (diningCat) return diningCat.id;
   }
+
+  const cleanLabel = predLabel
+    .replace(/^cat_/, "")
+    .replace(/_(old|deprecated|archived|v\d+)/gi, "")
+    .replace(/\s+(old|deprecated|archived)/gi, "")
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .trim();
+
+  const nameMatch = activeCategories.find((c) => {
+    const activeName = c.name.toLowerCase();
+    return (
+      activeName === cleanLabel ||
+      activeName.includes(cleanLabel) ||
+      cleanLabel.includes(activeName)
+    );
+  });
+  if (nameMatch) return nameMatch.id;
+
   return null;
 }
 
@@ -174,8 +315,11 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
     const acctMap = new Map(accounts.map((a) => [a.id, a]));
     const payees = await fetchPayees();
     const categories = await fetchCategories();
+    const manifestMap = predictor.getManifest()?.hidden_to_active_map;
+    const hiddenToActiveMap = buildHiddenToActiveMap(transactions, categories, manifestMap);
 
     console.log(`📊 Fetched ${transactions.length} total transactions across ${accounts.length} accounts from Actual Budget.`);
+    console.log(`🏷️ Hidden category converter initialized (${categories.filter((c) => c.hidden).length} hidden categories, ${hiddenToActiveMap.size} active mappings).`);
 
     // --- STAGE 1: Transfer Detection ---
     console.log("\n🔍 Stage 1: Checking for cross-account transfers in open, on-budget accounts...");
@@ -257,7 +401,7 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
         updates.payee = payeePred.label;
       }
 
-      const resolvedCatId = resolveCategoryId(catPred.label, categories);
+      const resolvedCatId = resolveCategoryId(catPred, categories, hiddenToActiveMap);
       const catName = categories.find((c) => c.id === resolvedCatId)?.name || catPred.label;
 
       if (catPred.confidence >= CONFIDENCE_THRESHOLD && resolvedCatId) {

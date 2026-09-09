@@ -6,8 +6,13 @@ import {
   connectActual,
   disconnectActual,
   fetchAccounts,
+  fetchPayees,
   importTransactionsToAccount
 } from "./actual.js";
+import {
+  calculateAccountBalances,
+  formatAccountBalancesTable
+} from "./balances.js";
 import { getConfig, loadMappings } from "./config.js";
 import {
   formatBatchSummaryTable,
@@ -16,6 +21,12 @@ import {
   type StagedImport
 } from "./matcher.js";
 import { parseStatementFile } from "./parsers/index.js";
+import { OnnxPredictorEngine } from "./predictor.js";
+import {
+  detectIntraBatchTransferPairs,
+  formatTransferPairsSummary,
+  type MatchedTransferPair
+} from "./transferMatcher.js";
 
 const program = new Command();
 
@@ -26,7 +37,9 @@ program
   .option("-a, --account <accountIdOrName>", "Explicit Actual Budget account ID or name for all files")
   .option("-d, --dry-run", "Parse files and resolve accounts without modifying budget data", false)
   .option("--no-archive", "Do not move imported files to archived/ folder")
-  .action(async (targetPathArg: string, options: { account?: string; dryRun: boolean; archive: boolean }) => {
+  .option("-t, --max-transfer-days <days>", "Maximum date difference in days for paired transfer matching", "5")
+  .option("--no-transfers", "Disable automatic transfer pair matching")
+  .action(async (targetPathArg: string, options: { account?: string; dryRun: boolean; archive: boolean; maxTransferDays: string; transfers: boolean }) => {
     const config = getConfig();
     const mappings = loadMappings(config.mappingsPath);
 
@@ -70,6 +83,14 @@ program
 
     try {
       const accounts = await fetchAccounts();
+      const payees = await fetchPayees();
+
+      // Initialize ONNX predictor if model exists
+      const predictor = new OnnxPredictorEngine();
+      const predictorLoaded = await predictor.init();
+      if (predictorLoaded) {
+        console.log(`- ML Predictor: ONNX model loaded for transfer payee resolution.`);
+      }
 
       // Phase 1 (Staging)
       console.log(`\n================ Phase 1: Staging & Account Resolution ================`);
@@ -124,9 +145,34 @@ program
         }
       }
 
-      // Batch Review
-      console.log(`\n================ Batch Review ================`);
-      console.log(formatBatchSummaryTable(stagedImports));
+      // Helper function to update and render review tables
+      const refreshReviewState = async (): Promise<{
+        transferPairs: MatchedTransferPair[];
+      }> => {
+        const maxTransferDays = parseInt(options.maxTransferDays, 10) || 5;
+        const transferPairs = options.transfers !== false
+          ? await detectIntraBatchTransferPairs(stagedImports, payees, {
+              maxDateDeltaDays: maxTransferDays,
+              enablePredictor: predictorLoaded,
+              predictorEngine: predictor
+            })
+          : [];
+
+        const balanceSummaries = await calculateAccountBalances(stagedImports, accounts);
+
+        console.log(`\n================ Batch Review ================`);
+        console.log(formatBatchSummaryTable(stagedImports));
+
+        if (options.transfers !== false) {
+          console.log(`\n` + formatTransferPairsSummary(transferPairs));
+        }
+
+        console.log(`\n` + formatAccountBalancesTable(balanceSummaries, "📊 PROJECTED ACCOUNT BALANCES SUMMARY"));
+
+        return { transferPairs };
+      };
+
+      const { transferPairs } = await refreshReviewState();
 
       if (options.dryRun) {
         console.log(`\n[DRY-RUN] Batch review complete. No changes committed to Actual Budget.`);
@@ -199,8 +245,7 @@ program
               savedRuleDescription: interactiveResult.savedRuleDescription
             };
 
-            console.log(`\n================ Batch Review ================`);
-            console.log(formatBatchSummaryTable(stagedImports));
+            await refreshReviewState();
           }
           continue;
         }
@@ -266,6 +311,10 @@ program
 
       console.log(`\n================ Summary ================`);
       console.table(importSummary);
+
+      // Display Final Updated Account Balances
+      const finalBalanceSummaries = await calculateAccountBalances(stagedImports, accounts);
+      console.log(`\n` + formatAccountBalancesTable(finalBalanceSummaries, "🏦 FINAL POST-IMPORT ACCOUNT BALANCES"));
       console.log(`=========================================\n`);
     } finally {
       await disconnectActual();
