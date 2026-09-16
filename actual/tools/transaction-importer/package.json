@@ -8,10 +8,13 @@
     "build": "tsc",
     "start": "tsx src/index.ts",
     "import": "tsx src/index.ts",
-    "test": "tsx src/test-parsers.ts"
+    "test": "tsx src/test-parsers.ts && tsx src/test-vision.ts",
+    "test:parsers": "tsx src/test-parsers.ts",
+    "test:vision": "tsx src/test-vision.ts"
   },
   "dependencies": {
     "@actual-app/api": "^26.9.0",
+    "@google/genai": "^2.22.0",
     "commander": "^12.1.0",
     "csv-parse": "^5.5.6",
     "dotenv": "^16.4.5",

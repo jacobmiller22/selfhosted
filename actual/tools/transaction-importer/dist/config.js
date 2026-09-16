@@ -35,7 +35,8 @@ export function loadMappings(mappingsPath) {
         return {
             accountNumbers: parsed.accountNumbers || {},
             filenamePatterns: parsed.filenamePatterns || {},
-            csvProfiles: parsed.csvProfiles || {}
+            csvProfiles: parsed.csvProfiles || {},
+            accountAliases: parsed.accountAliases || {}
         };
     }
     catch (err) {

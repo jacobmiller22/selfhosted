@@ -27,12 +27,13 @@ import {
   formatTransferPairsSummary,
   type MatchedTransferPair
 } from "./transferMatcher.js";
+import { extractTransactionsFromImage, isImageFile } from "./vision/index.js";
 
 const program = new Command();
 
 program
   .name("import-transactions")
-  .description("Import CSV, OFX, QFX, QBO, and QIF transaction files into Actual Budget.")
+  .description("Import CSV, OFX, QFX, QBO, and QIF transaction files as well as mobile banking screenshots into Actual Budget.")
   .argument("<target-path>", "Path to a directory containing transaction files or a single transaction file")
   .option("-a, --account <accountIdOrName>", "Explicit Actual Budget account ID or name for all files")
   .option("-d, --dry-run", "Parse files and resolve accounts without modifying budget data", false)
@@ -55,14 +56,14 @@ program
       filesToProcess.push(targetPath);
     } else if (stat.isDirectory()) {
       const files = fs.readdirSync(targetPath);
-      const validExts = [".csv", ".ofx", ".qfx", ".qbo", ".qif"];
+      const validExts = [".csv", ".ofx", ".qfx", ".qbo", ".qif", ".png", ".jpg", ".jpeg", ".webp", ".heic"];
       filesToProcess = files
         .filter(f => validExts.includes(path.extname(f).toLowerCase()))
         .map(f => path.join(targetPath, f));
     }
 
     if (filesToProcess.length === 0) {
-      console.log(`ℹ️ No transaction files (.csv, .ofx, .qfx, .qbo, .qif) found in "${targetPath}".`);
+      console.log(`ℹ️ No supported files (.csv, .ofx, .qfx, .qbo, .qif, .png, .jpg, .jpeg, .webp, .heic) found in "${targetPath}".`);
       process.exit(0);
     }
 
@@ -101,9 +102,43 @@ program
         console.log(`\n📄 Processing file: ${filename}`);
 
         try {
-          const { base: filenameBase } = getFilenameBaseAndIsGeneric(filename);
-          let savedProfile = mappings.csvProfiles?.[filename] || mappings.csvProfiles?.[filenameBase];
-          let parsed = parseStatementFile(filePath, savedProfile);
+          let parsed;
+          let explicitResolvedAccountId: string | undefined;
+
+          if (isImageFile(filePath)) {
+            console.log(`🤖 Analyzing screenshot with Gemini Multimodal Vision: ${filename}...`);
+            const visionResult = await extractTransactionsFromImage(filePath, {
+              mappings,
+              accounts,
+            });
+            console.log(
+              `   Extracted ${visionResult.transactions.length} transaction(s). Detected account: ${
+                visionResult.account_identifier || "Unknown"
+              }${visionResult.resolvedAccountName ? ` -> "${visionResult.resolvedAccountName}"` : ""}`
+            );
+
+            explicitResolvedAccountId = visionResult.resolvedAccountId;
+            parsed = {
+              accountStatements: [
+                {
+                  accountNumber:
+                    visionResult.account_last_4 || visionResult.account_identifier,
+                  transactions: visionResult.transactions.map((t) => ({
+                    date: t.date,
+                    amount: t.amount_cents,
+                    payee_name: t.payee,
+                    imported_id: t.imported_id,
+                    notes: t.notes,
+                    cleared: t.cleared,
+                  })),
+                },
+              ],
+            };
+          } else {
+            const { base: filenameBase } = getFilenameBaseAndIsGeneric(filename);
+            let savedProfile = mappings.csvProfiles?.[filename] || mappings.csvProfiles?.[filenameBase];
+            parsed = parseStatementFile(filePath, savedProfile);
+          }
 
           if (!parsed.accountStatements || parsed.accountStatements.length === 0) {
             console.log(`⚠️ No valid transaction statements found in ${filename}. Skipping.`);
@@ -127,7 +162,7 @@ program
               accounts,
               mappings,
               mappingsPath: config.mappingsPath,
-              explicitAccountArg: options.account
+              explicitAccountArg: options.account || explicitResolvedAccountId
             });
 
             stagedImports.push({
