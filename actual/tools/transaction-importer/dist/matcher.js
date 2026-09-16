@@ -328,6 +328,20 @@ export async function resolveFileInteractively(options) {
             }
         }
     }
+    if (!selectedAccount && currentStatement.accountNumber && mappings.accountAliases) {
+        const lowerAcct = currentStatement.accountNumber.toLowerCase();
+        for (const [alias, accountId] of Object.entries(mappings.accountAliases)) {
+            if (lowerAcct.includes(alias.toLowerCase())) {
+                const match = accounts.find(a => a.id === accountId);
+                if (match) {
+                    console.log(`✓ Matched account alias "${alias}" -> "${match.name}"`);
+                    selectedAccount = match;
+                    autoMatched = true;
+                    break;
+                }
+            }
+        }
+    }
     if (!selectedAccount) {
         for (const [pattern, accountId] of Object.entries(mappings.filenamePatterns)) {
             const regex = new RegExp(pattern, "i");

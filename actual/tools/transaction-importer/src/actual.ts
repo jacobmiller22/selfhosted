@@ -17,6 +17,7 @@ export interface ActualPayee {
 }
 
 export interface TransactionToImport {
+  account?: string;
   date: string;
   amount: number; // in cents
   payee?: string; // Payee ID in Actual Budget (e.g. transfer payee ID)
@@ -75,7 +76,11 @@ export async function importTransactionsToAccount(
   accountId: string,
   transactions: TransactionToImport[]
 ): Promise<{ added: any[]; updated: any[] }> {
-  const result = await api.importTransactions(accountId, transactions);
+  const payload = transactions.map(t => ({
+    account: t.account || accountId,
+    ...t
+  }));
+  const result = await api.importTransactions(accountId, payload as any);
   return result || { added: [], updated: [] };
 }
 

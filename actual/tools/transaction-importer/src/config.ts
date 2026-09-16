@@ -24,6 +24,7 @@ export interface MappingConfig {
   accountNumbers: Record<string, string>;
   filenamePatterns: Record<string, string>;
   csvProfiles: Record<string, CsvProfile>;
+  accountAliases?: Record<string, string>;
 }
 
 export interface AppConfig {
@@ -67,7 +68,8 @@ export function loadMappings(mappingsPath: string): MappingConfig {
     return {
       accountNumbers: parsed.accountNumbers || {},
       filenamePatterns: parsed.filenamePatterns || {},
-      csvProfiles: parsed.csvProfiles || {}
+      csvProfiles: parsed.csvProfiles || {},
+      accountAliases: parsed.accountAliases || {}
     };
   } catch (err) {
     return { accountNumbers: {}, filenamePatterns: {}, csvProfiles: {} };
