@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "repo": "jacobmiller22/selfhosted",
+  "defaultBranch": "main",
+  "tracker": "github",
+  "autoCreateIssues": true,
+  "defaultLabels": ["type:feature"],
+  "requirePriorityLabel": true,
+  "sessionHandoffFile": ".pm/HANDOFF.md"
+}
