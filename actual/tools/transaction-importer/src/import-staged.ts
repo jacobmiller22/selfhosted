@@ -147,6 +147,7 @@ program
           account: accountId,
           date,
           amount: cents,
+          payee: t.payee,
           payee_name: payeeName,
           imported_id: fingerprint,
           notes: t.notes || "",
