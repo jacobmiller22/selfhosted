@@ -43,6 +43,22 @@ openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
   tar -xz -C ./extracted
 ```
 
+### 2.3 Automated Database & Storage Integrity Verification
+Before restoring any decrypted backup payload into production volumes, validate internal page consistency, relational foreign key constraints, cryptographic keys, and record counts using the automated verification suite:
+
+```bash
+# Auto-detect and verify all services in the extracted payload directory
+./tools/backup-dr/verify-db-integrity.sh --dir ./extracted --verbose
+
+# Or verify a specific service (actual, vaultwarden, homeassistant, npm, postgres)
+./tools/backup-dr/verify-db-integrity.sh --service vaultwarden --dir ./extracted
+
+# Verify a standalone database or dump file
+./tools/backup-dr/verify-db-integrity.sh --file ./extracted/db.sqlite3
+```
+Exit code `0` confirms the backup is sound and ready for restoration.
+
+
 ---
 
 ## 3. Service-Specific Restoration Procedures
