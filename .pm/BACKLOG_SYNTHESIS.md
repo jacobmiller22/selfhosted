@@ -1,7 +1,7 @@
 # 🏛️ Backlog Synthesis & Architectural Council Report
 
 - **Repository**: `jacobmiller22/selfhosted`
-- **Generated At**: `2026-09-18T18:10:13Z`
+- **Generated At**: `2026-09-18T18:11:53Z`
 - **Engine**: `pm architect` v1.0.0
 - **Backlog Health Score**: **100/100** 🟢 Healthy
 
@@ -11,11 +11,11 @@
 
 | Metric | Count | Details |
 | :--- | :--- | :--- |
-| **Total Open Issues** | `36` | Tracked issues in repository backlog |
+| **Total Open Issues** | `35` | Tracked issues in repository backlog |
 | **Parent Stories / Epics** | `5` | Monorepo feature epics (`type:story`) |
 | **Shovel-Ready Candidates** | `18` | Unblocked leaf tasks ready for `pm ship` / `pm fleet` |
 | **Blocked Tasks** | `12` | Tasks awaiting upstream technical prerequisites |
-| **Codebase Fact-Check Clean** | `36` | Verified zero file/service path drift |
+| **Codebase Fact-Check Clean** | `35` | Verified zero file/service path drift |
 | **Asset / Spec Drift Warnings** | `0` | Tickets referencing missing files or spec contradictions |
 | **Dependency Cycles** | `0` | None detected 🟢 |
 | **Proposed New Tickets** | `4` | Research spikes & information reconciliation tickets |
@@ -127,41 +127,40 @@ Audited all ticket descriptions against repository files, compose configurations
 
 | Issue | Overall Status | Verified Assets | Flags & Contradictions |
 | :---: | :---: | :--- | :--- |
-| [#58](https://github.com/jacobmiller22/selfhosted/issues/58) | `🟢 VERIFIED` | • File: tests/test_pm_architect.py | None (Clean) |
 | [#55](https://github.com/jacobmiller22/selfhosted/issues/55) | `🟢 VERIFIED` | *None declared* | None (Clean) |
 | [#54](https://github.com/jacobmiller22/selfhosted/issues/54) | `🟢 VERIFIED` | *None declared* | None (Clean) |
-| [#48](https://github.com/jacobmiller22/selfhosted/issues/48) | `🟢 VERIFIED` | • File: pm/HANDOFF.md<br>• Planned deliverable: docs/CI_CD_COOLIFY_PIPELINE.md<br>• Planned deliverable: README.md | None (Clean) |
-| [#46](https://github.com/jacobmiller22/selfhosted/issues/46) | `🟢 VERIFIED` | • File: vaultwarden/compose.yml<br>• File: actual/compose.yml<br>• Service: actual-backup (actual/compose.yml) | None (Clean) |
+| [#48](https://github.com/jacobmiller22/selfhosted/issues/48) | `🟢 VERIFIED` | • Planned deliverable: docs/CI_CD_COOLIFY_PIPELINE.md<br>• Planned deliverable: README.md<br>• File: pm/HANDOFF.md | None (Clean) |
+| [#46](https://github.com/jacobmiller22/selfhosted/issues/46) | `🟢 VERIFIED` | • File: actual/compose.yml<br>• File: vaultwarden/compose.yml<br>• Service: actual-auto-categorizer (actual/compose.yml) | None (Clean) |
 | [#45](https://github.com/jacobmiller22/selfhosted/issues/45) | `🟢 VERIFIED` | • Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | None (Clean) |
-| [#44](https://github.com/jacobmiller22/selfhosted/issues/44) | `🟢 VERIFIED` | • Planned deliverable: README.md<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: homeassistant (homeassistant/compose.yml) | None (Clean) |
+| [#44](https://github.com/jacobmiller22/selfhosted/issues/44) | `🟢 VERIFIED` | • Planned deliverable: README.md<br>• Service: homeassistant (homeassistant/compose.yml)<br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | None (Clean) |
 | [#43](https://github.com/jacobmiller22/selfhosted/issues/43) | `🟢 VERIFIED` | *None declared* | None (Clean) |
-| [#42](https://github.com/jacobmiller22/selfhosted/issues/42) | `🟢 VERIFIED` | • Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: homeassistant (homeassistant/compose.yml)<br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | None (Clean) |
+| [#42](https://github.com/jacobmiller22/selfhosted/issues/42) | `🟢 VERIFIED` | • Service: homeassistant (homeassistant/compose.yml)<br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml)<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
 | [#39](https://github.com/jacobmiller22/selfhosted/issues/39) | `🟢 VERIFIED` | • Planned deliverable: docs/STAGING_ARCHITECTURE.md<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
 | [#38](https://github.com/jacobmiller22/selfhosted/issues/38) | `🟢 VERIFIED` | • Planned deliverable: vw-stage-data/db.sqlite3<br>• Planned deliverable: tools/staging/verify-vaultwarden-upgrade.sh<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
 | [#37](https://github.com/jacobmiller22/selfhosted/issues/37) | `🟢 VERIFIED` | • Planned deliverable: hydrate.sh<br>• Planned deliverable: tools/staging/test-actual-staging.sh<br>• Service: actual-auto-categorizer (actual/compose.yml) | None (Clean) |
-| [#36](https://github.com/jacobmiller22/selfhosted/issues/36) | `🟢 VERIFIED` | • Planned deliverable: tools/staging/hydrate.sh<br>• Planned deliverable: db.sqlite3<br>• Planned deliverable: rsa_key.pem | None (Clean) |
-| [#35](https://github.com/jacobmiller22/selfhosted/issues/35) | `🟢 VERIFIED` | • File: vaultwarden/compose.yml<br>• File: actual/compose.yml<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#34](https://github.com/jacobmiller22/selfhosted/issues/34) | `🟢 VERIFIED` | • File: tools/backup-runner<br>• Planned deliverable: entrypoint.sh<br>• Planned deliverable: backup.sh | None (Clean) |
-| [#33](https://github.com/jacobmiller22/selfhosted/issues/33) | `🟢 VERIFIED` | • File: docs/RESTORE.md<br>• File: tools/backup-runner<br>• File: docs/BACKUP_ARCHITECTURE.md | None (Clean) |
-| [#32](https://github.com/jacobmiller22/selfhosted/issues/32) | `🟢 VERIFIED` | • File: tools/backup-runner<br>• Planned deliverable: keys.json<br>• File: nginx-proxy-manager/compose.yml | None (Clean) |
-| [#31](https://github.com/jacobmiller22/selfhosted/issues/31) | `🟢 VERIFIED` | • File: tools/backup-runner/backup-engine.sh<br>• File: tools/backup-runner<br>• File: actual/backup/backup.sh | None (Clean) |
-| [#29](https://github.com/jacobmiller22/selfhosted/issues/29) | `🟢 VERIFIED` | • File: docs/RESTORE.md<br>• File: docs/BACKUP_ARCHITECTURE.md<br>• Planned deliverable: docs/DISASTER_RECOVERY_EXERCISES.md | None (Clean) |
+| [#36](https://github.com/jacobmiller22/selfhosted/issues/36) | `🟢 VERIFIED` | • Planned deliverable: tools/staging/hydrate.sh<br>• Planned deliverable: rsa_key.pem<br>• Planned deliverable: db.sqlite3 | None (Clean) |
+| [#35](https://github.com/jacobmiller22/selfhosted/issues/35) | `🟢 VERIFIED` | • File: actual/compose.yml<br>• File: vaultwarden/compose.yml<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
+| [#34](https://github.com/jacobmiller22/selfhosted/issues/34) | `🟢 VERIFIED` | • Planned deliverable: backup.sh<br>• Planned deliverable: entrypoint.sh<br>• File: tools/backup-runner | None (Clean) |
+| [#33](https://github.com/jacobmiller22/selfhosted/issues/33) | `🟢 VERIFIED` | • File: tools/backup-runner<br>• File: docs/BACKUP_ARCHITECTURE.md<br>• File: docs/RESTORE.md | None (Clean) |
+| [#32](https://github.com/jacobmiller22/selfhosted/issues/32) | `🟢 VERIFIED` | • File: homeassistant/<br>• Planned deliverable: keys.json<br>• Planned deliverable: hooks/pre-backup.sh | None (Clean) |
+| [#31](https://github.com/jacobmiller22/selfhosted/issues/31) | `🟢 VERIFIED` | • File: vaultwarden/backup/Dockerfile<br>• Planned deliverable: backup.sh<br>• File: actual/ | None (Clean) |
+| [#29](https://github.com/jacobmiller22/selfhosted/issues/29) | `🟢 VERIFIED` | • Planned deliverable: docs/DISASTER_RECOVERY_EXERCISES.md<br>• File: docs/BACKUP_ARCHITECTURE.md<br>• File: docs/RESTORE.md | None (Clean) |
 | [#28](https://github.com/jacobmiller22/selfhosted/issues/28) | `🟢 VERIFIED` | • Planned deliverable: tools/backup-dr/dr-drill.sh | None (Clean) |
 | [#27](https://github.com/jacobmiller22/selfhosted/issues/27) | `🟢 VERIFIED` | • Planned deliverable: tools/backup-dr/staging-smoke-test.sh<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#26](https://github.com/jacobmiller22/selfhosted/issues/26) | `🟢 VERIFIED` | • Planned deliverable: account.sqlite<br>• Planned deliverable: db.sqlite3<br>• Planned deliverable: home-assistant_v2.db | None (Clean) |
-| [#25](https://github.com/jacobmiller22/selfhosted/issues/25) | `🟢 VERIFIED` | • File: tools/backup-runner/test-backup-restore.sh<br>• Planned deliverable: tools/backup-dr/pull-and-decrypt.sh | None (Clean) |
+| [#26](https://github.com/jacobmiller22/selfhosted/issues/26) | `🟢 VERIFIED` | • Planned deliverable: rsa_key.pem<br>• Planned deliverable: tools/backup-dr/verify-db-integrity.sh<br>• Planned deliverable: database.sqlite | None (Clean) |
+| [#25](https://github.com/jacobmiller22/selfhosted/issues/25) | `🟢 VERIFIED` | • Planned deliverable: tools/backup-dr/pull-and-decrypt.sh<br>• File: tools/backup-runner/test-backup-restore.sh | None (Clean) |
 | [#24](https://github.com/jacobmiller22/selfhosted/issues/24) | `🟢 VERIFIED` | • Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#23](https://github.com/jacobmiller22/selfhosted/issues/23) | `🟢 VERIFIED` | • Planned deliverable: monitoring/grafana/provisioning/alerting/<br>• Planned deliverable: monitoring/grafana/provisioning/alerting<br>• Service: actual_server (actual/compose.yml) | None (Clean) |
-| [#22](https://github.com/jacobmiller22/selfhosted/issues/22) | `🟢 VERIFIED` | • File: monitoring/grafana/provisioning/dashboards/<br>• File: monitoring/grafana/provisioning/datasources<br>• File: monitoring/compose.yml | None (Clean) |
-| [#21](https://github.com/jacobmiller22/selfhosted/issues/21) | `🟢 VERIFIED` | • Planned deliverable: etc/prometheus/prometheus.yml<br>• File: monitoring/compose.yml<br>• File: monitoring/victoriametrics/prometheus.yml | None (Clean) |
-| [#20](https://github.com/jacobmiller22/selfhosted/issues/20) | `🟢 VERIFIED` | • File: monitoring/compose.yml<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: cadvisor (monitoring/compose.yml) | None (Clean) |
-| [#18](https://github.com/jacobmiller22/selfhosted/issues/18) | `🟢 VERIFIED` | • File: monitoring/compose.yml<br>• File: docs/MONITORING_ARCHITECTURE.md<br>• Service: node-exporter (monitoring/compose.yml) | None (Clean) |
-| [#17](https://github.com/jacobmiller22/selfhosted/issues/17) | `🟢 VERIFIED` | • Planned deliverable: docs/STAGING_ARCHITECTURE.md<br>• Planned deliverable: compose.staging.yml<br>• Planned deliverable: tools/stage.sh | None (Clean) |
+| [#23](https://github.com/jacobmiller22/selfhosted/issues/23) | `🟢 VERIFIED` | • Planned deliverable: monitoring/grafana/provisioning/alerting/<br>• Planned deliverable: monitoring/grafana/provisioning/alerting<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
+| [#22](https://github.com/jacobmiller22/selfhosted/issues/22) | `🟢 VERIFIED` | • File: monitoring/grafana/provisioning/dashboards<br>• File: monitoring/grafana/provisioning/datasources/<br>• File: monitoring/grafana/provisioning/datasources | None (Clean) |
+| [#21](https://github.com/jacobmiller22/selfhosted/issues/21) | `🟢 VERIFIED` | • File: monitoring/victoriametrics/prometheus.yml<br>• Planned deliverable: etc/prometheus/prometheus.yml<br>• File: monitoring/compose.yml | None (Clean) |
+| [#20](https://github.com/jacobmiller22/selfhosted/issues/20) | `🟢 VERIFIED` | • File: monitoring/compose.yml<br>• Service: cadvisor (monitoring/compose.yml)<br>• Service: node-exporter (monitoring/compose.yml) | None (Clean) |
+| [#18](https://github.com/jacobmiller22/selfhosted/issues/18) | `🟢 VERIFIED` | • File: docs/MONITORING_ARCHITECTURE.md<br>• File: monitoring/compose.yml<br>• Service: cadvisor (monitoring/compose.yml) | None (Clean) |
+| [#17](https://github.com/jacobmiller22/selfhosted/issues/17) | `🟢 VERIFIED` | • Planned deliverable: compose.staging.yml<br>• Planned deliverable: tools/staging/hydrate.sh<br>• Planned deliverable: tools/stage.sh | None (Clean) |
 | [#11](https://github.com/jacobmiller22/selfhosted/issues/11) | `🟢 VERIFIED` | • File: actual/compose.yml | None (Clean) |
 | [#10](https://github.com/jacobmiller22/selfhosted/issues/10) | `🟢 VERIFIED` | *None declared* | None (Clean) |
 | [#9](https://github.com/jacobmiller22/selfhosted/issues/9) | `🟢 VERIFIED` | *None declared* | None (Clean) |
 | [#5](https://github.com/jacobmiller22/selfhosted/issues/5) | `🟢 VERIFIED` | • Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#4](https://github.com/jacobmiller22/selfhosted/issues/4) | `🟢 VERIFIED` | • Planned deliverable: data/database.sqlite<br>• Planned deliverable: home-assistant_v2.db<br>• Planned deliverable: data/keys.json | None (Clean) |
+| [#4](https://github.com/jacobmiller22/selfhosted/issues/4) | `🟢 VERIFIED` | • Planned deliverable: data/keys.json<br>• Planned deliverable: data/database.sqlite<br>• Planned deliverable: home-assistant_v2.db | None (Clean) |
 | [#3](https://github.com/jacobmiller22/selfhosted/issues/3) | `🟢 VERIFIED` | *None declared* | None (Clean) |
 
 ---
