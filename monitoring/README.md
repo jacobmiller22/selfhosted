@@ -15,7 +15,7 @@ For the exhaustive architectural specification, benchmark comparison, storage re
 - **Node Exporter** (`quay.io/prometheus/node-exporter:v1.8.1`):
   Linux host hardware and OS telemetry exporter (CPU, RAM, disk capacity on `/` and `/var/lib/docker`, network interfaces) consuming **< 30MB RAM**.
 - **Grafana** (`grafana/grafana:11.2.0`):
-  Observability dashboard UI with automated file-based datasource and dashboard provisioning consuming **< 80MB RAM**.
+  Observability dashboard UI with automated file-based datasource and dashboard provisioning consuming **< 120MB RAM**.
 
 ---
 
@@ -30,11 +30,14 @@ monitoring/
 └── grafana/
     ├── provisioning/
     │   ├── datasources/
-    │   │   └── datasources.yml               # Automated VictoriaMetrics Prometheus datasource
+    │   │   ├── datasources.yml               # Automated VictoriaMetrics Prometheus datasource
+    │   │   └── victoriametrics.yml           # Secondary VictoriaMetrics datasource alias
     │   └── dashboards/
     │       └── dashboards.yml                # File provider mapping for JSON dashboards
     └── dashboards/
-        └── README.md                         # Dashboard templates, JSON definitions, and IDs
+        ├── README.md                         # Dashboard templates, JSON definitions, and IDs
+        ├── host-metrics.json                 # Host overview & capacity dashboard (UID: host-overview)
+        └── container-metrics.json            # Container telemetry leaderboard (UID: container-telemetry)
 ```
 
 ---
@@ -53,7 +56,7 @@ monitoring/
 
 ---
 
-## 4. Resource Bounds (< 350MB RAM Steady-State)
+## 4. Resource Bounds (< 360MB RAM Steady-State)
 
 Every container enforces strict hard resource limits in `compose.yml`:
 
@@ -62,8 +65,8 @@ Every container enforces strict hard resource limits in `compose.yml`:
 | `victoria-metrics` | 128MB | 64MB | 0.25 CPU | ~35MB |
 | `cadvisor` | 80MB | 40MB | 0.20 CPU | ~35MB |
 | `node-exporter` | 30MB | 15MB | 0.10 CPU | ~15MB |
-| `grafana` | 80MB | 40MB | 0.30 CPU | ~50MB |
-| **Total Stack** | **318MB Hard Ceiling** | **159MB** | **0.85 CPU** | **~135MB** |
+| `grafana` | 120MB | 60MB | 0.25 CPU | ~50MB |
+| **Total Stack** | **358MB Hard Ceiling** | **179MB** | **0.80 CPU** | **~135MB** |
 
 ---
 
@@ -100,3 +103,38 @@ curl -s http://127.0.0.1:8080/healthz
 # Grafana API health
 curl -s http://127.0.0.1:3000/api/health
 ```
+
+---
+
+## 6. Reverse Proxy & Declarative Dashboards
+
+### 6.1 Nginx Proxy Manager (NPM) Configuration
+Grafana connects to the external `nginx-proxy-manager` Docker bridge network, allowing secure routing without exposing container ports to the public host interface:
+
+- **Domain Names**: `monitoring.cloud.jacobmiller22.com`
+- **Scheme / Forward Host / Port**: `http` / `grafana` / `3000`
+- **SSL / TLS**: Let's Encrypt Wildcard certificate (`*.cloud.jacobmiller22.com`)
+- **SSL Flags**:
+  - `Force SSL`: Enabled
+  - `HTTP/2 Support`: Enabled
+  - `HSTS Enabled`: Enabled
+- **Advanced / WebSockets**: `Websockets Support: Enabled` (required for live Grafana alerts and streaming panels)
+
+### 6.2 Pre-Provisioned Dashboards
+Grafana automatically loads declarative dashboards from `monitoring/grafana/dashboards/`:
+
+1. **Host Overview & Capacity (bjorn)** (`host-metrics.json`):
+   - **UID**: `host-overview`
+   - **Live Storage Gauges**: Root filesystem total, used, free storage (GB), and % utilization on `/host`.
+   - **Live Memory Gauges**: Total RAM, Used RAM, Available RAM, and Swap (Used, Total, Free).
+   - **CPU & System Load**: Host CPU utilization % and 1m/5m/15m system load averages.
+   - **Network Throughput**: Aggregate WAN/LAN upload/download bandwidth across non-virtual interfaces.
+
+2. **Container Telemetry & Resource Attribution** (`container-metrics.json`):
+   - **UID**: `container-telemetry`
+   - **Container Filter**: Templated query variable dynamically populating container names with an `All` option.
+   - **Top 10 CPU Consumers**: Ranked CPU utilization % per container over 5-minute rates.
+   - **Top 10 Memory Consumers**: Ranked RAM working set bytes per container.
+   - **Top Network Consumers**: Ingress (RX) and Egress (TX) bandwidth per container.
+   - **Top Disk I/O Consumers**: Read and write throughput per container.
+
