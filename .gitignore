@@ -22,3 +22,8 @@ actual/tools/*/*.jsonl
 node_modules/
 dist/
 .tmp-uploads/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
