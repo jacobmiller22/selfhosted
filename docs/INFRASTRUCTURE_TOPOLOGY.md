@@ -59,6 +59,15 @@ All production containers and workloads managed in this repository reside on rem
 | **`obsidian/`** | `livesync-db` | `5984` | `5984:5984`<br>`nginx-proxy-manager` network | `https://obsidian.cloud.jacobmiller22.com` | Bind `./db/data` (`/opt/couchdb/data`) | CouchDB 3.3.3 database powering Obsidian LiveSync across desktop and mobile devices. |
 | **`tools/backup-runner/`** | Ephemeral or cron runners | N/A | Host network or service network | N/A | S3/B2 remote endpoint | POSIX OpenSSL AES-256-CBC PBKDF2 encryption engine; Discord error traps; Dead Man's Snitch monitoring. |
 
+### 3.1 Ephemeral Staging Environments (`profiles: ["staging"]`)
+
+For comprehensive staging specifications, see [docs/STAGING_ARCHITECTURE.md](file:///Users/jacobmiller22/projects/selfhosted.feature-task-35-staging-profiles/docs/STAGING_ARCHITECTURE.md).
+
+| Staging Service | Container Name | Staging Host Port | Resource Cap | Dedicated Staging Volume | Network | Profile |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Actual Budget Staging** | `actual-server-staging` | `5006` | 256MB RAM / 0.50 CPU | `actual-stage-data` | `staging-net` | `staging` |
+| **Vaultwarden Staging** | `vaultwarden-staging` | `7278` | 256MB RAM / 0.50 CPU | `vw-stage-data` | `staging-net` | `staging` |
+
 ---
 
 ## 4. Architectural Relationship & Network Topology

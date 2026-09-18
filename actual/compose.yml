@@ -10,6 +10,20 @@ services:
     networks:
       - nginx-proxy-manager
 
+  actual-server-staging:
+    image: docker.io/actualbudget/actual-server:26.9.0
+    container_name: actual-server-staging
+    profiles: ["staging"]
+    restart: unless-stopped
+    ports:
+      - "5006:5006"
+    volumes:
+      - actual-stage-data:/data
+    networks:
+      - staging-net
+    mem_limit: 256m
+    cpus: 0.50
+
   actual-backup:
     build:
       context: ./backup
@@ -55,6 +69,8 @@ services:
 networks:
   nginx-proxy-manager:
     external: true
+  staging-net:
 
 volumes:
   actual-data:
+  actual-stage-data:

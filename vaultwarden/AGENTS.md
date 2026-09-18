@@ -14,8 +14,10 @@
 - **Containers**:
   1. `vaultwarden`: Bitwarden-compatible lightweight server (`vaultwarden/server:1.35.4`), exposing port `7277:80`.
   2. `vw-backup`: Automated SQLite backup runner container performing non-blocking snapshots to Backblaze B2.
+  3. `vaultwarden-staging`: Ephemeral staging container (`profiles: ["staging"]`, host port `7278:80`, memory limit `256m`, cpu `0.50`, volume `vw-stage-data`).
 - **Persistent Storage**:
-  - Docker volume: `vw-data` mounted at `/data/` in `vaultwarden`.
+  - Production volume: `vw-data` mounted at `/data/` in `vaultwarden`.
+  - Staging volume: `vw-stage-data` mounted at `/data` in `vaultwarden-staging`.
   - Core files in `/data/`:
     - `db.sqlite3`: Main user and vault credential database.
     - `rsa_key.pem` & `rsa_key.pub`: Master server JWT signing keys.
