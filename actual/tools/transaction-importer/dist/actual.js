@@ -36,7 +36,11 @@ export async function fetchAccountBalance(accountId) {
     return typeof balance === 'number' ? balance : 0;
 }
 export async function importTransactionsToAccount(accountId, transactions) {
-    const result = await api.importTransactions(accountId, transactions);
+    const payload = transactions.map(t => ({
+        account: t.account || accountId,
+        ...t
+    }));
+    const result = await api.importTransactions(accountId, payload);
     return result || { added: [], updated: [] };
 }
 export async function disconnectActual() {
