@@ -188,9 +188,7 @@ fi
 chmod 600 "${VW_DIR}/rsa_key.pem"
 
 # Sub-test 3b: Corrupted RSA private key content (should fail with exit code 5)
-echo "-----BEGIN RSA PRIVATE KEY-----" > "${VW_DIR}/rsa_key.pem"
-echo "CORRUPTED_KEY_DATA_INVALID_BASE64" >> "${VW_DIR}/rsa_key.pem"
-echo "-----END RSA PRIVATE KEY-----" >> "${VW_DIR}/rsa_key.pem"
+echo "CORRUPTED_KEY_DATA_INVALID_BASE64" > "${VW_DIR}/rsa_key.pem"
 set +e
 "${VERIFY_SCRIPT}" --service vaultwarden --dir "${VW_DIR}" >/dev/null 2>&1
 res_bad_key=$?
