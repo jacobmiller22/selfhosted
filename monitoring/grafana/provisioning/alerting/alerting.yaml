@@ -1,0 +1,140 @@
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: Discord-Alerts
+    receivers:
+      - uid: discord-notifier
+        type: discord
+        settings:
+          url: "${DISCORD_WEBHOOK_URL}"
+          message: "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ .Annotations.description }}\nSeverity: {{ .Labels.severity }}\nValue: {{ .ValueString }}{{ end }}"
+
+policies:
+  - orgId: 1
+    receiver: Discord-Alerts
+    group_by: ['alertname', 'cluster', 'service']
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+
+groups:
+  - orgId: 1
+    name: Host-And-Container-Alerts
+    folder: Infrastructure-Alerts
+    interval: 1m
+    rules:
+      - uid: alert-disk-warning
+        title: Host Disk Exhaustion (Warning)
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              editorMode: code
+              expr: '100 - ((node_filesystem_avail_bytes{mountpoint="/host"} * 100) / node_filesystem_size_bytes{mountpoint="/host"}) > 80'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host storage utilization > 80% on bjorn"
+          description: "Filesystem on bjorn is approaching capacity (>80% for >15m). Storage maintenance recommended."
+
+      - uid: alert-disk-critical
+        title: Host Disk Exhaustion (Critical)
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              editorMode: code
+              expr: '100 - ((node_filesystem_avail_bytes{mountpoint="/host"} * 100) / node_filesystem_size_bytes{mountpoint="/host"}) > 90'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Host storage utilization > 90% on bjorn (URGENT)"
+          description: "Filesystem on bjorn exceeds 90% capacity for >5m. Urgent action required to prevent read-only filesystem lock."
+
+      - uid: alert-memory-starvation
+        title: Host Memory Starvation
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              editorMode: code
+              expr: '(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 < 10'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Available host RAM < 10% on bjorn"
+          description: "Available memory on bjorn has dropped below 10% for >10m. Risk of OOM killer terminating core services."
+
+      - uid: alert-container-down
+        title: Container Down or Crash Looping
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              editorMode: code
+              expr: 'time() - container_last_seen{name=~"actual_server|vaultwarden|nginx-proxy-manager|homeassistant"} > 60'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical container down or crash looping on bjorn"
+          description: "Core container has ceased reporting metrics or restarted unexpectedly."
+
+      - uid: alert-cpu-saturation
+        title: Sustained Host CPU Saturation
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              editorMode: code
+              expr: '100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 95'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained host CPU utilization > 95% on bjorn"
+          description: "Host CPU utilization on bjorn has exceeded 95% continuously for >20m."

@@ -86,15 +86,17 @@ monitoring/
     ├── provisioning/
     │   ├── datasources/
     │   │   └── datasources.yml               # Automated VictoriaMetrics Prometheus datasource
-    │   └── dashboards/
-    │       └── dashboards.yml                # Automated dashboard file-provider configuration
+    │   ├── dashboards/
+    │   │   └── dashboards.yml                # Automated dashboard file-provider configuration
+    │   └── alerting/
+    │       └── alerting.yaml                 # Unified alert rules, contact points & notification policy
     └── dashboards/
         └── README.md                         # Dashboard templates, JSON definitions, and IDs
 ```
 
 ### 3.1 GitOps Provisioning Flow
-1. When Docker Compose deploys Grafana, volume mounts bind `provisioning/datasources/` and `provisioning/dashboards/`.
-2. Grafana boots, immediately connects to `http://victoriametrics:8428` as its default datasource, and scans `grafana/dashboards/` for JSON dashboard templates.
+1. When Docker Compose deploys Grafana, volume mounts bind `provisioning/datasources/`, `provisioning/dashboards/`, and `provisioning/alerting/`.
+2. Grafana boots, immediately connects to `http://victoriametrics:8428` as its default datasource, loads alert rules into Grafana Alertmanager, and scans `grafana/dashboards/` for JSON dashboard templates.
 3. No manual web UI setup, credential entry, or dashboard importing is required.
 
 ---
@@ -424,9 +426,140 @@ Grafana is published securely behind Nginx Proxy Manager (NPM):
 
 ---
 
-## 11. Operational Verification & Health Checks
+---
 
-### 11.1 Container Health Checks
+## 11. Declarative Alerting Architecture & Notification Routing
+
+The self-hosted monitoring system integrates proactive, automated threshold alerting managed natively by Grafana Alertmanager (`monitoring/grafana/provisioning/alerting/alerting.yaml`) querying time-series data from VictoriaMetrics.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ Alerting Evaluation & Dispatch Pipeline                                                 │
+│                                                                                         │
+│  ┌──────────────────────┐      PromQL Scrape       ┌─────────────────────────────────┐  │
+│  │ VictoriaMetrics TSDB │ ◄─────────────────────── │ Grafana Unified Alerting Engine │  │
+│  │ (:8428)              │                          │ Evaluation Interval: 1m         │  │
+│  └──────────────────────┘                          └────────────────┬────────────────┘  │
+│                                                                     │                   │
+│                                 Threshold Breached & 'for' Elapsed  │                   │
+│                                                                     ▼                   │
+│                                                    ┌─────────────────────────────────┐  │
+│                                                    │ Notification Policy Router      │  │
+│                                                    │ group_by: alertname, service    │  │
+│                                                    │ group_wait: 30s                 │  │
+│                                                    │ group_interval: 5m              │  │
+│                                                    │ repeat_interval: 4h             │  │
+│                                                    └────────────────┬────────────────┘  │
+│                                                                     │                   │
+│                                                                     │ HTTPS Webhook     │
+│                                                                     ▼                   │
+│                                                    ┌─────────────────────────────────┐  │
+│                                                    │ Discord Channel                 │  │
+│                                                    │ ${DISCORD_WEBHOOK_URL}          │  │
+│                                                    └─────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 11.1 Alert Rule Catalog & PromQL Specifications
+
+Alert rules reside in the `Host-And-Container-Alerts` rule group (folder `Infrastructure-Alerts`) evaluated once every minute (`interval: 1m`):
+
+1. **Host Disk Exhaustion (Warning)**:
+   - **UID**: `alert-disk-warning`
+   - **PromQL Expression**:
+     ```promql
+     100 - ((node_filesystem_avail_bytes{mountpoint="/host"} * 100) / node_filesystem_size_bytes{mountpoint="/host"}) > 80
+     ```
+   - **Duration (`for`)**: `15m`
+   - **Severity**: `warning`
+   - **Purpose**: Warns early when the root host filesystem exceeds 80% capacity for 15 minutes, allowing scheduled image pruning and log cleanup before disk starvation occurs.
+
+2. **Host Disk Exhaustion (Critical)**:
+   - **UID**: `alert-disk-critical`
+   - **PromQL Expression**:
+     ```promql
+     100 - ((node_filesystem_avail_bytes{mountpoint="/host"} * 100) / node_filesystem_size_bytes{mountpoint="/host"}) > 90
+     ```
+   - **Duration (`for`)**: `5m`
+   - **Severity**: `critical`
+   - **Purpose**: Urgent notification when root storage exceeds 90% capacity for 5 minutes. Prevents SQLite database write errors and catastrophic read-only filesystem remounts.
+
+3. **Host Memory Starvation**:
+   - **UID**: `alert-memory-starvation`
+   - **PromQL Expression**:
+     ```promql
+     (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 < 10
+     ```
+   - **Duration (`for`)**: `10m`
+   - **Severity**: `critical`
+   - **Purpose**: Triggers when available memory on `bjorn` drops below 10% for 10 continuous minutes, guarding against sudden Linux kernel Out-Of-Memory (OOM) process termination.
+
+4. **Container Down / Crash Looping**:
+   - **UID**: `alert-container-down`
+   - **PromQL Expression**:
+     ```promql
+     time() - container_last_seen{name=~"actual_server|vaultwarden|nginx-proxy-manager|homeassistant"} > 60
+     ```
+   - **Duration (`for`)**: `2m`
+   - **Severity**: `critical`
+   - **Purpose**: Detects when any essential production workload (`actual_server`, `vaultwarden`, `nginx-proxy-manager`, or `homeassistant`) ceases reporting metrics for >60 seconds and remains absent for 2 minutes.
+
+5. **Sustained Host CPU Saturation**:
+   - **UID**: `alert-cpu-saturation`
+   - **PromQL Expression**:
+     ```promql
+     100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 95
+     ```
+   - **Duration (`for`)**: `20m`
+   - **Severity**: `warning`
+   - **Purpose**: Flags sustained non-idle CPU usage exceeding 95% for 20 minutes, isolating abnormal background runaway jobs or compute exhaustion.
+
+### 11.2 Discord Contact Point & Security Isolation
+
+- **Contact Point**: `Discord-Alerts` utilizes Grafana's built-in Discord webhook integration.
+- **Message Templating**:
+  ```gotemplate
+  {{ range .Alerts }}{{ .Annotations.summary }}
+  {{ .Annotations.description }}
+  Severity: {{ .Labels.severity }}
+  Value: {{ .ValueString }}{{ end }}
+  ```
+- **Secret Protection (Axiom 2)**:
+  - The webhook URL is configured via environment substitution: `url: "${DISCORD_WEBHOOK_URL}"`.
+  - In `monitoring/compose.yml`, `DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}` is passed to the container.
+  - The real webhook URL is stored exclusively in physical offline safe storage / Coolify environment settings, never committed to Git.
+
+### 11.3 Notification Routing & Anti-Flapping Policy
+
+- **Group By**: `['alertname', 'cluster', 'service']` aggregates related alerts to eliminate alert storms.
+- **Group Wait**: `30s` buffers alerts momentarily to send batched notifications.
+- **Group Interval**: `5m` enforces a minimum 5-minute pause before re-sending for an active alert group.
+- **Repeat Interval**: `4h` periodically reminds operators if an ongoing critical alert has not been resolved.
+
+### 11.4 Alert Simulation & Testing Procedures
+
+1. **Webhook Connectivity Test**:
+   ```bash
+   curl -H "Content-Type: application/json" -X POST \
+        -d '{"content": "Grafana Alertmanager test ping from bjorn."}' \
+        "${DISCORD_WEBHOOK_URL}"
+   ```
+2. **PromQL Metric Evaluation**:
+   Verify the query returns valid series via VictoriaMetrics:
+   ```bash
+   curl -s -G http://127.0.0.1:8428/api/v1/query \
+        --data-urlencode 'query=time() - container_last_seen{name=~"actual_server|vaultwarden|nginx-proxy-manager|homeassistant"} > 60' | jq .
+   ```
+3. **Provisioning Endpoint Inspection**:
+   ```bash
+   curl -s -u admin:admin http://127.0.0.1:3000/api/v1/provisioning/alert-rules | jq .
+   ```
+
+---
+
+## 12. Operational Verification & Health Checks
+
+### 12.1 Container Health Checks
 Each container specifies a native healthcheck or probe:
 - **VictoriaMetrics**:
   ```bash
@@ -448,22 +581,24 @@ Each container specifies a native healthcheck or probe:
   # Response: {"commit":"...","database":"ok","version":"..."}
   ```
 
-### 11.2 Verification Checklist
+### 12.2 Verification Checklist
 - [x] All 4 containers start and maintain healthy statuses.
 - [x] Aggregate memory usage across all 4 containers stays strictly below 200MB steady-state.
 - [x] Host port 8428 binds to `127.0.0.1:8428`, no public port bindings on `0.0.0.0`.
 - [x] VictoriaMetrics successfully scrapes targets (`http://127.0.0.1:8428/targets`).
 - [x] Grafana automatically provisions VictoriaMetrics as default datasource.
 - [x] Grafana UI is reachable via `nginx-proxy-manager` over HTTPS with Let's Encrypt certificate.
+- [x] Declarative alert rules, contact points, and notification policies are provisioned via `alerting.yaml`.
+- [x] Proactive threshold alerts dispatch to Discord via `DISCORD_WEBHOOK_URL`.
 
 ---
 
-## 12. Conclusion & Next Steps
+## 13. Conclusion & Next Steps
 
 This architecture provides an ultra-lean, production-grade foundation for infrastructure observability on `bjorn`.
 
 ### Associated Roadmap Issues:
-- **#20**: Host & Container Telemetry Exporters (Deploy Node Exporter & cAdvisor) - Completed.
-- **#21**: Lightweight Time-Series Engine (Deploy VictoriaMetrics with 90-day retention) - Completed.
-- **#22**: Grafana Provisioning & Dashboards (Deploy Grafana with provisioned dashboards) - Completed.
-- **#23**: Operational Alerting via Discord (Configure threshold alerts for disk >85% and container OOMs).
+- **#20**: Host & Container Telemetry Exporters (Deploy Node Exporter & cAdvisor) — Completed.
+- **#21**: Lightweight Time-Series Engine (Deploy VictoriaMetrics with 90-day retention) — Completed.
+- **#22**: Grafana Provisioning & Dashboards (Deploy Grafana with provisioned dashboards) — Completed.
+- **#23**: Operational Alerting via Discord (Configure threshold alerts for disk, memory, container down, and CPU) — Completed.
