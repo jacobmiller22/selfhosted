@@ -1,9 +1,9 @@
 # 🏛️ Backlog Synthesis & Architectural Council Report
 
 - **Repository**: `jacobmiller22/selfhosted`
-- **Generated At**: `2026-09-18T18:03:31Z`
+- **Generated At**: `2026-09-18T18:10:13Z`
 - **Engine**: `pm architect` v1.0.0
-- **Backlog Health Score**: **98/100** 🟢 Healthy
+- **Backlog Health Score**: **100/100** 🟢 Healthy
 
 ---
 
@@ -11,12 +11,12 @@
 
 | Metric | Count | Details |
 | :--- | :--- | :--- |
-| **Total Open Issues** | `38` | Tracked issues in repository backlog |
+| **Total Open Issues** | `36` | Tracked issues in repository backlog |
 | **Parent Stories / Epics** | `5` | Monorepo feature epics (`type:story`) |
 | **Shovel-Ready Candidates** | `18` | Unblocked leaf tasks ready for `pm ship` / `pm fleet` |
 | **Blocked Tasks** | `12` | Tasks awaiting upstream technical prerequisites |
-| **Codebase Fact-Check Clean** | `33` | Verified zero file/service path drift |
-| **Asset / Spec Drift Warnings** | `5` | Tickets referencing missing files or spec contradictions |
+| **Codebase Fact-Check Clean** | `36` | Verified zero file/service path drift |
+| **Asset / Spec Drift Warnings** | `0` | Tickets referencing missing files or spec contradictions |
 | **Dependency Cycles** | `0` | None detected 🟢 |
 | **Proposed New Tickets** | `4` | Research spikes & information reconciliation tickets |
 
@@ -79,9 +79,6 @@
   - *Summary*: The Benevolent Dictator intervened under Axiom 4: Single-Server Catastrophe Risk (No HA cluster exists; blast radius must be contained). Mandating 2 strict operational safeguard(s) to protect host 'bjorn'.
   - *Safeguard*: CONTAINMENT MANDATE: bjorn is a single standalone host with no standby failover. Any container requiring docker.sock must use read-only socket mount (:ro) or scoped socket-proxy.
   - *Safeguard*: UPTIME MANDATE: All migrations must execute in canary or parallel side-by-side mode. Immediate cutover without verified staging validation is forbidden.
-- **Issue #14**: **AMENDED_WITH_CONSTRAINTS**
-  - *Summary*: The Benevolent Dictator intervened under Axiom 2: Zero Tolerance for Data Loss (Databases require verified backups & atomic rollback). Mandating 1 strict operational safeguard(s) to protect host 'bjorn'.
-  - *Safeguard*: DATA LOSS SAFEGUARD: Pre-flight verified backup and tested atomic rollback script MUST be executed prior to applying storage or schema changes.
 - **Issue #11**: **AMENDED_WITH_CONSTRAINTS**
   - *Summary*: The Benevolent Dictator intervened under Axiom 2: Zero Tolerance for Data Loss (Databases require verified backups & atomic rollback). Mandating 1 strict operational safeguard(s) to protect host 'bjorn'.
   - *Safeguard*: DATA LOSS SAFEGUARD: Pre-flight verified backup and tested atomic rollback script MUST be executed prior to applying storage or schema changes.
@@ -89,9 +86,6 @@
   - *Summary*: The Benevolent Dictator intervened under Axiom 2: Zero Tolerance for Data Loss (Databases require verified backups & atomic rollback). Mandating 1 strict operational safeguard(s) to protect host 'bjorn'.
   - *Safeguard*: DATA LOSS SAFEGUARD: Pre-flight verified backup and tested atomic rollback script MUST be executed prior to applying storage or schema changes.
 - **Issue #9**: **AMENDED_WITH_CONSTRAINTS**
-  - *Summary*: The Benevolent Dictator intervened under Axiom 2: Zero Tolerance for Data Loss (Databases require verified backups & atomic rollback). Mandating 1 strict operational safeguard(s) to protect host 'bjorn'.
-  - *Safeguard*: DATA LOSS SAFEGUARD: Pre-flight verified backup and tested atomic rollback script MUST be executed prior to applying storage or schema changes.
-- **Issue #8**: **AMENDED_WITH_CONSTRAINTS**
   - *Summary*: The Benevolent Dictator intervened under Axiom 2: Zero Tolerance for Data Loss (Databases require verified backups & atomic rollback). Mandating 1 strict operational safeguard(s) to protect host 'bjorn'.
   - *Safeguard*: DATA LOSS SAFEGUARD: Pre-flight verified backup and tested atomic rollback script MUST be executed prior to applying storage or schema changes.
 - **Issue #3**: **AMENDED_WITH_CONSTRAINTS**
@@ -133,43 +127,41 @@ Audited all ticket descriptions against repository files, compose configurations
 
 | Issue | Overall Status | Verified Assets | Flags & Contradictions |
 | :---: | :---: | :--- | :--- |
-| [#56](https://github.com/jacobmiller22/selfhosted/issues/56) | `🟢 VERIFIED` | • File: tools/pm_architect/engine/fact_checker.py<br>• File: tests/test_pm_architect.py | None (Clean) |
+| [#58](https://github.com/jacobmiller22/selfhosted/issues/58) | `🟢 VERIFIED` | • File: tests/test_pm_architect.py | None (Clean) |
 | [#55](https://github.com/jacobmiller22/selfhosted/issues/55) | `🟢 VERIFIED` | *None declared* | None (Clean) |
 | [#54](https://github.com/jacobmiller22/selfhosted/issues/54) | `🟢 VERIFIED` | *None declared* | None (Clean) |
 | [#48](https://github.com/jacobmiller22/selfhosted/issues/48) | `🟢 VERIFIED` | • File: pm/HANDOFF.md<br>• Planned deliverable: docs/CI_CD_COOLIFY_PIPELINE.md<br>• Planned deliverable: README.md | None (Clean) |
-| [#46](https://github.com/jacobmiller22/selfhosted/issues/46) | `🟢 VERIFIED` | • File: actual/compose.yml<br>• File: vaultwarden/compose.yml<br>• Service: vw-backup (vaultwarden/compose.yml) | None (Clean) |
+| [#46](https://github.com/jacobmiller22/selfhosted/issues/46) | `🟢 VERIFIED` | • File: vaultwarden/compose.yml<br>• File: actual/compose.yml<br>• Service: actual-backup (actual/compose.yml) | None (Clean) |
 | [#45](https://github.com/jacobmiller22/selfhosted/issues/45) | `🟢 VERIFIED` | • Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | None (Clean) |
-| [#44](https://github.com/jacobmiller22/selfhosted/issues/44) | `🟢 VERIFIED` | • Planned deliverable: README.md<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | None (Clean) |
+| [#44](https://github.com/jacobmiller22/selfhosted/issues/44) | `🟢 VERIFIED` | • Planned deliverable: README.md<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: homeassistant (homeassistant/compose.yml) | None (Clean) |
 | [#43](https://github.com/jacobmiller22/selfhosted/issues/43) | `🟢 VERIFIED` | *None declared* | None (Clean) |
-| [#42](https://github.com/jacobmiller22/selfhosted/issues/42) | `🟢 VERIFIED` | • Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml)<br>• Service: homeassistant (homeassistant/compose.yml) | None (Clean) |
+| [#42](https://github.com/jacobmiller22/selfhosted/issues/42) | `🟢 VERIFIED` | • Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: homeassistant (homeassistant/compose.yml)<br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | None (Clean) |
 | [#39](https://github.com/jacobmiller22/selfhosted/issues/39) | `🟢 VERIFIED` | • Planned deliverable: docs/STAGING_ARCHITECTURE.md<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
 | [#38](https://github.com/jacobmiller22/selfhosted/issues/38) | `🟢 VERIFIED` | • Planned deliverable: vw-stage-data/db.sqlite3<br>• Planned deliverable: tools/staging/verify-vaultwarden-upgrade.sh<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#37](https://github.com/jacobmiller22/selfhosted/issues/37) | `🟢 VERIFIED` | • Planned deliverable: tools/staging/test-actual-staging.sh<br>• Planned deliverable: hydrate.sh<br>• Service: actual-auto-categorizer (actual/compose.yml) | None (Clean) |
-| [#36](https://github.com/jacobmiller22/selfhosted/issues/36) | `🟢 VERIFIED` | • Planned deliverable: db.sqlite3<br>• Planned deliverable: tools/staging/hydrate.sh<br>• Planned deliverable: account.sqlite | None (Clean) |
-| [#35](https://github.com/jacobmiller22/selfhosted/issues/35) | `🟢 VERIFIED` | • File: actual/compose.yml<br>• File: vaultwarden/compose.yml<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#34](https://github.com/jacobmiller22/selfhosted/issues/34) | `🟡 DRIFT` | • File: tools/backup-runner<br>• Planned deliverable: compose.yml<br>• File: tools/backup-runner/ | ⚠️ Missing path: backup.sh<br>⚠️ Missing path: entrypoint.sh |
-| [#33](https://github.com/jacobmiller22/selfhosted/issues/33) | `🟢 VERIFIED` | • File: docs/BACKUP_ARCHITECTURE.md<br>• File: docs/RESTORE.md<br>• File: tools/backup-runner/README.md | None (Clean) |
-| [#32](https://github.com/jacobmiller22/selfhosted/issues/32) | `🟡 DRIFT` | • File: nginx-proxy-manager/<br>• Planned deliverable: database.sqlite<br>• File: nginx-proxy-manager/compose.yml | ⚠️ Missing path: hooks/pre-backup.sh |
-| [#31](https://github.com/jacobmiller22/selfhosted/issues/31) | `🟢 VERIFIED` | • File: actual/backup/Dockerfile<br>• File: tools/backup-runner/backup-engine.sh<br>• File: actual/ | None (Clean) |
-| [#29](https://github.com/jacobmiller22/selfhosted/issues/29) | `🟢 VERIFIED` | • File: docs/BACKUP_ARCHITECTURE.md<br>• Planned deliverable: docs/DISASTER_RECOVERY_EXERCISES.md<br>• File: docs/RESTORE.md | None (Clean) |
+| [#37](https://github.com/jacobmiller22/selfhosted/issues/37) | `🟢 VERIFIED` | • Planned deliverable: hydrate.sh<br>• Planned deliverable: tools/staging/test-actual-staging.sh<br>• Service: actual-auto-categorizer (actual/compose.yml) | None (Clean) |
+| [#36](https://github.com/jacobmiller22/selfhosted/issues/36) | `🟢 VERIFIED` | • Planned deliverable: tools/staging/hydrate.sh<br>• Planned deliverable: db.sqlite3<br>• Planned deliverable: rsa_key.pem | None (Clean) |
+| [#35](https://github.com/jacobmiller22/selfhosted/issues/35) | `🟢 VERIFIED` | • File: vaultwarden/compose.yml<br>• File: actual/compose.yml<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
+| [#34](https://github.com/jacobmiller22/selfhosted/issues/34) | `🟢 VERIFIED` | • File: tools/backup-runner<br>• Planned deliverable: entrypoint.sh<br>• Planned deliverable: backup.sh | None (Clean) |
+| [#33](https://github.com/jacobmiller22/selfhosted/issues/33) | `🟢 VERIFIED` | • File: docs/RESTORE.md<br>• File: tools/backup-runner<br>• File: docs/BACKUP_ARCHITECTURE.md | None (Clean) |
+| [#32](https://github.com/jacobmiller22/selfhosted/issues/32) | `🟢 VERIFIED` | • File: tools/backup-runner<br>• Planned deliverable: keys.json<br>• File: nginx-proxy-manager/compose.yml | None (Clean) |
+| [#31](https://github.com/jacobmiller22/selfhosted/issues/31) | `🟢 VERIFIED` | • File: tools/backup-runner/backup-engine.sh<br>• File: tools/backup-runner<br>• File: actual/backup/backup.sh | None (Clean) |
+| [#29](https://github.com/jacobmiller22/selfhosted/issues/29) | `🟢 VERIFIED` | • File: docs/RESTORE.md<br>• File: docs/BACKUP_ARCHITECTURE.md<br>• Planned deliverable: docs/DISASTER_RECOVERY_EXERCISES.md | None (Clean) |
 | [#28](https://github.com/jacobmiller22/selfhosted/issues/28) | `🟢 VERIFIED` | • Planned deliverable: tools/backup-dr/dr-drill.sh | None (Clean) |
 | [#27](https://github.com/jacobmiller22/selfhosted/issues/27) | `🟢 VERIFIED` | • Planned deliverable: tools/backup-dr/staging-smoke-test.sh<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#26](https://github.com/jacobmiller22/selfhosted/issues/26) | `🟢 VERIFIED` | • Planned deliverable: database.sqlite<br>• Planned deliverable: db.sqlite3<br>• Planned deliverable: home-assistant_v2.db | None (Clean) |
-| [#25](https://github.com/jacobmiller22/selfhosted/issues/25) | `🟢 VERIFIED` | • Planned deliverable: tools/backup-dr/pull-and-decrypt.sh<br>• File: tools/backup-runner/test-backup-restore.sh | None (Clean) |
+| [#26](https://github.com/jacobmiller22/selfhosted/issues/26) | `🟢 VERIFIED` | • Planned deliverable: account.sqlite<br>• Planned deliverable: db.sqlite3<br>• Planned deliverable: home-assistant_v2.db | None (Clean) |
+| [#25](https://github.com/jacobmiller22/selfhosted/issues/25) | `🟢 VERIFIED` | • File: tools/backup-runner/test-backup-restore.sh<br>• Planned deliverable: tools/backup-dr/pull-and-decrypt.sh | None (Clean) |
 | [#24](https://github.com/jacobmiller22/selfhosted/issues/24) | `🟢 VERIFIED` | • Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#23](https://github.com/jacobmiller22/selfhosted/issues/23) | `🟢 VERIFIED` | • Planned deliverable: monitoring/grafana/provisioning/alerting<br>• Planned deliverable: monitoring/grafana/provisioning/alerting/<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#22](https://github.com/jacobmiller22/selfhosted/issues/22) | `🟢 VERIFIED` | • File: monitoring/grafana/provisioning/datasources<br>• File: monitoring/grafana/provisioning/dashboards/<br>• Planned deliverable: monitoring/grafana/provisioning/datasources/victoriametrics.yml | None (Clean) |
+| [#23](https://github.com/jacobmiller22/selfhosted/issues/23) | `🟢 VERIFIED` | • Planned deliverable: monitoring/grafana/provisioning/alerting/<br>• Planned deliverable: monitoring/grafana/provisioning/alerting<br>• Service: actual_server (actual/compose.yml) | None (Clean) |
+| [#22](https://github.com/jacobmiller22/selfhosted/issues/22) | `🟢 VERIFIED` | • File: monitoring/grafana/provisioning/dashboards/<br>• File: monitoring/grafana/provisioning/datasources<br>• File: monitoring/compose.yml | None (Clean) |
 | [#21](https://github.com/jacobmiller22/selfhosted/issues/21) | `🟢 VERIFIED` | • Planned deliverable: etc/prometheus/prometheus.yml<br>• File: monitoring/compose.yml<br>• File: monitoring/victoriametrics/prometheus.yml | None (Clean) |
-| [#20](https://github.com/jacobmiller22/selfhosted/issues/20) | `🟢 VERIFIED` | • File: monitoring/compose.yml<br>• Service: node-exporter (monitoring/compose.yml)<br>• Service: cadvisor (monitoring/compose.yml) | None (Clean) |
-| [#18](https://github.com/jacobmiller22/selfhosted/issues/18) | `🟢 VERIFIED` | • File: monitoring/compose.yml<br>• File: docs/MONITORING_ARCHITECTURE.md<br>• Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#17](https://github.com/jacobmiller22/selfhosted/issues/17) | `🟡 DRIFT` | • Planned deliverable: tools/staging/hydrate.sh<br>• File: docs/BACKUP_ARCHITECTURE.md<br>• Planned deliverable: docs/STAGING_ARCHITECTURE.md | ⚠️ Missing path: tools/stage.sh<br>⚠️ Missing path: compose.staging.yml |
-| [#14](https://github.com/jacobmiller22/selfhosted/issues/14) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: mappings.json<br>⚠️ Missing path: agents/skills/budget-upload/SKILL.md |
+| [#20](https://github.com/jacobmiller22/selfhosted/issues/20) | `🟢 VERIFIED` | • File: monitoring/compose.yml<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: cadvisor (monitoring/compose.yml) | None (Clean) |
+| [#18](https://github.com/jacobmiller22/selfhosted/issues/18) | `🟢 VERIFIED` | • File: monitoring/compose.yml<br>• File: docs/MONITORING_ARCHITECTURE.md<br>• Service: node-exporter (monitoring/compose.yml) | None (Clean) |
+| [#17](https://github.com/jacobmiller22/selfhosted/issues/17) | `🟢 VERIFIED` | • Planned deliverable: docs/STAGING_ARCHITECTURE.md<br>• Planned deliverable: compose.staging.yml<br>• Planned deliverable: tools/stage.sh | None (Clean) |
 | [#11](https://github.com/jacobmiller22/selfhosted/issues/11) | `🟢 VERIFIED` | • File: actual/compose.yml | None (Clean) |
 | [#10](https://github.com/jacobmiller22/selfhosted/issues/10) | `🟢 VERIFIED` | *None declared* | None (Clean) |
 | [#9](https://github.com/jacobmiller22/selfhosted/issues/9) | `🟢 VERIFIED` | *None declared* | None (Clean) |
-| [#8](https://github.com/jacobmiller22/selfhosted/issues/8) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: mappings.json |
 | [#5](https://github.com/jacobmiller22/selfhosted/issues/5) | `🟢 VERIFIED` | • Service: vaultwarden (vaultwarden/compose.yml) | None (Clean) |
-| [#4](https://github.com/jacobmiller22/selfhosted/issues/4) | `🟢 VERIFIED` | • Planned deliverable: data/keys.json<br>• Planned deliverable: home-assistant_v2.db<br>• Planned deliverable: data/database.sqlite | None (Clean) |
+| [#4](https://github.com/jacobmiller22/selfhosted/issues/4) | `🟢 VERIFIED` | • Planned deliverable: data/database.sqlite<br>• Planned deliverable: home-assistant_v2.db<br>• Planned deliverable: data/keys.json | None (Clean) |
 | [#3](https://github.com/jacobmiller22/selfhosted/issues/3) | `🟢 VERIFIED` | *None declared* | None (Clean) |
 
 ---

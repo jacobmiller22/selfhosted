@@ -221,10 +221,13 @@ class RealityFactChecker:
 
         return candidates
 
-    def is_deliverable_or_runtime_asset(self, path: str, combined_text: str) -> bool:
+    def is_deliverable_or_runtime_asset(self, path: str, combined_text: str, is_story: bool = False) -> bool:
         """Check if path is a planned deliverable in the issue or runtime data asset."""
+        if is_story:
+            return True
+
         basename = Path(path).name
-        if basename in self.RUNTIME_DATA_PATTERNS or path.startswith(('tmp/', 'staging/', 'vw-stage-data/')):
+        if basename in self.RUNTIME_DATA_PATTERNS or path.startswith(('tmp/', 'staging/', 'vw-stage-data/', 'hooks/')):
             return True
 
         escaped = re.escape(path)
@@ -233,7 +236,11 @@ class RealityFactChecker:
         if re.search(rf'\b(?:modify|update|edit|refactor|patch|delete|remove)\b[^.\n]*?{escaped}', combined_text, re.IGNORECASE):
             return False
 
-        # 2. Check for action verbs or checklist items on the same line
+        # 2. Check for optional, conditional or example declarations
+        if re.search(rf'(?:optional|if|e\.g\.|example)\s+[`\'"]?{escaped}', combined_text, re.IGNORECASE):
+            return True
+
+        # 3. Check for action verbs or checklist items on the same line
         pattern = rf'(?:\[NEW\]|create|author|implement|add|new\s+file|deliverables?:?|introduce|write|provision|scaffold|generate|\[\s*[\sx]\s*\])[^.\n]*?{escaped}'
         if re.search(pattern, combined_text, re.IGNORECASE):
             return True
@@ -242,7 +249,7 @@ class RealityFactChecker:
         if re.search(pattern_rev, combined_text, re.IGNORECASE):
             return True
 
-        # 3. Check if under a Deliverables / Scope / Tasks / Acceptance Criteria section
+        # 4. Check if under a Deliverables / Scope / Tasks / Acceptance Criteria section
         lines = combined_text.split('\n')
         in_deliverables_section = False
         for line in lines:
@@ -256,7 +263,7 @@ class RealityFactChecker:
             if in_deliverables_section and (path in line or basename in line):
                 return True
 
-        # 4. Check if in issue title for feat/docs
+        # 5. Check if in issue title for feat/docs
         first_line = lines[0] if lines else ''
         if re.match(r'^(?:feat|docs|chore|spike)\b', first_line, re.IGNORECASE) and (path in first_line or basename in first_line):
             return True
@@ -278,6 +285,7 @@ class RealityFactChecker:
         title = issue.get('title', '')
         body = issue.get('body', '') or ''
         combined_text = f"{title}\n{body}"
+        is_story = any(l.get('name', '') == 'type:story' for l in issue.get('labels', [])) or title.startswith(('story:', 'story('))
 
         findings: List[FactCheckFinding] = []
         verified_items: List[str] = []
@@ -293,7 +301,7 @@ class RealityFactChecker:
                       (self.repo_root / path).exists() or
                       (self.repo_root / f".{path}").exists())
 
-            is_planned_new = self.is_deliverable_or_runtime_asset(path, combined_text)
+            is_planned_new = self.is_deliverable_or_runtime_asset(path, combined_text, is_story=is_story)
 
             if exists:
                 findings.append(FactCheckFinding(

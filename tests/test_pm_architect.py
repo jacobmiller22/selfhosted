@@ -78,6 +78,25 @@ class TestFactChecker(unittest.TestCase):
         self.assertTrue(any("tools/healthcheck.sh" in v for v in res.verified_items))
         self.assertTrue(any("tools/monitor.py" in v for v in res.verified_items))
 
+    def test_fact_check_supports_parent_stories_and_optional_hooks(self):
+        story_issue = {
+            "number": 106,
+            "title": "story(infra): Staged deployment overhaul",
+            "labels": [{"name": "type:story"}],
+            "body": "Roadmap: Introduces compose.staging.yml and tools/stage.sh across child issues."
+        }
+        res_story = self.checker.check_issue(story_issue)
+        self.assertEqual(res_story.overall_status, "VERIFIED")
+
+        hook_issue = {
+            "number": 107,
+            "title": "feat(backup): Optional hooks pattern",
+            "labels": [{"name": "type:feature"}],
+            "body": "If hooks/pre-backup.sh exists in service dir, execute it before snapshot."
+        }
+        res_hook = self.checker.check_issue(hook_issue)
+        self.assertEqual(res_hook.overall_status, "VERIFIED")
+
 
 class TestCouncilPersonas(unittest.TestCase):
     def setUp(self):
