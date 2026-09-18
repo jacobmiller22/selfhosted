@@ -14,8 +14,10 @@
   1. `actual_server`: Official Actual Budget server container (`docker.io/actualbudget/actual-server:26.9.0`), listening internally on port `5006`.
   2. `actual-backup`: Automated SQLite backup runner container performing non-blocking snapshots to Backblaze B2.
   3. `actual-auto-categorizer`: TypeScript ML sidecar daemon listening on host port `3080:3080` to classify bank transactions via local ONNX models.
+  4. `actual-server-staging`: Ephemeral staging container (`profiles: ["staging"]`, host port `5006`, memory limit `256m`, cpu `0.50`, volume `actual-stage-data`).
 - **Persistent Storage**:
-  - Docker named volume: `actual-data` mounted at `/data/` in `actual_server`.
+  - Production volume: `actual-data` mounted at `/data/` in `actual_server`.
+  - Staging volume: `actual-stage-data` mounted at `/data` in `actual-server-staging`.
   - Database files: `/data/server-files/account.sqlite`, `/data/user-files/*.sqlite`, and sync blobs `/data/user-files/*.blob`.
 
 ---

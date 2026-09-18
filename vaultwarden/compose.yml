@@ -12,6 +12,24 @@ services:
       - 7277:80
     networks:
       - nginx-proxy-manager
+
+  vaultwarden-staging:
+    image: vaultwarden/server:1.35.4
+    container_name: vaultwarden-staging
+    profiles: ["staging"]
+    restart: unless-stopped
+    environment:
+      DOMAIN: "http://localhost:7278"
+      SIGNUPS_ALLOWED: "false"
+    volumes:
+      - vw-stage-data:/data
+    ports:
+      - "7278:80"
+    networks:
+      - staging-net
+    mem_limit: 256m
+    cpus: 0.50
+
   vw-backup:
     build:
       context: ./backup
@@ -36,6 +54,8 @@ networks:
   nginx-proxy-manager:
     name: nginx-proxy-manager
     external: true
+  staging-net:
 
 volumes:
   vw-data:
+  vw-stage-data:
