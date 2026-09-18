@@ -22,3 +22,14 @@ actual/tools/*/*.jsonl
 node_modules/
 dist/
 .tmp-uploads/
+
+# Environment files
+.env
+*.env
+!.env.example
+!.env.template
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo

@@ -1,0 +1,53 @@
+---
+description: Enforces remote-first architecture and host verification before executing infrastructure or container operations
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Remote Host Verification Protocol (RHVP)
+
+This workspace configures and manages remote production servers. **Services do not run on the local development machine (`localhost`).**
+
+## Core Directives
+
+1. **Remote Target Discovery**:
+   - Check `docs/INFRASTRUCTURE_TOPOLOGY.md` or the service folder's `AGENTS.md` to identify the service's target host (primary host: `bjorn`).
+   - Never assume Docker commands (`docker ps`, `docker compose up`, `docker logs`) can be run directly on the local macOS terminal.
+
+2. **Reachability Check**:
+   - Prior to executing operations on a remote host, verify connectivity:
+     ```bash
+     ssh -o BatchMode=yes -o ConnectTimeout=5 <target-host> "echo ok"
+     ```
+
+3. **Remote SSH Execution Pattern**:
+   - Always wrap runtime commands using SSH:
+     ```bash
+     ssh <target-host> "<command>"
+     ```
+   - Examples:
+     ```bash
+     # Check container status
+     ssh bjorn "docker ps --filter name=actual"
+
+     # Check logs
+     ssh bjorn "docker logs --tail 100 homeassistant"
+
+     # Restart service
+     ssh bjorn "docker restart nginx-proxy-manager"
+
+     # Non-blocking SQLite snapshot
+     ssh bjorn "sqlite3 /path/to/db.sqlite '.backup /tmp/backup.sqlite'"
+     ```
+
+4. **Network & Service Endpoints**:
+   - Use Tailscale MagicDNS (`http://bjorn:<port>`) for internal administration.
+   - Use public HTTPS endpoints (`https://*.cloud.jacobmiller22.com`) for proxied services.
+   - Do not assume localhost ports are open or listening.
+
+5. **File Transfer & Live Staging**:
+   - For rapid validation or hot-patching files on the remote host:
+     ```bash
+     scp -r <local-path> <target-host>:/tmp/<staging-path>
+     ssh <target-host> "docker cp /tmp/<staging-path>/. <container-name>:<dest-path>"
+     ```

@@ -1,0 +1,19 @@
+---
+description: Enforces git worktree isolation with Worktrunk (wt) and zero untracked work tracking with pm
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Git Worktree & Task Tracking Protocols
+
+## Worktrunk (`wt`) Isolation
+- Never commit or modify files directly on the primary working tree or default branch (`main` / `master`).
+- Always spawn a dedicated worktree using `wt switch --create <branch-name>`.
+- Confine all file changes, subagents, and command executions strictly to the worktree path.
+
+## Zero Untracked Work Protocol (`pm`)
+- All work must be associated with an issue (`Issue #<N>`).
+- Auto-create an issue using `gh issue create` if none exists before writing code.
+- Prefix worktree branches with issue reference: `feature/<N>-<slug>` or `fix/<N>-<slug>`.
+- Link PRs with `Fixes #<N>`.
+- Keep issues open with `status:completed` until PR merge.

@@ -1,8 +1,15 @@
 # Session Handoff & Continuity Checkpoint
 - **Repository**: jacobmiller22/selfhosted
 - **Default Branch**: main
-- **Last Updated**: 2026-09-16T13:19:12Z
-- **Active Task**: Issue #1: story: Comprehensive Backup Architecture Audit, OpenSSL Standard, and Failure Alerting
-- **Active Worktree**: feature/1-backup-architecture-audit (/Users/jacobmiller22/projects/selfhosted.feature-1-backup-architecture-audit)
-- **Status**: Audit completed; OpenSSL specification, alerting architecture, and RESTORE.md runbook documented and verified.
-- **Next Shovel-Ready Step**: Execute Issue #2 to standardize Actual & Vaultwarden containers with OpenSSL backup runners.
+- **Last Updated**: 2026-09-18T17:57:00Z
+- **Active Task**: None (`main` clean, all 4 PRs merged)
+- **Merged Fleet Batch**:
+  - PR #53: `feat(ci): GitHub Actions Pre-Deployment Gatekeeper & Validation Workflow` (Closed #47)
+  - PR #52: `feat(backup): Build reusable Alpine backup runner image and declarative strategy engine in tools/backup-runner` (Closed #30)
+  - PR #51: `feat(ai): Establish remote host verification protocol & folder-level AI instructions` (Closed #40)
+  - PR #50: `feat(monitoring): Design monitoring architecture & stack specification` (Closed #19)
+- **Status**: Merged all 4 foundational epics into `main`. Cleaned and reaped all 4 worktrees. Full test suite passing (20/20 Python unit tests, 7/7 backup/restore integration tests).
+- **Next Shovel-Ready Step**: Run `pm ship #35` (`feat(staging): Standardize Ephemeral Staging Compose Profiles and Port Allocation Schema`) or dispatch next fleet batch with newly unblocked tasks:
+  - Monitoring Exporters: Issue #20 (`feat(monitoring): Deploy host and container telemetry exporters`)
+  - Backup Runner Migration: Issue #31 (`refactor(backup): Migrate Actual Budget and Vaultwarden to universal backup runner`)
+  - Staging Profiles: Issue #35 (`feat(staging): Standardize Ephemeral Staging Compose Profiles`)

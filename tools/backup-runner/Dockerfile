@@ -20,9 +20,15 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-COPY backup.sh /app/backup.sh
+# Configure secret isolation directory with restricted permissions
+RUN mkdir -p /run/secrets && chmod 700 /run/secrets
+
+COPY backup-engine.sh /app/backup-engine.sh
 COPY entrypoint.sh /app/entrypoint.sh
 
-RUN chmod 0755 /app/backup.sh /app/entrypoint.sh
+# Install scripts and ensure PATH availability
+RUN chmod 0755 /app/backup-engine.sh /app/entrypoint.sh && \
+    ln -s /app/backup-engine.sh /usr/local/bin/backup-engine && \
+    ln -s /app/backup-engine.sh /app/backup.sh
 
-CMD ["/bin/bash", "/app/entrypoint.sh"]
+ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]

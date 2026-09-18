@@ -1,0 +1,25 @@
+# Cursor Rules for jacobmiller22/selfhosted
+
+## 1. Remote-First Operational Directives
+- **Remote Host Environment**: This repository manages remote server infrastructure (primary host: `bjorn` running Linux and Docker Engine).
+- **NEVER Assume Localhost**: Do not execute Docker commands, container tests, or service endpoints against `localhost` or local Mac daemons.
+- **Remote Host Verification**: Before suggesting or executing runtime commands:
+  1. Identify the target host from `docs/INFRASTRUCTURE_TOPOLOGY.md` or the service's `AGENTS.md`.
+  2. Verify SSH connectivity: `ssh -o BatchMode=yes -o ConnectTimeout=5 <target-host> "echo ok"`.
+  3. Execute commands remotely using: `ssh <target-host> "<command>"`.
+- **Port Ingress**: Access services via Tailscale MagicDNS (`http://bjorn:<port>`) or public SSL reverse proxy (`https://*.cloud.jacobmiller22.com`), not local forwarded ports unless explicitly configured.
+
+## 2. Git Worktree Protocol (`wt`)
+- Never edit files or make commits directly on `main` or `master`.
+- Always spawn an isolated worktree with `wt switch --create <branch-name>`.
+- Confine all file changes and terminal execution to the worktree path (`../selfhosted.<branch-name>`).
+
+## 3. Zero Untracked Work Protocol (`pm`)
+- All work must be associated with an issue (`Issue #<N>`) and linked to a Pull Request (`Fixes #<N>`).
+- Auto-create issues via `gh issue create` if none exists.
+- Post status updates to the issue; never close issues until PR is merged.
+
+## 4. Security & Secrets Protection
+- Never commit `.env`, `secrets.yaml`, private keys, certificates, or unencrypted database dumps to Git.
+- Passphrase secrets (`BACKUP_PASSPHRASE`) are stored offline in physical safes and injected via Coolify environment variables on `bjorn`.
+- Use `sqlite3 <db> ".backup <dest>"` for database backups to prevent SQLite corruption.

@@ -1,0 +1,226 @@
+name: CI Pre-Deployment Gatekeeper
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate-compose:
+    name: Validate Docker Compose
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose Files
+        env:
+          ACTUAL_PASSWORD: dummy-password-for-validation
+          BACKUP_DEST_ENDPOINT: https://s3.dummy.example.com
+          BACKUP_DEST_BUCKET: dummy-bucket
+          BACKUP_DEST_ACCESS_KEY_ID: dummy-access-key-id
+          BACKUP_DEST_SECRET_ACCESS_KEY: dummy-secret-access-key
+          BACKUP_PASSPHRASE: dummy-passphrase
+          BACKUP_ENCRYPTION_KEY: dummy-encryption-key
+          DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/dummy
+          HEALTHCHECK_PING_URL: https://hc-ping.com/dummy
+          COUCHDB_PASSWORD: dummy-couchdb-password
+        run: |
+          echo "Starting Docker Compose syntax and configuration validation..."
+          compose_files=(
+            "actual/compose.yml"
+            "vaultwarden/compose.yml"
+            "homeassistant/compose.yml"
+            "nginx-proxy-manager/compose.yml"
+            "obsidian/compose.yml"
+            "reiner-cam/compose.yml"
+          )
+          for file in "${compose_files[@]}"; do
+            if [ -f "$file" ]; then
+              echo "::group::Validating $file"
+              docker compose -f "$file" config --quiet
+              echo "✓ $file is valid"
+              echo "::endgroup::"
+            else
+              echo "::warning file=$file::Compose file $file not found, skipping."
+            fi
+          done
+          echo "✓ All Docker Compose files validated successfully."
+
+  lint-scripts:
+    name: Lint Shell Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        run: |
+          echo "::group::Running ShellCheck on shell scripts"
+          sh_files=$(find . -name "*.sh" -not -path "*/.*" -not -path "*/node_modules/*")
+          if [ -z "$sh_files" ]; then
+            echo "No shell scripts found to lint."
+            exit 0
+          fi
+          for file in $sh_files; do
+            echo "Checking $file..."
+            shellcheck --severity=warning "$file"
+          done
+          echo "::endgroup::"
+          echo "✓ All shell scripts passed ShellCheck validation."
+
+  secret-scan:
+    name: Secret Hygiene & Leak Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check for Unencrypted .env Files
+        run: |
+          echo "Checking for unencrypted .env files committed to git..."
+          ENV_FILES=$(git ls-files | grep -E "(^|/)\.env" | grep -vE '\.(example|template|sample)$' || true)
+          if [ -n "$ENV_FILES" ]; then
+            echo "::error::Committed .env files detected:"
+            echo "$ENV_FILES"
+            exit 1
+          fi
+          echo "✓ No unencrypted .env files found in git tree."
+
+      - name: Check for Committed Private Keys
+        run: |
+          echo "Checking for committed private key files..."
+          KEY_FILES=$(git ls-files | grep -E "\.(key|pem|p12|pfx|kdbx)$" || true)
+          if [ -n "$KEY_FILES" ]; then
+            echo "::error::Private key files detected in repository:"
+            echo "$KEY_FILES"
+            exit 1
+          fi
+          echo "✓ No private key files committed in git tree."
+
+      - name: Scan Tracked Files for Private Key Headers
+        run: |
+          echo "Scanning tracked files for private key headers..."
+          EXPOSED_KEYS=$(git grep -I -i "BEGIN[ A-Z]*PRIVATE KEY" -- ':!tests/**' ':!*.md' ':!tools/backup-runner/test-backup-restore.sh' || true)
+          if [ -n "$EXPOSED_KEYS" ]; then
+            echo "::error::Exposed private key headers detected:"
+            echo "$EXPOSED_KEYS"
+            exit 1
+          fi
+          echo "✓ No exposed private key headers detected."
+
+      - name: Scan Compose Files for Hardcoded Secret Leaks
+        run: |
+          echo "Checking compose files for hardcoded passphrases..."
+          COMPOSE_LEAKS=$(git grep -E "(BACKUP_PASSPHRASE|BACKUP_ENCRYPTION_KEY)=[^$\s]" -- "*compose*.yml" "*compose*.yaml" || true)
+          if [ -n "$COMPOSE_LEAKS" ]; then
+            echo "::error::Hardcoded backup passphrase detected in compose file:"
+            echo "$COMPOSE_LEAKS"
+            exit 1
+          fi
+          echo "✓ No hardcoded secrets in compose files."
+
+  unit-tests:
+    name: Unit Tests & Sidecar Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check Draft PR Status
+        id: draft-check
+        run: |
+          IS_DRAFT="${{ github.event.pull_request.draft }}"
+          LABELS='${{ toJSON(github.event.pull_request.labels.*.name) }}'
+          if [ "$IS_DRAFT" = "true" ] && ! echo "$LABELS" | grep -qE "deploy-preview|run-ci"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Draft PR detected without bypass label ('deploy-preview' or 'run-ci'). Skipping expensive test suite."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.draft-check.outputs.skip != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python Dependencies
+        if: steps.draft-check.outputs.skip != 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Run Python Unit Tests
+        if: steps.draft-check.outputs.skip != 'true'
+        run: |
+          echo "Running Python test suite..."
+          python -m unittest discover -s tests -p "test_*.py" -v
+          echo "✓ Python test suite completed successfully."
+
+      - name: Validate ONNX Model Manifest
+        if: steps.draft-check.outputs.skip != 'true'
+        run: |
+          echo "Validating ONNX model manifest and model artifacts..."
+          python -c '
+          import json, sys
+          from pathlib import Path
+
+          manifest_path = Path("actual/auto-categorizer-models/model_manifest.json")
+          if not manifest_path.exists():
+              sys.exit(f"Error: {manifest_path} not found")
+
+          data = json.loads(manifest_path.read_text())
+          if "models" not in data:
+              sys.exit("Error: models missing from manifest")
+
+          for name, meta in data["models"].items():
+              model_file = manifest_path.parent / meta.get("file", "")
+              if not model_file.exists():
+                  sys.exit(f"Error: model file {model_file} not found")
+              classes = meta.get("classes", [])
+              if not classes or len(classes) == 0:
+                  sys.exit(f"Error: model {name} has no classes defined")
+
+          num_models = len(data["models"])
+          print(f"✓ Model manifest validated: {num_models} models, all ONNX assets present")
+          '
+
+      - name: Run Backup & Restore Test Suite
+        if: steps.draft-check.outputs.skip != 'true'
+        run: |
+          echo "Running Backup & Restore Architecture Test Suite..."
+          ./tools/backup-runner/test-backup-restore.sh
+          echo "✓ Backup & restore test suite passed successfully."
+
+      - name: Set up Node.js
+        if: steps.draft-check.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run Transaction Importer Tests
+        if: steps.draft-check.outputs.skip != 'true'
+        working-directory: actual/tools/transaction-importer
+        run: |
+          echo "Installing transaction-importer dependencies..."
+          npm ci
+          echo "Running transaction-importer parser tests..."
+          npm test
+          echo "✓ Transaction importer tests completed successfully."
+
+      - name: Run Auto-Categorizer TypeScript Build
+        if: steps.draft-check.outputs.skip != 'true'
+        working-directory: actual/tools/auto-categorizer
+        run: |
+          echo "Installing auto-categorizer dependencies..."
+          npm ci
+          echo "Compiling TypeScript auto-categorizer sidecar..."
+          npm run build
+          echo "✓ Auto-categorizer sidecar compiled successfully."
