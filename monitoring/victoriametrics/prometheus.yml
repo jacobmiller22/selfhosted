@@ -5,7 +5,7 @@ global:
 
 scrape_configs:
   # 1. Host Infrastructure Telemetry
-  - job_name: 'node-exporter'
+  - job_name: 'node'
     static_configs:
       - targets: ['node-exporter:9100']
         labels:
@@ -19,11 +19,20 @@ scrape_configs:
         labels:
           instance: 'bjorn'
           environment: 'production'
+    metric_relabel_configs:
+      - source_labels: [container_label_com_docker_compose_service]
+        target_label: service
+        action: replace
+      - source_labels: [name]
+        regex: '^/?(.*)$'
+        target_label: container
+        replacement: '$1'
+        action: replace
 
   # 3. Time-Series Database Self-Monitoring
-  - job_name: 'victoriametrics'
+  - job_name: 'victoria-metrics'
     static_configs:
-      - targets: ['victoriametrics:8428']
+      - targets: ['victoria-metrics:8428']
         labels:
           instance: 'bjorn'
           environment: 'production'
