@@ -173,7 +173,8 @@ upload_to_s3() {
         --s3-provider=Other \
         --s3-endpoint="${endpoint}" \
         --s3-access-key-id="${BACKUP_DEST_ACCESS_KEY_ID}" \
-        --s3-secret-access-key="${BACKUP_DEST_SECRET_ACCESS_KEY}"
+        --s3-secret-access-key="${BACKUP_DEST_SECRET_ACCESS_KEY}" \
+        --s3-no-check-bucket
     elif command -v aws >/dev/null 2>&1; then
       AWS_ACCESS_KEY_ID="${BACKUP_DEST_ACCESS_KEY_ID}" \
       AWS_SECRET_ACCESS_KEY="${BACKUP_DEST_SECRET_ACCESS_KEY}" \
