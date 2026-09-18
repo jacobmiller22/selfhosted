@@ -194,14 +194,14 @@ To guarantee that the monitoring stack cannot starve production workloads (Actua
 
 | Service | Baseline RAM | Hard RAM Limit | RAM Reservation | Hard CPU Limit |
 | :--- | :--- | :--- | :--- | :--- |
-| **VictoriaMetrics** | ~35 MB | **64 MB** | 32 MB | 0.30 CPU |
-| **cAdvisor** | ~30 MB | **50 MB** | 25 MB | 0.20 CPU |
+| **VictoriaMetrics** | ~35 MB | **128 MB** | 64 MB | 0.25 CPU |
+| **cAdvisor** | ~30 MB | **80 MB** | 40 MB | 0.20 CPU |
 | **Node Exporter** | ~15 MB | **30 MB** | 15 MB | 0.10 CPU |
-| **Grafana** | ~50 MB | **80 MB** | 40 MB | 0.30 CPU |
-| **Total Stack** | **~130 MB** | **224 MB Ceiling** | **112 MB** | **0.90 CPU** |
+| **Grafana** | ~50 MB | **120 MB** | 60 MB | 0.25 CPU |
+| **Total Stack** | **~130 MB** | **358 MB Ceiling** | **179 MB** | **0.80 CPU** |
 
 > [!IMPORTANT]
-> The typical steady-state operational memory of the entire stack is **~130MB**, well below the homelab target of **< 200MB**. Even under peak dashboard queries or batch compaction, the cumulative hard memory ceiling across all 4 containers is capped at **224MB**.
+> The typical steady-state operational memory of the entire stack is **~130MB**, well below the homelab target of **< 200MB**. Even under peak dashboard queries or batch compaction, the cumulative hard memory ceiling across all 4 containers is strictly capped at **358MB**.
 
 ### 6.2 Tuning Flags for Low-Memory Operation
 
@@ -374,8 +374,9 @@ apiVersion: 1
 datasources:
   - name: VictoriaMetrics
     type: prometheus
+    uid: victoriametrics
     access: proxy
-    url: http://victoriametrics:8428
+    url: http://victoria-metrics:8428
     isDefault: true
     editable: false
     jsonData:
@@ -401,16 +402,25 @@ providers:
 ```
 
 ### 10.3 Pre-Packaged Dashboard Specifications
-1. **Host Overview (Node Exporter)**:
-   - Root `/` and `/var/lib/docker` filesystem gauges (Used / Available / % Free).
-   - CPU utilization graph (% user, system, iowait).
-   - RAM utilization graph (Used, Cached, Free, Swap).
-   - Host network throughput (eth0 / ens18 rx/tx bytes/s).
-2. **Container Leaderboard (cAdvisor)**:
-   - Top CPU-consuming containers.
-   - Top Memory-consuming containers (RSS vs Cache).
-   - Per-container disk read/write bytes per second.
-   - Per-container network traffic (e.g. streaming vs web traffic).
+1. **Host Overview & Capacity (bjorn)** (`host-metrics.json`):
+   - **UID**: `host-overview`
+   - **Storage Gauges**: Root `/host` filesystem utilization (Total, Used, Free in GB, % Used).
+   - **RAM & Swap**: Total RAM, Used RAM, Available RAM, and Swap (Used, Total, Free).
+   - **CPU & Load**: Host CPU utilization % and 1m/5m/15m system load averages.
+   - **Network Throughput**: Aggregate WAN/LAN upload/download bandwidth across non-virtual interfaces.
+2. **Container Telemetry & Resource Attribution** (`container-metrics.json`):
+   - **UID**: `container-telemetry`
+   - **Container Filter**: Templated query variable dynamically querying container names with an `All` option.
+   - **Top 10 CPU Consumers**: Ranked CPU utilization % per container over 5-minute rates.
+   - **Top 10 Memory Consumers**: Ranked RAM working set bytes per container.
+   - **Top Network Consumers**: Ingress (RX) and Egress (TX) bandwidth per container.
+   - **Top Disk I/O Consumers**: Read and write throughput per container.
+
+### 10.4 Ingress & Reverse Proxy Integration
+Grafana is published securely behind Nginx Proxy Manager (NPM):
+- Ingress URL: `https://monitoring.cloud.jacobmiller22.com`
+- Upstream Target: `http://grafana:3000` on the shared external `nginx-proxy-manager` network.
+- SSL/TLS: Let's Encrypt wildcard certificate with Force SSL, HTTP/2, HSTS, and WebSocket support.
 
 ---
 
@@ -440,7 +450,7 @@ Each container specifies a native healthcheck or probe:
 
 ### 11.2 Verification Checklist
 - [x] All 4 containers start and maintain healthy statuses.
-- [x] Aggregate memory usage across all 4 containers stays strictly below 200MB.
+- [x] Aggregate memory usage across all 4 containers stays strictly below 200MB steady-state.
 - [x] Host port 8428 binds to `127.0.0.1:8428`, no public port bindings on `0.0.0.0`.
 - [x] VictoriaMetrics successfully scrapes targets (`http://127.0.0.1:8428/targets`).
 - [x] Grafana automatically provisions VictoriaMetrics as default datasource.
@@ -453,7 +463,7 @@ Each container specifies a native healthcheck or probe:
 This architecture provides an ultra-lean, production-grade foundation for infrastructure observability on `bjorn`.
 
 ### Associated Roadmap Issues:
-- **#20**: Host & Container Telemetry Exporters (Deploy Node Exporter & cAdvisor).
-- **#21**: Lightweight Time-Series Engine (Deploy VictoriaMetrics with 90-day retention).
-- **#22**: Grafana Provisioning & Dashboards (Deploy Grafana with provisioned dashboards).
+- **#20**: Host & Container Telemetry Exporters (Deploy Node Exporter & cAdvisor) - Completed.
+- **#21**: Lightweight Time-Series Engine (Deploy VictoriaMetrics with 90-day retention) - Completed.
+- **#22**: Grafana Provisioning & Dashboards (Deploy Grafana with provisioned dashboards) - Completed.
 - **#23**: Operational Alerting via Discord (Configure threshold alerts for disk >85% and container OOMs).

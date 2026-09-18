@@ -6,13 +6,13 @@ This directory contains declarative JSON dashboard definitions provisioned autom
 
 Dashboards placed in this directory are monitored and hot-reloaded by the Grafana file provider configured in `monitoring/grafana/provisioning/dashboards/dashboards.yml`.
 
-### Standard Homelab Dashboards (Implementation in #22):
-1. **Host Overview (Node Exporter)**:
-   - Community Base: Dashboard ID `1860` ("Node Exporter Full")
-   - Focus: Live root `/` and `/var/lib/docker` filesystem utilization, RAM breakdown, CPU % with system/iowait, host network rx/tx rates, system load averages.
-2. **Container Telemetry & Attribution (cAdvisor)**:
-   - Community Base: Dashboard ID `14282` ("cAdvisor Exporter") or `893` ("Docker and System Monitoring")
-   - Focus: Top CPU-consuming containers, container RSS vs page cache memory allocation, block I/O throughput (bytes/s, IOPS), container virtual network interface throughput.
+### Standard Homelab Dashboards:
+1. **Host Overview & Capacity (bjorn)** (`host-metrics.json`):
+   - UID: `host-overview`
+   - Focus: Live root `/host` filesystem utilization (Total, Used, Free in GB, % Used), RAM & Swap breakdown (MemTotal, MemAvailable, SwapUsed), CPU % with load averages (1m/5m/15m), host network throughput.
+2. **Container Telemetry & Attribution** (`container-metrics.json`):
+   - UID: `container-telemetry`
+   - Focus: Top 10 CPU-consuming containers, Top 10 Memory-consuming containers (working set bytes), container network throughput (RX / TX), and disk I/O throughput (Read / Write). Includes container multi-select variable filter.
 3. **VictoriaMetrics TSDB Vitals**:
    - Focus: Ingestion rate (samples/sec), active time-series count, storage size on disk, query latency percentiles.
 

@@ -105,12 +105,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.30'
-          memory: 80M
+          cpus: '0.25'
+          memory: 120M
         reservations:
-          memory: 40M
-    mem_limit: 80m
-    cpus: 0.3
+          memory: 60M
+    mem_limit: 120m
+    cpus: 0.25
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 30s
