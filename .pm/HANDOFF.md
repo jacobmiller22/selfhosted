@@ -1,14 +1,17 @@
 # Session Handoff & Continuity Checkpoint
 - **Repository**: jacobmiller22/selfhosted
 - **Default Branch**: main
-- **Last Updated**: 2026-09-18T17:57:00Z
-- **Active Task**: None (`main` clean, all 4 PRs merged)
+- **Last Updated**: 2026-09-18T17:00:00Z
+- **Active Task**: Issue #48 (`docs(ci): Automated PR & Webhook Deployment Architecture Runbook`)
+- **Documentation Deliverables**:
+  - `docs/CI_CD_COOLIFY_PIPELINE.md`: Authoritative Coolify & NPM CI/CD deployment architecture, webhook pipeline, service onboarding checklist, troubleshooting procedures, and secret rotation runbooks.
+  - `README.md`: Central monorepo entry point with complete Architecture & Operational Runbooks inventory.
 - **Merged Fleet Batch**:
   - PR #53: `feat(ci): GitHub Actions Pre-Deployment Gatekeeper & Validation Workflow` (Closed #47)
   - PR #52: `feat(backup): Build reusable Alpine backup runner image and declarative strategy engine in tools/backup-runner` (Closed #30)
   - PR #51: `feat(ai): Establish remote host verification protocol & folder-level AI instructions` (Closed #40)
   - PR #50: `feat(monitoring): Design monitoring architecture & stack specification` (Closed #19)
-- **Status**: Merged all 4 foundational epics into `main`. Cleaned and reaped all 4 worktrees. Full test suite passing (20/20 Python unit tests, 7/7 backup/restore integration tests).
+- **Status**: Completed documentation and verification for Issue #48. All unit tests passing (29/29 tests), backup/restore tests passing (7/7).
 - **Next Shovel-Ready Step**: Run `pm ship #35` (`feat(staging): Standardize Ephemeral Staging Compose Profiles and Port Allocation Schema`) or dispatch next fleet batch with newly unblocked tasks:
   - Monitoring Exporters: Issue #20 (`feat(monitoring): Deploy host and container telemetry exporters`)
   - Backup Runner Migration: Issue #31 (`refactor(backup): Migrate Actual Budget and Vaultwarden to universal backup runner`)
