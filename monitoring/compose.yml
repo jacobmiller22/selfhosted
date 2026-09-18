@@ -1,0 +1,137 @@
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.102.1
+    container_name: victoriametrics
+    restart: unless-stopped
+    command:
+      - -promscrape.config=/etc/prometheus/prometheus.yml
+      - -storageDataPath=/victoria-metrics-data
+      - -retentionPeriod=90d
+      - -memory.allowedBytes=64MB
+    volumes:
+      - vm-data:/victoria-metrics-data
+      - ./victoriametrics/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:8428:8428"
+    networks:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          cpus: '0.30'
+          memory: 64M
+        reservations:
+          memory: 32M
+    mem_limit: 64m
+    cpus: 0.3
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8428/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    command:
+      - --housekeeping_interval=15s
+      - --docker_only=true
+      - --disable_metrics=disk,tcp,udp,percpu,sched,process,hugetlb
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          cpus: '0.20'
+          memory: 50M
+        reservations:
+          memory: 25M
+    mem_limit: 50m
+    cpus: 0.2
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: node-exporter
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - "127.0.0.1:9100:9100"
+    networks:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          cpus: '0.10'
+          memory: 30M
+        reservations:
+          memory: 15M
+    mem_limit: 30m
+    cpus: 0.1
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-https://monitoring.cloud.jacobmiller22.com}
+      - GF_SERVER_SERVE_FROM_SUB_PATH=false
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - monitoring
+      - nginx-proxy-manager
+    deploy:
+      resources:
+        limits:
+          cpus: '0.30'
+          memory: 80M
+        reservations:
+          memory: 40M
+    mem_limit: 80m
+    cpus: 0.3
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  monitoring:
+    name: monitoring
+    driver: bridge
+  nginx-proxy-manager:
+    name: nginx-proxy-manager
+    external: true
+
+volumes:
+  vm-data:
+    name: vm-data
+  grafana-data:
+    name: grafana-data
