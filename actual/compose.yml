@@ -1,16 +1,7 @@
 services:
   actual_server:
     image: docker.io/actualbudget/actual-server:26.9.0
-    environment:
-      # Uncomment any of the lines below to set configuration options.
-      # - ACTUAL_HTTPS_KEY=/data/selfhost.key
-      # - ACTUAL_HTTPS_CERT=/data/selfhost.crt
-      # - ACTUAL_PORT=5006
-      # - ACTUAL_UPLOAD_FILE_SYNC_SIZE_LIMIT_MB=20
-      # - ACTUAL_UPLOAD_SYNC_ENCRYPTED_FILE_SYNC_SIZE_LIMIT_MB=50
-      # - ACTUAL_UPLOAD_FILE_SIZE_LIMIT_MB=20
-      # See all options and more details at https://actualbudget.github.io/docs/Installing/Configuration
-      # !! If you are not using any of these options, remove the 'environment:' tag entirely.
+    # See all options and more details at https://actualbudget.github.io/docs/Installing/Configuration
     volumes:
       # Change './actual-data' below to the path to the folder you want Actual to store its data in on your server.
       # '/data' is the path Actual will look for its files in by default, so leave that as-is.
@@ -23,8 +14,21 @@ services:
     build:
       context: ./backup
     container_name: actual-backup
+    restart: unless-stopped
+    environment:
+      - SERVICE_NAME=actual
+      - BACKUP_SOURCE_DIR=/tmp/actual-data
+      - BACKUP_DEST_PREFIX=backups/actual
+      - BACKUP_DEST_ENDPOINT=${BACKUP_DEST_ENDPOINT}
+      - BACKUP_DEST_BUCKET=${BACKUP_DEST_BUCKET}
+      - BACKUP_DEST_ACCESS_KEY_ID=${BACKUP_DEST_ACCESS_KEY_ID}
+      - BACKUP_DEST_SECRET_ACCESS_KEY=${BACKUP_DEST_SECRET_ACCESS_KEY}
+      - BACKUP_PASSPHRASE=${BACKUP_PASSPHRASE:-${BACKUP_ENCRYPTION_KEY}}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - HEALTHCHECK_PING_URL=${HEALTHCHECK_PING_URL:-}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 16 * * *}
     volumes:
-      - actual-data:/tmp/actual-data
+      - actual-data:/tmp/actual-data:ro
 
   actual-auto-categorizer:
     build:

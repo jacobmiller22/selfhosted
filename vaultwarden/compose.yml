@@ -16,8 +16,21 @@ services:
     build:
       context: ./backup
     container_name: vw-backup
+    restart: unless-stopped
+    environment:
+      - SERVICE_NAME=vaultwarden
+      - BACKUP_SOURCE_DIR=/tmp/vw-data
+      - BACKUP_DEST_PREFIX=backups/vaultwarden
+      - BACKUP_DEST_ENDPOINT=${BACKUP_DEST_ENDPOINT}
+      - BACKUP_DEST_BUCKET=${BACKUP_DEST_BUCKET}
+      - BACKUP_DEST_ACCESS_KEY_ID=${BACKUP_DEST_ACCESS_KEY_ID}
+      - BACKUP_DEST_SECRET_ACCESS_KEY=${BACKUP_DEST_SECRET_ACCESS_KEY}
+      - BACKUP_PASSPHRASE=${BACKUP_PASSPHRASE:-${BACKUP_ENCRYPTION_KEY}}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - HEALTHCHECK_PING_URL=${HEALTHCHECK_PING_URL:-}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 16 * * *}
     volumes:
-      - vw-data:/tmp/vw-data
+      - vw-data:/tmp/vw-data:ro
 networks:
   nginx-proxy-manager:
     name: nginx-proxy-manager
