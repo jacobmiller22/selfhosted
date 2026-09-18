@@ -10,6 +10,7 @@
 # 5. Staging directory lifecycle (guaranteed cleanup on success and error)
 # 6. Fallback variable support (BACKUP_ENCRYPTION_KEY)
 # 7. Actual Budget & Vaultwarden topology integration
+# 8. Disaster Recovery (DR): Automated pull & decrypt engine integration
 # ==============================================================================
 
 set -euo pipefail
@@ -27,7 +28,7 @@ echo "==========================================================================
 # Test 1: Generic OpenSSL AES-256-CBC PBKDF2 Roundtrip
 # ==============================================================================
 echo ""
-echo "[Test 1/7] Testing Generic OpenSSL AES-256-CBC PBKDF2 Roundtrip..."
+echo "[Test 1/8] Testing Generic OpenSSL AES-256-CBC PBKDF2 Roundtrip..."
 T1_SRC="${TEST_DIR}/t1_src"
 T1_EXTRACT="${TEST_DIR}/t1_extract"
 mkdir -p "${T1_SRC}" "${T1_EXTRACT}"
@@ -70,7 +71,7 @@ echo "[+] Test 1 Passed: Generic roundtrip and OpenSSL header validated."
 # Test 2: Declarative Engine: sqlite-auto Strategy
 # ==============================================================================
 echo ""
-echo "[Test 2/7] Testing Declarative Engine: sqlite-auto Strategy..."
+echo "[Test 2/8] Testing Declarative Engine: sqlite-auto Strategy..."
 T2_SRC="${TEST_DIR}/t2_src"
 T2_EXTRACT="${TEST_DIR}/t2_extract"
 T2_OUTPUT="${TEST_DIR}/t2_output"
@@ -158,7 +159,7 @@ echo "[+] Test 2 Passed: Declarative sqlite-auto mode validated cleanly."
 # Test 3: Declarative Engine: filesystem Strategy
 # ==============================================================================
 echo ""
-echo "[Test 3/7] Testing Declarative Engine: filesystem Strategy..."
+echo "[Test 3/8] Testing Declarative Engine: filesystem Strategy..."
 T3_SRC="${TEST_DIR}/t3_src"
 T3_EXTRACT="${TEST_DIR}/t3_extract"
 T3_OUTPUT="${TEST_DIR}/t3_output"
@@ -200,7 +201,7 @@ echo "[+] Test 3 Passed: Declarative filesystem mode validated cleanly."
 # Test 4: Declarative Engine: hook Strategy
 # ==============================================================================
 echo ""
-echo "[Test 4/7] Testing Declarative Engine: hook Strategy..."
+echo "[Test 4/8] Testing Declarative Engine: hook Strategy..."
 T4_HOOK="${TEST_DIR}/mock_pg_dump_hook.sh"
 T4_EXTRACT="${TEST_DIR}/t4_extract"
 T4_OUTPUT="${TEST_DIR}/t4_output"
@@ -245,7 +246,7 @@ echo "[+] Test 4 Passed: Declarative hook mode validated cleanly."
 # Test 5: Safe Staging Directory Lifecycle (Cleanup on Success and Error)
 # ==============================================================================
 echo ""
-echo "[Test 5/7] Testing Staging Directory Lifecycle (Cleanup on Success and Error)..."
+echo "[Test 5/8] Testing Staging Directory Lifecycle (Cleanup on Success and Error)..."
 # Part A: Cleanup on success
 T5A_STAGING="${TEST_DIR}/t5a_staging"
 T5A_SRC="${TEST_DIR}/t5a_src"
@@ -306,7 +307,7 @@ echo "[+] Test 5 Passed: Guaranteed staging lifecycle verified on success and er
 # Test 6: Fallback Variable Support (BACKUP_ENCRYPTION_KEY)
 # ==============================================================================
 echo ""
-echo "[Test 6/7] Testing Fallback Variable Support (BACKUP_ENCRYPTION_KEY)..."
+echo "[Test 6/8] Testing Fallback Variable Support (BACKUP_ENCRYPTION_KEY)..."
 T6_SRC="${TEST_DIR}/t6_src"
 T6_EXTRACT="${TEST_DIR}/t6_extract"
 T6_OUTPUT="${TEST_DIR}/t6_output"
@@ -334,7 +335,7 @@ echo "[+] Test 6 Passed: BACKUP_ENCRYPTION_KEY fallback supported cleanly."
 # Test 7: Actual Budget & Vaultwarden Integration Topology
 # ==============================================================================
 echo ""
-echo "[Test 7/7] Testing Actual Budget & Vaultwarden Topology Integration..."
+echo "[Test 7/8] Testing Actual Budget & Vaultwarden Topology Integration..."
 
 # Actual Budget Topology
 ACTUAL_DATA="${TEST_DIR}/actual-data"
@@ -400,6 +401,42 @@ openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
 [[ "$(cat "${VW_EXTRACT}/sends/s1.json")" == "send_data" ]]
 [[ "$(cat "${VW_EXTRACT}/config.json")" == '{"signups": false}' ]]
 echo "[+] Test 7 Passed: Actual Budget and Vaultwarden topologies backed up and restored cleanly."
+
+# ==============================================================================
+# Test 8: Disaster Recovery (DR) Automated Pull & Decrypt Engine Integration
+# ==============================================================================
+echo ""
+echo "[Test 8/8] Testing Disaster Recovery (DR) Pull & Decrypt Engine..."
+DR_SCRIPT="${ROOT_DIR}/tools/backup-dr/pull-and-decrypt.sh"
+DR_TEST_SUITE="${ROOT_DIR}/tools/backup-dr/test-dr-pull-decrypt.sh"
+
+# 1. Decrypt Actual archive produced by declarative engine via pull-and-decrypt.sh
+DR_ACTUAL_EXTRACT="${TEST_DIR}/dr-actual-extract"
+mkdir -p "${DR_ACTUAL_EXTRACT}"
+
+"${DR_SCRIPT}" \
+  --service actual \
+  --source local \
+  --backup-dir "${ACTUAL_OUTPUT}" \
+  --passphrase "ActualPassphrase2026" \
+  --dest "${DR_ACTUAL_EXTRACT}"
+
+[[ "$(sqlite3 "${DR_ACTUAL_EXTRACT}/server-files/account.sqlite" "PRAGMA integrity_check;")" == "ok" ]]
+[[ "$(sqlite3 "${DR_ACTUAL_EXTRACT}/user-files/group-1.sqlite" "PRAGMA integrity_check;")" == "ok" ]]
+[[ "$(cat "${DR_ACTUAL_EXTRACT}/user-files/f1.blob")" == "blob1" ]]
+[[ "$(cat "${DR_ACTUAL_EXTRACT}/.migrate")" == '{"version": 17}' ]]
+
+# 2. Dry-run verification on Vaultwarden output
+"${DR_SCRIPT}" \
+  --service vaultwarden \
+  --source local \
+  --backup-dir "${VW_OUTPUT}" \
+  --dry-run
+
+# 3. Execute standalone DR test harness
+"${DR_TEST_SUITE}"
+
+echo "[+] Test 8 Passed: Disaster Recovery pull & decrypt engine validated end-to-end."
 
 echo ""
 echo "================================================================================"
