@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  # 1. Host Infrastructure Telemetry
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          instance: 'bjorn'
+          environment: 'production'
+
+  # 2. Container & Cgroups Telemetry
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels:
+          instance: 'bjorn'
+          environment: 'production'
+
+  # 3. Time-Series Database Self-Monitoring
+  - job_name: 'victoriametrics'
+    static_configs:
+      - targets: ['victoriametrics:8428']
+        labels:
+          instance: 'bjorn'
+          environment: 'production'
