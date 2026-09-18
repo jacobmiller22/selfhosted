@@ -147,3 +147,41 @@ ssh bjorn "docker compose -f /path/to/vaultwarden/compose.yml --profile staging 
 # Teardown staging container and destroy ephemeral volume
 ssh bjorn "docker compose -f /path/to/actual/compose.yml --profile staging down -v"
 ```
+
+---
+
+## 6. Live Production Snapshot Hydration Engine (`tools/staging/hydrate.sh`)
+
+The `tools/staging/hydrate.sh` utility automates fast, zero-downtime online snapshotting of production databases into dedicated staging volumes with guaranteed zero blast-radius to production.
+
+### 6.1 Architectural Guarantees
+1. **Online SQLite Snapshots**: Uses `sqlite3 <db> ".backup <dest>"` rather than raw file copies, guaranteeing clean page consistency without pausing active production services.
+2. **Blast Radius Protection**: Enforces strict inequality between `PROD_DATA_DIR` and `STAGE_DATA_DIR`, rejecting unsafe root directories.
+3. **Companion State Hydration**:
+   - **Actual Budget**: Snapshots `account.sqlite` (or `server-files/account.sqlite`) and `user-files/*.sqlite`; copies `user-files/*.blob` client sync objects and metadata; enforces `1000:1000` filesystem ownership.
+   - **Vaultwarden**: Snapshots `db.sqlite3`; copies `rsa_key.pem` (enforces `chmod 600`), `rsa_key.pub`, `attachments/`, `sends/`, and `config.json`.
+4. **Integrity Validation**: Executes `PRAGMA integrity_check;` on all hydrated databases prior to declaring ready.
+
+### 6.2 CLI Syntax & Invocations
+```bash
+# Hydrate Actual Budget staging volume
+./tools/staging/hydrate.sh actual
+
+# Hydrate and immediately boot staging container
+./tools/staging/hydrate.sh actual --start
+
+# Hydrate Vaultwarden staging volume and boot container
+./tools/staging/hydrate.sh vaultwarden --start
+
+# Wipe staging volume and re-hydrate fresh snapshot
+./tools/staging/hydrate.sh --reset actual
+./tools/staging/hydrate.sh --reset vaultwarden
+
+# Stop staging container
+./tools/staging/hydrate.sh --stop actual
+./tools/staging/hydrate.sh --stop vaultwarden
+
+# Dry-run preflight inspection
+./tools/staging/hydrate.sh actual --dry-run
+```
+
