@@ -34,11 +34,11 @@ services:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
     restart: unless-stopped
-    privileged: true
+    privileged: false
     command:
       - --housekeeping_interval=15s
+      - --disable_metrics=percpu,sched,process,hugetlb,referenced_memory
       - --docker_only=true
-      - --disable_metrics=disk,tcp,udp,percpu,sched,process,hugetlb
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -46,36 +46,31 @@ services:
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     networks:
       - monitoring
     deploy:
       resources:
         limits:
           cpus: '0.20'
-          memory: 50M
+          memory: 80M
         reservations:
-          memory: 25M
-    mem_limit: 50m
-    cpus: 0.2
+          memory: 40M
+    mem_limit: 80m
+    cpus: 0.20
 
   node-exporter:
-    image: prom/node-exporter:v1.8.2
+    image: quay.io/prometheus/node-exporter:v1.8.1
     container_name: node-exporter
     restart: unless-stopped
-    command:
-      - --path.procfs=/host/proc
-      - --path.sysfs=/host/sys
-      - --path.rootfs=/rootfs
-      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    network_mode: host
+    pid: host
     volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    ports:
-      - "127.0.0.1:9100:9100"
-    networks:
-      - monitoring
+      - /:/host:ro,rslave
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/containers/.+)($$|/)
+      - --web.listen-address=:9100
     deploy:
       resources:
         limits:
@@ -84,7 +79,7 @@ services:
         reservations:
           memory: 15M
     mem_limit: 30m
-    cpus: 0.1
+    cpus: 0.10
 
   grafana:
     image: grafana/grafana:11.2.0

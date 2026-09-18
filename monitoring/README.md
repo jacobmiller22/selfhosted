@@ -11,8 +11,8 @@ For the exhaustive architectural specification, benchmark comparison, storage re
 - **VictoriaMetrics** (`victoriametrics/victoria-metrics:v1.102.1`):
   Ultra-efficient, Prometheus-compatible time-series database. Configured for **90-day retention** and **< 64MB RAM**.
 - **cAdvisor** (`gcr.io/cadvisor/cadvisor:v0.49.1`):
-  Docker container resource attribution via Linux cgroups v2. Configured with a 15-second housekeeping interval and stripped non-essential metrics for **< 50MB RAM**.
-- **Node Exporter** (`prom/node-exporter:v1.8.2`):
+  Docker container resource attribution via Linux cgroups v2. Configured with a 15-second housekeeping interval and stripped non-essential metrics for **< 80MB RAM**.
+- **Node Exporter** (`quay.io/prometheus/node-exporter:v1.8.1`):
   Linux host hardware and OS telemetry exporter (CPU, RAM, disk capacity on `/` and `/var/lib/docker`, network interfaces) consuming **< 30MB RAM**.
 - **Grafana** (`grafana/grafana:11.2.0`):
   Observability dashboard UI with automated file-based datasource and dashboard provisioning consuming **< 80MB RAM**.
@@ -42,28 +42,28 @@ monitoring/
 ## 3. Network & Security Architecture
 
 1. **Dual Network Isolation**:
-   - `monitoring`: Internal Docker bridge network. Scrapes occur over internal DNS (`node-exporter:9100`, `cadvisor:8080`, `victoriametrics:8428`).
+   - `monitoring`: Internal Docker bridge network. Scrapes occur over internal DNS (`cadvisor:8080`, `victoriametrics:8428`).
    - `nginx-proxy-manager`: External Docker network. **Only Grafana joins this network** to expose its UI to Nginx Proxy Manager.
 2. **Port Bindings**:
    - VictoriaMetrics: `127.0.0.1:8428:8428` (local host loopback only for CLI admin/backups).
-   - Node Exporter: `127.0.0.1:9100:9100` (local host loopback only).
-   - cAdvisor: `127.0.0.1:8080:8080` (local host loopback only).
+   - Node Exporter: `9100` (host network mode).
+   - cAdvisor: `8080:8080` (bridge network port mapping).
    - **Zero ports are bound to `0.0.0.0` or exposed publicly.**
    - External access is routed through Nginx Proxy Manager via SSL to Grafana (`https://monitoring.cloud.jacobmiller22.com`).
 
 ---
 
-## 4. Resource Bounds (< 200MB RAM Total)
+## 4. Resource Bounds (< 200MB RAM Steady-State)
 
 Every container enforces strict hard resource limits in `compose.yml`:
 
 | Container | Hard RAM Limit | RAM Reservation | Hard CPU Limit | Steady-State RAM |
 | :--- | :--- | :--- | :--- | :--- |
 | `victoriametrics` | 64MB | 32MB | 0.30 CPU | ~35MB |
-| `cadvisor` | 50MB | 25MB | 0.20 CPU | ~30MB |
+| `cadvisor` | 80MB | 40MB | 0.20 CPU | ~35MB |
 | `node-exporter` | 30MB | 15MB | 0.10 CPU | ~15MB |
 | `grafana` | 80MB | 40MB | 0.30 CPU | ~50MB |
-| **Total Stack** | **224MB Hard Ceiling** | **112MB** | **0.90 CPU** | **~130MB** |
+| **Total Stack** | **254MB Hard Ceiling** | **127MB** | **0.90 CPU** | **~135MB** |
 
 ---
 

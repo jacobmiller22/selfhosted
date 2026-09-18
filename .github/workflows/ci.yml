@@ -40,6 +40,7 @@ jobs:
             "nginx-proxy-manager/compose.yml"
             "obsidian/compose.yml"
             "reiner-cam/compose.yml"
+            "monitoring/compose.yml"
           )
           for file in "${compose_files[@]}"; do
             if [ -f "$file" ]; then
