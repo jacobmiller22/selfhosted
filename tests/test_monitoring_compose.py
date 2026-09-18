@@ -121,6 +121,26 @@ class TestMonitoringCompose(unittest.TestCase):
         self.assertEqual(deploy_limits.get("memory"), "80M")
         self.assertIn(float(deploy_limits.get("cpus")), [0.2, 0.20])
 
+    def test_grafana_alerting_configuration(self):
+        services = self.compose_data.get("services", {})
+        self.assertIn("grafana", services, "'grafana' must be defined in services")
+        grafana = services["grafana"]
+
+        # Alerting provisioning volume mount
+        volumes = grafana.get("volumes", [])
+        self.assertIn(
+            "./grafana/provisioning/alerting:/etc/grafana/provisioning/alerting:ro",
+            volumes,
+            "Grafana must mount alerting provisioning directory as read-only (:ro)"
+        )
+
+        # Discord Webhook Environment Variable
+        env_vars = grafana.get("environment", [])
+        self.assertTrue(
+            any("DISCORD_WEBHOOK_URL" in e for e in env_vars),
+            "Grafana must include DISCORD_WEBHOOK_URL in environment"
+        )
+
     def test_no_hardcoded_secrets(self):
         forbidden_keys = ["BACKUP_PASSPHRASE=", "BACKUP_ENCRYPTION_KEY="]
         for key in forbidden_keys:

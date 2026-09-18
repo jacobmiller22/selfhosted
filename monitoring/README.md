@@ -29,11 +29,12 @@ monitoring/
 │   └── prometheus.yml                        # Scrape configuration for Node Exporter, cAdvisor, VM
 └── grafana/
     ├── provisioning/
-    │   ├── datasources/
     │   │   ├── datasources.yml               # Automated VictoriaMetrics Prometheus datasource
     │   │   └── victoriametrics.yml           # Secondary VictoriaMetrics datasource alias
-    │   └── dashboards/
-    │       └── dashboards.yml                # File provider mapping for JSON dashboards
+    │   ├── dashboards/
+    │   │   └── dashboards.yml                # File provider mapping for JSON dashboards
+    │   └── alerting/
+    │       └── alerting.yaml                 # Unified alert rules, contact points & notification policy
     └── dashboards/
         ├── README.md                         # Dashboard templates, JSON definitions, and IDs
         ├── host-metrics.json                 # Host overview & capacity dashboard (UID: host-overview)
@@ -137,4 +138,76 @@ Grafana automatically loads declarative dashboards from `monitoring/grafana/dash
    - **Top 10 Memory Consumers**: Ranked RAM working set bytes per container.
    - **Top Network Consumers**: Ingress (RX) and Egress (TX) bandwidth per container.
    - **Top Disk I/O Consumers**: Read and write throughput per container.
+
+---
+
+## 7. Proactive Discord Threshold Alerting
+
+The monitoring stack implements declarative, GitOps-provisioned threshold alerting via Grafana unified alerting (`monitoring/grafana/provisioning/alerting/alerting.yaml`). Alerts evaluate against metrics stored in VictoriaMetrics and dispatch directly to a Discord webhook channel.
+
+### 7.1 Alert Rule Inventory
+
+| Alert UID | Rule Name | Threshold Condition | For Duration | Severity | Target Entity | Actionable Response |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `alert-disk-warning` | Host Disk Exhaustion (Warning) | Host rootfs utilization > 80% | 15m | `warning` | Host (`bjorn`) | Prune stale Docker images/build cache (`docker image prune -a`), inspect large logs in `/var/log`. |
+| `alert-disk-critical` | Host Disk Exhaustion (Critical) | Host rootfs utilization > 90% | 5m | `critical` | Host (`bjorn`) | Urgent triage required to prevent filesystem switching to read-only mode. Clean disk partitions immediately. |
+| `alert-memory-starvation` | Host Memory Starvation | Available host RAM < 10% | 10m | `critical` | Host (`bjorn`) | Risk of Linux OOM killer terminating core services. Inspect memory hogs (`docker stats`) and restart leaky sidecars. |
+| `alert-container-down` | Container Down or Crash Looping | Core container metrics missing > 60s | 2m | `critical` | Core containers (`actual_server`, `vaultwarden`, `nginx-proxy-manager`, `homeassistant`) | Core workload crashed or restarting in a loop. Inspect container logs (`docker logs --tail 100 <container>`). |
+| `alert-cpu-saturation` | Sustained Host CPU Saturation | Continuous non-idle CPU > 95% | 20m | `warning` | Host (`bjorn`) | Host under persistent compute stress. Check for stuck processes or unbounded ffmpeg/ML transcoding jobs. |
+
+### 7.2 Discord Contact Point & Notification Routing
+
+- **Contact Point**: `Discord-Alerts` (receiver `discord-notifier`, type `discord`).
+- **Webhook Ingestion**: Injected dynamically via environment variable `DISCORD_WEBHOOK_URL` in `compose.yml`.
+  > [!IMPORTANT]
+  > Never commit a raw Discord webhook URL into version control. In production on `bjorn`, inject `DISCORD_WEBHOOK_URL` via Coolify environment variables or host-level `.env`.
+- **Notification Policy Timing**:
+  - `group_by: ['alertname', 'cluster', 'service']`: Correlates related alerts to prevent notification spam.
+  - `group_wait: 30s`: Waits 30s to batch concurrent state transitions into a single Discord message.
+  - `group_interval: 5m`: Minimum interval between sending notifications for an existing active group.
+  - `repeat_interval: 4h`: Re-alerts every 4 hours if a critical issue remains unacknowledged and active.
+
+### 7.3 Alert Testing & Drill Simulation Runbook
+
+To safely verify alert firing, evaluation pipelines, and Discord delivery without jeopardizing production services:
+
+#### 1. Dry-Run Discord Webhook Verification
+Test the Discord webhook URL directly:
+```bash
+curl -H "Content-Type: application/json" \
+     -X POST \
+     -d '{"content": "🧪 **Drill Test**: Grafana Alertmanager Discord connectivity test from bjorn."}' \
+     "${DISCORD_WEBHOOK_URL}"
+```
+
+#### 2. Verify Alert Rules in Grafana
+Query the Grafana Alerting API on `bjorn`:
+```bash
+# Verify provisioned alert rule groups are loaded
+curl -s -u admin:admin http://127.0.0.1:3000/api/v1/provisioning/alert-rules | jq .
+
+# Verify provisioned contact points
+curl -s -u admin:admin http://127.0.0.1:3000/api/v1/provisioning/contact-points | jq .
+```
+
+#### 3. Simulating Host Memory Starvation (Drill)
+Using `stress-ng` (or a temporary memory allocation container) restricted to a short duration:
+```bash
+# Allocate temporary memory buffer for 60 seconds to observe metric change in VictoriaMetrics
+docker run --rm -m 512m alpine sh -c "head -c 400m </dev/urandom >/dev/null"
+```
+Verify the expression `(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100` drops in the Grafana Explore tab or via VictoriaMetrics PromQL query:
+```bash
+curl -G http://127.0.0.1:8428/api/v1/query \
+     --data-urlencode 'query=(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100' | jq .
+```
+
+#### 4. Simulating Container Down Alert (Drill)
+Simulate an offline container using a non-critical test container:
+```bash
+# Launch a dummy container matching the metric pattern or inspect query:
+curl -G http://127.0.0.1:8428/api/v1/query \
+     --data-urlencode 'query=time() - container_last_seen{name=~"actual_server|vaultwarden|nginx-proxy-manager|homeassistant"} > 60' | jq .
+```
+Observe that when all containers are active, `container_last_seen` stays within 15 seconds of `time()`, producing zero active alerts.
 
