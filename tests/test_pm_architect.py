@@ -57,6 +57,27 @@ class TestFactChecker(unittest.TestCase):
         self.assertEqual(res.overall_status, "NEEDS_RESEARCH")
         self.assertTrue(len(res.unverified_assumptions) > 0)
 
+    def test_fact_check_ignores_natural_language_slashes_and_cli_tokens(self):
+        issue = {
+            "number": 104,
+            "title": "feat(core): Cross-platform support",
+            "body": "Supports macOS/Linux and Node.js/TypeScript. Handles S3/B2 sync, rx/tx stats, 24/7 uptime, and I/O rates (100 kB/s)."
+        }
+        res = self.checker.check_issue(issue)
+        self.assertEqual(res.overall_status, "VERIFIED")
+        self.assertEqual(len(res.missing_assets), 0)
+
+    def test_fact_check_recognizes_checklist_deliverables(self):
+        issue = {
+            "number": 105,
+            "title": "feat(tool): Build new healthcheck tool",
+            "body": "### Deliverables\n- [ ] `tools/healthcheck.sh`\n- [ ] Create `tools/monitor.py`"
+        }
+        res = self.checker.check_issue(issue)
+        self.assertEqual(res.overall_status, "VERIFIED")
+        self.assertTrue(any("tools/healthcheck.sh" in v for v in res.verified_items))
+        self.assertTrue(any("tools/monitor.py" in v for v in res.verified_items))
+
 
 class TestCouncilPersonas(unittest.TestCase):
     def setUp(self):
