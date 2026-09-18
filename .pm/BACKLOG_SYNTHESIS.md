@@ -1,7 +1,7 @@
 # 🏛️ Backlog Synthesis & Architectural Council Report
 
 - **Repository**: `jacobmiller22/selfhosted`
-- **Generated At**: `2026-09-18T16:48:57Z`
+- **Generated At**: `2026-09-18T17:04:45Z`
 - **Engine**: `pm architect` v1.0.0
 - **Backlog Health Score**: **79/100** 🟡 Needs Refinement
 
@@ -11,12 +11,12 @@
 
 | Metric | Count | Details |
 | :--- | :--- | :--- |
-| **Total Open Issues** | `40` | Tracked issues in repository backlog |
+| **Total Open Issues** | `39` | Tracked issues in repository backlog |
 | **Parent Stories / Epics** | `5` | Monorepo feature epics (`type:story`) |
 | **Shovel-Ready Candidates** | `20` | Unblocked leaf tasks ready for `pm ship` / `pm fleet` |
 | **Blocked Tasks** | `12` | Tasks awaiting upstream technical prerequisites |
 | **Codebase Fact-Check Clean** | `0` | Verified zero file/service path drift |
-| **Asset / Spec Drift Warnings** | `40` | Tickets referencing missing files or spec contradictions |
+| **Asset / Spec Drift Warnings** | `39` | Tickets referencing missing files or spec contradictions |
 | **Dependency Cycles** | `0` | None detected 🟢 |
 | **Proposed New Tickets** | `3` | Research spikes & information reconciliation tickets |
 
@@ -46,9 +46,6 @@
 - **Issue #42**: **AMENDED_WITH_CONSTRAINTS**
   - *Summary*: The Benevolent Dictator intervened under Axiom 2: Zero Tolerance for Data Loss (Databases require verified backups & atomic rollback). Mandating 1 strict operational safeguard(s) to protect host 'bjorn'.
   - *Safeguard*: DATA LOSS SAFEGUARD: Pre-flight verified backup and tested atomic rollback script MUST be executed prior to applying storage or schema changes.
-- **Issue #41**: **AMENDED_WITH_CONSTRAINTS**
-  - *Summary*: The Benevolent Dictator intervened under Axiom 1: Maximum Server Uptime ('bjorn' must remain online; reject all-at-once migrations). Mandating 1 strict operational safeguard(s) to protect host 'bjorn'.
-  - *Safeguard*: UPTIME MANDATE: All migrations must execute in canary or parallel side-by-side mode. Immediate cutover without verified staging validation is forbidden.
 - **Issue #39**: **AMENDED_WITH_CONSTRAINTS**
   - *Summary*: The Benevolent Dictator intervened under Axiom 4: Single-Server Catastrophe Risk (No HA cluster exists; blast radius must be contained). Mandating 0 strict operational safeguard(s) to protect host 'bjorn'.
 - **Issue #37**: **AMENDED_WITH_CONSTRAINTS**
@@ -132,45 +129,44 @@ Audited all ticket descriptions against repository files, compose configurations
 
 | Issue | Overall Status | Verified Assets | Flags & Contradictions |
 | :---: | :---: | :--- | :--- |
-| [#48](https://github.com/jacobmiller22/selfhosted/issues/48) | `🟡 DRIFT` | • Planned deliverable: CI/CD<br>• Planned deliverable: docs/CI_CD_COOLIFY_PIPELINE.md | ⚠️ Missing path: pm/HANDOFF.md<br>⚠️ Missing path: README.md |
-| [#47](https://github.com/jacobmiller22/selfhosted/issues/47) | `🟡 DRIFT` | • File: tools/backup-runner/<br>• File: actual/backup<br>• File: tools/backup-runner | ⚠️ Missing path: github/workflows/ci.yml |
-| [#46](https://github.com/jacobmiller22/selfhosted/issues/46) | `🟡 DRIFT` | • File: vaultwarden/compose.yml<br>• File: actual/compose.yml<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: Coolify/Traefik<br>⚠️ Missing path: untracked/dirty |
+| [#48](https://github.com/jacobmiller22/selfhosted/issues/48) | `🟡 DRIFT` | • Planned deliverable: CI/CD<br>• Planned deliverable: docs/CI_CD_COOLIFY_PIPELINE.md | ⚠️ Missing path: README.md<br>⚠️ Missing path: pm/HANDOFF.md |
+| [#47](https://github.com/jacobmiller22/selfhosted/issues/47) | `🟡 DRIFT` | • File: actual/backup/<br>• File: actual/backup<br>• File: actual/tools/auto-categorizer | ⚠️ Missing path: github/workflows/ci.yml |
+| [#46](https://github.com/jacobmiller22/selfhosted/issues/46) | `🟡 DRIFT` | • File: actual/compose.yml<br>• File: vaultwarden/compose.yml<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: scrubbed/mock<br>⚠️ Missing path: Coolify/Traefik |
 | [#45](https://github.com/jacobmiller22/selfhosted/issues/45) | `🟡 DRIFT` | • Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | ⚠️ Missing path: HTTP/2<br>⚠️ Missing path: jc21/nginx-proxy-manager |
-| [#44](https://github.com/jacobmiller22/selfhosted/issues/44) | `🟡 DRIFT` | • Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml)<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: homeassistant (homeassistant/compose.yml) | ⚠️ Missing path: jacobmiller22/selfhosted<br>⚠️ Missing path: README.md |
-| [#43](https://github.com/jacobmiller22/selfhosted/issues/43) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: coolify.cloud.jacobmiller22.com/webhooks/source/github/events<br>⚠️ Missing path: jacobmiller22/selfhosted |
-| [#42](https://github.com/jacobmiller22/selfhosted/issues/42) | `🟡 DRIFT` | • Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml)<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: homeassistant (homeassistant/compose.yml) | ⚠️ Missing path: jacobmiller22/selfhosted<br>⚠️ Missing path: 80/443 |
-| [#41](https://github.com/jacobmiller22/selfhosted/issues/41) | `🟡 DRIFT` | • Planned deliverable: research/spike<br>• Planned deliverable: ~/.gemini/config/skills/pm/SKILL.md<br>• Planned deliverable: gemini/config/skills/pm/SKILL.md | ⚠️ Missing path: pm/BACKLOG_SYNTHESIS.md<br>⚠️ Missing path: creation/updates |
-| [#40](https://github.com/jacobmiller22/selfhosted/issues/40) | `🟡 DRIFT` | • File: tools/<br>• File: tools/backup-runner<br>• File: obsidian/ | ⚠️ Missing path: agents/rules<br>⚠️ Missing path: docs/INFRASTRUCTURE_TOPOLOGY.md<br>❓ assume localhost**, and must systematically **verify which remote host a given service is hosted on** before executing runtime inspection, logs, restarts, or deployment commands |
-| [#39](https://github.com/jacobmiller22/selfhosted/issues/39) | `🟡 DRIFT` | • Planned deliverable: docs/STAGING_ARCHITECTURE.md<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: memory/CPU<br>⚠️ Missing path: 80/443 |
-| [#38](https://github.com/jacobmiller22/selfhosted/issues/38) | `🟡 DRIFT` | • Planned deliverable: tools/staging/verify-vaultwarden-upgrade.sh<br>• Planned deliverable: tools/staging/verify-vaultwarden-upgrade.sh <new-image-tag><br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: 7278/alive<br>⚠️ Missing path: vw-stage-data/db.sqlite3 |
-| [#37](https://github.com/jacobmiller22/selfhosted/issues/37) | `🟡 DRIFT` | • Planned deliverable: tools/staging/test-actual-staging.sh<br>• Service: actual-auto-categorizer (actual/compose.yml) | ⚠️ Missing path: ACTUAL_SERVER_URL=http://localhost:5006<br>⚠️ Missing path: categorizer/importer |
-| [#36](https://github.com/jacobmiller22/selfhosted/issues/36) | `🟡 DRIFT` | • Planned deliverable: tools/staging/hydrate.sh<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: sends/<br>⚠️ Missing path: tools/staging/hydrate.sh actual [--start] |
+| [#44](https://github.com/jacobmiller22/selfhosted/issues/44) | `🟡 DRIFT` | • Service: homeassistant (homeassistant/compose.yml)<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | ⚠️ Missing path: NULL/empty<br>⚠️ Missing path: jacobmiller22/selfhosted |
+| [#43](https://github.com/jacobmiller22/selfhosted/issues/43) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: build/deploy<br>⚠️ Missing path: clone/fetch |
+| [#42](https://github.com/jacobmiller22/selfhosted/issues/42) | `🟡 DRIFT` | • Service: homeassistant (homeassistant/compose.yml)<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | ⚠️ Missing path: jacobmiller22/selfhosted<br>⚠️ Missing path: 80/443 |
+| [#40](https://github.com/jacobmiller22/selfhosted/issues/40) | `🟡 DRIFT` | • File: obsidian/<br>• File: tools/backup-runner<br>• File: nginx-proxy-manager/ | ⚠️ Missing path: docs/INFRASTRUCTURE_TOPOLOGY.md<br>⚠️ Missing path: Users/jacobmiller22/projects/selfhosted/.cursor<br>❓ assume localhost**, and must systematically **verify which remote host a given service is hosted on** before executing runtime inspection, logs, restarts, or deployment commands |
+| [#39](https://github.com/jacobmiller22/selfhosted/issues/39) | `🟡 DRIFT` | • Planned deliverable: docs/STAGING_ARCHITECTURE.md<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: 80/443<br>⚠️ Missing path: 2/3 |
+| [#38](https://github.com/jacobmiller22/selfhosted/issues/38) | `🟡 DRIFT` | • Planned deliverable: tools/staging/verify-vaultwarden-upgrade.sh <new-image-tag><br>• Planned deliverable: tools/staging/verify-vaultwarden-upgrade.sh<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: vw-stage-data/db.sqlite3<br>⚠️ Missing path: 7278/alive |
+| [#37](https://github.com/jacobmiller22/selfhosted/issues/37) | `🟡 DRIFT` | • Planned deliverable: tools/staging/test-actual-staging.sh<br>• Service: actual-auto-categorizer (actual/compose.yml) | ⚠️ Missing path: categorizer/importer<br>⚠️ Missing path: ACTUAL_SERVER_URL=http://localhost:5006 |
+| [#36](https://github.com/jacobmiller22/selfhosted/issues/36) | `🟡 DRIFT` | • Planned deliverable: tools/staging/hydrate.sh<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: Unit/integration<br>⚠️ Missing path: attachments/ |
 | [#35](https://github.com/jacobmiller22/selfhosted/issues/35) | `🟡 DRIFT` | • File: vaultwarden/compose.yml<br>• File: actual/compose.yml<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: DOMAIN="http://localhost:7278" |
-| [#34](https://github.com/jacobmiller22/selfhosted/issues/34) | `🟡 DRIFT` | • File: tools/backup-runner/<br>• Planned deliverable: compose.yml<br>• File: tools/backup-runner | ⚠️ Missing path: backup.sh<br>⚠️ Missing path: feat(backup): Build reusable Alpine backup runner image and declarative strategy engine in tools/backup-runner |
-| [#33](https://github.com/jacobmiller22/selfhosted/issues/33) | `🟡 DRIFT` | • File: tools/backup-runner<br>• File: docs/BACKUP_ARCHITECTURE.md<br>• File: docs/RESTORE.md | ⚠️ Missing path: tools/backup-runner/README.md |
-| [#32](https://github.com/jacobmiller22/selfhosted/issues/32) | `🟡 DRIFT` | • File: homeassistant/<br>• File: homeassistant/compose.yml<br>• File: nginx-proxy-manager/compose.yml | ⚠️ Missing path: config:/config:ro<br>⚠️ Missing path: hooks/pre-backup.sh |
-| [#31](https://github.com/jacobmiller22/selfhosted/issues/31) | `🟡 DRIFT` | • File: actual/backup/entrypoint.sh<br>• File: tools/backup-runner<br>• File: actual/backup/Dockerfile | ⚠️ Missing path: tools/backup-runner/backup-engine.sh<br>⚠️ Missing path: BACKUP_SOURCE_DIR=/tmp/actual-data |
-| [#30](https://github.com/jacobmiller22/selfhosted/issues/30) | `🟡 DRIFT` | • File: tools/backup-runner/<br>• File: tools/backup-runner<br>• File: docs/RESTORE.md | ⚠️ Missing path: run/secrets/env_vars<br>⚠️ Missing path: hooks/pre-backup.sh |
-| [#29](https://github.com/jacobmiller22/selfhosted/issues/29) | `🟡 DRIFT` | • Planned deliverable: RTO/RPO<br>• File: docs/RESTORE.md<br>• Planned deliverable: manual/automated | ⚠️ Missing path: docs/DISASTER_RECOVERY_EXERCISES.md |
-| [#28](https://github.com/jacobmiller22/selfhosted/issues/28) | `🟡 DRIFT` | • Planned deliverable: tools/backup-dr/dr-drill.sh | ⚠️ Missing path: RTO/RPO<br>⚠️ Missing path: stdout/stderr |
-| [#27](https://github.com/jacobmiller22/selfhosted/issues/27) | `🟡 DRIFT` | • Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: curl -fsS http://localhost:7278/alive<br>⚠️ Missing path: 200/302 |
-| [#26](https://github.com/jacobmiller22/selfhosted/issues/26) | `🟡 DRIFT` | • Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: sends/<br>⚠️ Missing path: tools/backup-dr/verify-db-integrity.sh |
+| [#34](https://github.com/jacobmiller22/selfhosted/issues/34) | `🟡 DRIFT` | • Planned deliverable: compose.yml<br>• File: tools/backup-runner<br>• File: tools/backup-runner/ | ⚠️ Missing path: backup.sh<br>⚠️ Missing path: entrypoint.sh |
+| [#33](https://github.com/jacobmiller22/selfhosted/issues/33) | `🟡 DRIFT` | • File: tools/backup-runner<br>• File: docs/RESTORE.md<br>• File: docs/BACKUP_ARCHITECTURE.md | ⚠️ Missing path: tools/backup-runner/README.md |
+| [#32](https://github.com/jacobmiller22/selfhosted/issues/32) | `🟡 DRIFT` | • File: nginx-proxy-manager/compose.yml<br>• File: tools/backup-runner<br>• File: nginx-proxy-manager/ | ⚠️ Missing path: keys.json<br>⚠️ Missing path: hooks/pre-backup.sh |
+| [#31](https://github.com/jacobmiller22/selfhosted/issues/31) | `🟡 DRIFT` | • File: vaultwarden/backup<br>• File: vaultwarden/backup/<br>• File: tools/backup-runner | ⚠️ Missing path: BACKUP_SOURCE_DIR=/tmp/vw-data<br>⚠️ Missing path: tmp/actual-data |
+| [#30](https://github.com/jacobmiller22/selfhosted/issues/30) | `🟡 DRIFT` | • File: docs/RESTORE.md<br>• File: tools/backup-runner<br>• File: tools/backup-runner/ | ⚠️ Missing path: hooks/pre-backup.sh<br>⚠️ Missing path: tools/backup-runner/Dockerfile |
+| [#29](https://github.com/jacobmiller22/selfhosted/issues/29) | `🟡 DRIFT` | • Planned deliverable: manual/automated<br>• File: docs/RESTORE.md<br>• Planned deliverable: RTO/RPO | ⚠️ Missing path: docs/DISASTER_RECOVERY_EXERCISES.md |
+| [#28](https://github.com/jacobmiller22/selfhosted/issues/28) | `🟡 DRIFT` | • Planned deliverable: tools/backup-dr/dr-drill.sh | ⚠️ Missing path: stdout/stderr<br>⚠️ Missing path: RTO/RPO |
+| [#27](https://github.com/jacobmiller22/selfhosted/issues/27) | `🟡 DRIFT` | • Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: 200/302<br>⚠️ Missing path: 7278/alive |
+| [#26](https://github.com/jacobmiller22/selfhosted/issues/26) | `🟡 DRIFT` | • Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: tools/backup-dr/verify-db-integrity.sh<br>⚠️ Missing path: attachments/ |
 | [#25](https://github.com/jacobmiller22/selfhosted/issues/25) | `🟡 DRIFT` | • File: tools/backup-runner/test-backup-restore.sh | ⚠️ Missing path: S3/B2<br>⚠️ Missing path: tools/backup-dr/pull-and-decrypt.sh |
-| [#24](https://github.com/jacobmiller22/selfhosted/issues/24) | `🟡 DRIFT` | • Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: docs(dr): Failover Exercise Runbook, Staging Verification Procedures & RTO/RPO SLAs<br>⚠️ Missing path: S3/B2 |
-| [#23](https://github.com/jacobmiller22/selfhosted/issues/23) | `🟡 DRIFT` | • Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml)<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: actual_server (actual/compose.yml) | ⚠️ Missing path: container/mount<br>⚠️ Missing path: monitoring/grafana/provisioning/alerting |
-| [#22](https://github.com/jacobmiller22/selfhosted/issues/22) | `🟡 DRIFT` | • File: <br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml)<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: Read/write<br>⚠️ Missing path: upload/download |
-| [#21](https://github.com/jacobmiller22/selfhosted/issues/21) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: monitoring/victoriametrics/prometheus.yml<br>⚠️ Missing path: etc/prometheus/prometheus.yml |
-| [#20](https://github.com/jacobmiller22/selfhosted/issues/20) | `🟡 DRIFT` | • Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: dev/disk<br>⚠️ Missing path: metrics |
-| [#19](https://github.com/jacobmiller22/selfhosted/issues/19) | `🟡 DRIFT` | • Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | ⚠️ Missing path: monitoring/victoriametrics/prometheus.yml<br>⚠️ Missing path: docs/MONITORING_ARCHITECTURE.md |
-| [#18](https://github.com/jacobmiller22/selfhosted/issues/18) | `🟡 DRIFT` | • File: <br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml)<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: rx/tx<br>⚠️ Missing path: grafana/grafana-oss |
-| [#17](https://github.com/jacobmiller22/selfhosted/issues/17) | `🟡 DRIFT` | • File: docs/BACKUP_ARCHITECTURE.md<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: actual-auto-categorizer (actual/compose.yml) | ⚠️ Missing path: CPU/memory<br>⚠️ Missing path: Passwords/2FA |
-| [#14](https://github.com/jacobmiller22/selfhosted/issues/14) | `🟡 DRIFT` | • Planned deliverable: budget-upload<br>• Planned deliverable: agents/skills/budget-upload | ⚠️ Missing path: agents/skills/budget-upload/SKILL.md<br>⚠️ Missing path: @actual-app/api |
+| [#24](https://github.com/jacobmiller22/selfhosted/issues/24) | `🟡 DRIFT` | • Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: B2/S3<br>⚠️ Missing path: S3/B2 |
+| [#23](https://github.com/jacobmiller22/selfhosted/issues/23) | `🟡 DRIFT` | • Service: homeassistant (homeassistant/compose.yml)<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | ⚠️ Missing path: container/mount<br>⚠️ Missing path: monitoring/grafana/provisioning/alerting/ |
+| [#22](https://github.com/jacobmiller22/selfhosted/issues/22) | `🟡 DRIFT` | • File: <br>• Service: homeassistant (homeassistant/compose.yml)<br>• Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: grafana/provisioning<br>⚠️ Missing path: etc/grafana/provisioning |
+| [#21](https://github.com/jacobmiller22/selfhosted/issues/21) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: monitoring/victoriametrics/prometheus.yml<br>⚠️ Missing path: -storageDataPath=/victoria-metrics-data |
+| [#20](https://github.com/jacobmiller22/selfhosted/issues/20) | `🟡 DRIFT` | • Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: gcr.io/cadvisor/cadvisor:latest<br>⚠️ Missing path: --path.sysfs=/host/sys |
+| [#19](https://github.com/jacobmiller22/selfhosted/issues/19) | `🟡 DRIFT` | • Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | ⚠️ Missing path: monitoring/victoriametrics/prometheus.yml<br>⚠️ Missing path: monitoring/grafana/provisioning/dashboards/ |
+| [#18](https://github.com/jacobmiller22/selfhosted/issues/18) | `🟡 DRIFT` | • File: <br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: nginx-proxy-manager (nginx-proxy-manager/compose.yml) | ⚠️ Missing path: storage/memory<br>⚠️ Missing path: metrics |
+| [#17](https://github.com/jacobmiller22/selfhosted/issues/17) | `🟡 DRIFT` | • File: docs/BACKUP_ARCHITECTURE.md<br>• Service: vaultwarden (vaultwarden/compose.yml)<br>• Service: actual-auto-categorizer (actual/compose.yml) | ⚠️ Missing path: NLP/ONNX<br>⚠️ Missing path: Passwords/2FA |
+| [#14](https://github.com/jacobmiller22/selfhosted/issues/14) | `🟡 DRIFT` | • Planned deliverable: budget-upload<br>• Planned deliverable: agents/skills/budget-upload | ⚠️ Missing path: mappings.json<br>⚠️ Missing path: actual-app/api |
 | [#11](https://github.com/jacobmiller22/selfhosted/issues/11) | `🟡 DRIFT` | • File: actual/compose.yml | ⚠️ Missing path: Node.js/TypeScript |
-| [#10](https://github.com/jacobmiller22/selfhosted/issues/10) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: cleared/pending<br>⚠️ Missing path: push/email |
-| [#9](https://github.com/jacobmiller22/selfhosted/issues/9) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: actual-app/api<br>⚠️ Missing path: @actual-app/api |
-| [#8](https://github.com/jacobmiller22/selfhosted/issues/8) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: positive/negative<br>⚠️ Missing path: mappings.json |
+| [#10](https://github.com/jacobmiller22/selfhosted/issues/10) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: push/email<br>⚠️ Missing path: cleared/pending |
+| [#9](https://github.com/jacobmiller22/selfhosted/issues/9) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: @actual-app/api<br>⚠️ Missing path: actual-app/api |
+| [#8](https://github.com/jacobmiller22/selfhosted/issues/8) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: mappings.json<br>⚠️ Missing path: PNG/JPEG/WEBP |
 | [#5](https://github.com/jacobmiller22/selfhosted/issues/5) | `🟡 DRIFT` | • Service: vaultwarden (vaultwarden/compose.yml) | ⚠️ Missing path: macOS/Linux |
-| [#4](https://github.com/jacobmiller22/selfhosted/issues/4) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: data/keys.json<br>⚠️ Missing path: data/database.sqlite |
+| [#4](https://github.com/jacobmiller22/selfhosted/issues/4) | `🟡 DRIFT` | *None declared* | ⚠️ Missing path: B2/S3<br>⚠️ Missing path: etc/letsencrypt |
 | [#3](https://github.com/jacobmiller22/selfhosted/issues/3) | `🟡 DRIFT` | • Planned deliverable: Coolify/Discord | ⚠️ Missing path: container/task |
 
 ---
