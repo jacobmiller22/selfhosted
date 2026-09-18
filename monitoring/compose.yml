@@ -1,29 +1,29 @@
 services:
-  victoriametrics:
-    image: victoriametrics/victoria-metrics:v1.102.1
-    container_name: victoriametrics
+  victoria-metrics:
+    image: victoriametrics/victoria-metrics:v1.99.0
+    container_name: victoria-metrics
     restart: unless-stopped
     command:
       - -promscrape.config=/etc/prometheus/prometheus.yml
       - -storageDataPath=/victoria-metrics-data
       - -retentionPeriod=90d
-      - -memory.allowedBytes=64MB
+      - -search.maxQueryDuration=30s
     volumes:
-      - vm-data:/victoria-metrics-data
+      - victoria-data:/victoria-metrics-data
       - ./victoriametrics/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
-      - "127.0.0.1:8428:8428"
+      - "8428:8428"
     networks:
       - monitoring
     deploy:
       resources:
         limits:
-          cpus: '0.30'
-          memory: 64M
+          cpus: '0.25'
+          memory: 128M
         reservations:
-          memory: 32M
-    mem_limit: 64m
-    cpus: 0.3
+          memory: 64M
+    mem_limit: 128m
+    cpus: 0.25
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8428/health"]
       interval: 30s
@@ -126,7 +126,7 @@ networks:
     external: true
 
 volumes:
-  vm-data:
-    name: vm-data
+  victoria-data:
+    name: victoria-data
   grafana-data:
     name: grafana-data
