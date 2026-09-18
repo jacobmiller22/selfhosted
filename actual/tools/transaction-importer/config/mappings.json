@@ -1,7 +1,18 @@
 {
   "accountNumbers": {
     "6404": "6243aa92-178b-48cb-9332-197db4057b86",
-    "9661": "6fd7b088-005e-4254-9d3c-3eb231a3f66c"
+    "9661": "6fd7b088-005e-4254-9d3c-3eb231a3f66c",
+    "6839": "5c6bb321-f02f-4fe1-9028-7a19b449bc88"
+  },
+  "accountAliases": {
+    "quicksilver": "32f64b7e-791b-43e5-a0ae-55d40be55821",
+    "savor": "143958c8-f172-41f3-b6f6-5c4dac4b785b",
+    "discover": "5c9052d0-2b08-4c2b-b448-af95c66eb04a",
+    "venture": "b2d49378-ea68-4810-a5e0-fc96d0a82d68",
+    "checking": "6fd7b088-005e-4254-9d3c-3eb231a3f66c",
+    "joint savings": "6243aa92-178b-48cb-9332-197db4057b86",
+    "savings": "6243aa92-178b-48cb-9332-197db4057b86",
+    "south state": "2d59a2cf-9600-4fb8-a462-ec422444551e"
   },
   "filenamePatterns": {},
   "csvProfiles": {

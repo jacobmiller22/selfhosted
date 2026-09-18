@@ -8,7 +8,7 @@ dotenv.config();
 export function getConfig() {
     const serverUrl = process.env.ACTUAL_SERVER_URL || 'https://budget.cloud.jacobmiller22.com';
     const password = process.env.ACTUAL_PASSWORD || '';
-    const syncId = process.env.ACTUAL_SYNC_ID || 'a2bf28aa-7ae9-4948-837c-346f4e91d346';
+    const syncId = process.env.ACTUAL_SYNC_ID || 'd87856b0-5fd1-4b3e-85bc-bf1e9244d4be';
     const dataDir = process.env.ACTUAL_DATA_DIR;
     const rootConfigDir = path.resolve(__dirname, '../config');
     if (!fs.existsSync(rootConfigDir)) {
