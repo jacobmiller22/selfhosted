@@ -147,24 +147,121 @@ class RealityFactChecker:
 
         return inventory
 
+    KNOWN_EXTENSIONS = {
+        '.md', '.yml', '.yaml', '.sh', '.py', '.ts', '.js', '.json',
+        '.sql', '.env', '.txt', '.conf', '.toml', '.onnx', '.sqlite',
+        '.sqlite3', '.db', '.pem', '.key', '.crt', '.html', '.css',
+        '.dockerfile', '.template'
+    }
+
+    NON_PATH_TOKENS = {
+        'http://', 'https://', 'github.com', 'gh ', 'git ', 'wt ',
+        'curl ', 'docker ', 'sqlite3 ', 'python', 'pnpm ', 'npm ',
+        'origin/', 'feature/', 'fix/', '<', '>', '{', '}', '$', '*',
+        ':latest', 'gcr.io', 'docker.io', 'ghcr.io'
+    }
+
+    RUNTIME_DATA_PATTERNS = {
+        'db.sqlite3', 'account.sqlite', 'database.sqlite', 'home-assistant_v2.db',
+        'rsa_key.pem', 'keys.json', 'coolify.sql', 'prometheus.yml'
+    }
+
+    def is_valid_candidate_path(self, p: str) -> bool:
+        """Filter out non-paths (English terms with slashes, URLs, flags, volume mounts)."""
+        p = p.strip().strip('\'\"`.,;:()[]{}')
+        if not p:
+            return False
+        if any(tok in p for tok in self.NON_PATH_TOKENS):
+            return False
+        if ' ' in p or '=' in p or '\n' in p:
+            return False
+        if re.match(r'^\d+/\d+$', p):  # e.g. 80/443, 24/7, 2/3
+            return False
+        if re.match(r'^[A-Z0-9_\-]+/[A-Z0-9_\-]+$', p) and not any(p.endswith(ext) for ext in self.KNOWN_EXTENSIONS):
+            # Acronym pairs like S3/B2, I/O, CPU/RAM, RTO/RPO, UID/GID, WAL/RSA
+            return False
+        if re.search(r':\w+$', p):  # Docker volume mounts :ro, :rw
+            return False
+        if p.endswith(('/s', '/min', '/h', '/d')):  # Units kB/s, bytes/s
+            return False
+        if p.startswith(('jacobmiller22/', 'coolify.', 'gemini/', '.gemini/', 'downloads/', 'Downloads/')) or p.startswith('~/'):
+            return False
+
+        has_ext = any(p.endswith(ext) for ext in self.KNOWN_EXTENSIONS)
+        top_dirs = {d.split('/')[0] for d in self.inventory.directories} | {'.pm', '.github'}
+        parts = p.lstrip('./').split('/')
+        first_part = parts[0]
+        starts_top_dir = first_part in top_dirs
+
+        if has_ext:
+            return True
+        if starts_top_dir and len(parts) > 1:
+            return True
+        return False
+
     def extract_potential_paths(self, text: str) -> Set[str]:
-        """Extract path-like strings from markdown or issue body."""
+        """Extract valid path-like strings from markdown or issue body."""
         candidates = set()
-        # Find backtick strings: `path/to/file`
+        # Find backtick strings: `path/to/file` or `command path/to/file`
         backticks = re.findall(r'`([^`\n]+)`', text)
         for b in backticks:
             b = b.strip()
-            if ('/' in b or b.endswith(('.yml', '.yaml', '.sh', '.md', '.json', '.py', '.ts', '.js', '.onnx'))) and not b.startswith(('http://', 'https://', 'gh ')):
-                candidates.add(b.lstrip('./'))
+            tokens = b.split()
+            for tok in tokens:
+                tok = tok.strip('\'\"`.,;:()[]{}')
+                if self.is_valid_candidate_path(tok):
+                    candidates.add(tok.lstrip('./'))
 
         # Find raw markdown paths: e.g. docs/RESTORE.md or actual/compose.yml
         raw_paths = re.findall(r'\b([a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\./]+)\b', text)
         for p in raw_paths:
-            p = p.strip().rstrip('.,;:()')
-            if not p.startswith(('http://', 'https://', 'github.com')):
+            p = p.strip('.,;:()[]{}')
+            if self.is_valid_candidate_path(p):
                 candidates.add(p.lstrip('./'))
 
         return candidates
+
+    def is_deliverable_or_runtime_asset(self, path: str, combined_text: str) -> bool:
+        """Check if path is a planned deliverable in the issue or runtime data asset."""
+        basename = Path(path).name
+        if basename in self.RUNTIME_DATA_PATTERNS or path.startswith(('tmp/', 'staging/', 'vw-stage-data/')):
+            return True
+
+        escaped = re.escape(path)
+
+        # 1. If explicitly marked as modifying or removing an existing file, it must exist
+        if re.search(rf'\b(?:modify|update|edit|refactor|patch|delete|remove)\b[^.\n]*?{escaped}', combined_text, re.IGNORECASE):
+            return False
+
+        # 2. Check for action verbs or checklist items on the same line
+        pattern = rf'(?:\[NEW\]|create|author|implement|add|new\s+file|deliverables?:?|introduce|write|provision|scaffold|generate|\[\s*[\sx]\s*\])[^.\n]*?{escaped}'
+        if re.search(pattern, combined_text, re.IGNORECASE):
+            return True
+
+        pattern_rev = rf'{escaped}[^.\n]*?(?:will\s+be\s+created|created|implemented|added|as\s+a\s+deliverable)'
+        if re.search(pattern_rev, combined_text, re.IGNORECASE):
+            return True
+
+        # 3. Check if under a Deliverables / Scope / Tasks / Acceptance Criteria section
+        lines = combined_text.split('\n')
+        in_deliverables_section = False
+        for line in lines:
+            line_strip = line.strip()
+            if re.match(r'^#+\s*(?:deliverables?|scope|tasks?|acceptance criteria|artifacts|key requirements|deliverable)', line_strip, re.IGNORECASE):
+                in_deliverables_section = True
+                continue
+            elif re.match(r'^#+\s*', line_strip):
+                in_deliverables_section = False
+                continue
+            if in_deliverables_section and (path in line or basename in line):
+                return True
+
+        # 4. Check if in issue title for feat/docs
+        first_line = lines[0] if lines else ''
+        if re.match(r'^(?:feat|docs|chore|spike)\b', first_line, re.IGNORECASE) and (path in first_line or basename in first_line):
+            return True
+
+        return False
 
     def extract_services_mentioned(self, text: str) -> Set[str]:
         """Extract service names mentioned in issue body."""
@@ -191,16 +288,12 @@ class RealityFactChecker:
         # 1. Fact-check referenced file paths
         paths = self.extract_potential_paths(combined_text)
         for path in paths:
-            # Check if this path is marked as a new deliverable in the issue
-            is_planned_new = bool(re.search(
-                rf'(\[NEW\]|create|author|implement|add|new\s+file).*?{re.escape(path)}',
-                combined_text,
-                re.IGNORECASE
-            ))
-            
             exists = (path in self.inventory.files or 
                       path in self.inventory.directories or 
-                      (self.repo_root / path).exists())
+                      (self.repo_root / path).exists() or
+                      (self.repo_root / f".{path}").exists())
+
+            is_planned_new = self.is_deliverable_or_runtime_asset(path, combined_text)
 
             if exists:
                 findings.append(FactCheckFinding(
@@ -215,20 +308,17 @@ class RealityFactChecker:
                     entity_type="file",
                     name=path,
                     status="VERIFIED",
-                    details=f"Planned new deliverable: '{path}'."
+                    details=f"Planned deliverable or container runtime asset: '{path}'."
                 ))
                 verified_items.append(f"Planned deliverable: {path}")
             else:
-                # If path looks like an assumed existing dependency that is missing
-                # Filter out obvious false positives like git commands, flags, or placeholder tokens
-                if not any(token in path for token in ['origin/', 'feature/', '<', '>', '{', '}', '$', '*']):
-                    findings.append(FactCheckFinding(
-                        entity_type="file",
-                        name=path,
-                        status="MISSING",
-                        details=f"Referenced path '{path}' does not exist in repository."
-                    ))
-                    missing_assets.append(f"Missing path: {path}")
+                findings.append(FactCheckFinding(
+                    entity_type="file",
+                    name=path,
+                    status="MISSING",
+                    details=f"Referenced path '{path}' does not exist in repository."
+                ))
+                missing_assets.append(f"Missing path: {path}")
 
         # 2. Fact-check Docker Compose Services
         services_mentioned = self.extract_services_mentioned(combined_text)
