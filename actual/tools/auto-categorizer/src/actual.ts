@@ -124,3 +124,51 @@ export async function disconnectActual(): Promise<void> {
   await api.shutdown();
   console.log("✓ Disconnected from Actual API");
 }
+
+export function exportDatabaseSnapshot(exportPath: string, cacheDataDir?: string): boolean {
+  try {
+    const cacheDir = cacheDataDir || path.resolve(process.cwd(), ".actual-cache");
+    if (!fs.existsSync(cacheDir)) {
+      console.warn(`[Snapshot] Cache directory does not exist: ${cacheDir}`);
+      return false;
+    }
+    const entries = fs.readdirSync(cacheDir, { withFileTypes: true });
+    let dbSourcePath: string | null = null;
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const candidate = path.join(cacheDir, entry.name, "db.sqlite");
+        if (fs.existsSync(candidate)) {
+          dbSourcePath = candidate;
+          break;
+        }
+      }
+    }
+    if (!dbSourcePath) {
+      const direct = path.join(cacheDir, "db.sqlite");
+      if (fs.existsSync(direct)) dbSourcePath = direct;
+    }
+    if (!dbSourcePath) {
+      console.warn(`[Snapshot] Could not find db.sqlite in ${cacheDir}`);
+      return false;
+    }
+
+    const exportDir = path.dirname(exportPath);
+    if (!fs.existsSync(exportDir)) {
+      fs.mkdirSync(exportDir, { recursive: true });
+    }
+
+    const tempExportPath = `${exportPath}.tmp-${Date.now()}`;
+    fs.copyFileSync(dbSourcePath, tempExportPath);
+    try {
+      fs.chmodSync(tempExportPath, 0o644);
+    } catch (_) {}
+    fs.renameSync(tempExportPath, exportPath);
+    const size = fs.statSync(exportPath).size;
+    console.log(`✓ Exported clean SQLite snapshot to ${exportPath} (${size} bytes)`);
+    return true;
+  } catch (err) {
+    console.error(`❌ Failed to export database snapshot:`, err);
+    return false;
+  }
+}
+

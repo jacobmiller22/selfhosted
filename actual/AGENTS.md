@@ -63,6 +63,16 @@ fetch(\"http://localhost:3080/health\").then(r => r.json()).then(console.log).ca
 ssh bjorn "docker exec actual-auto-categorizer node -e '
 fetch(\"http://localhost:3080/api/sync\", { method: \"POST\" }).then(r => r.json()).then(console.log).catch(console.error);
 '"
+
+# Check analytics snapshot status
+ssh bjorn "docker exec actual-auto-categorizer node -e '
+fetch(\"http://localhost:3080/api/export\").then(r => r.json()).then(console.log).catch(console.error);
+'"
+
+# Trigger on-demand analytics snapshot export
+ssh bjorn "docker exec actual-auto-categorizer node -e '
+fetch(\"http://localhost:3080/api/export\", { method: \"POST\" }).then(r => r.json()).then(console.log).catch(console.error);
+'"
 ```
 
 ### Hot-Patching Workflow (Fast Verification)

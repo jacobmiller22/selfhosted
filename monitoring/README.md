@@ -29,8 +29,9 @@ monitoring/
 │   └── prometheus.yml                        # Scrape configuration for Node Exporter, cAdvisor, VM
 └── grafana/
     ├── provisioning/
+    │   ├── datasources/
     │   │   ├── datasources.yml               # Automated VictoriaMetrics Prometheus datasource
-    │   │   └── victoriametrics.yml           # Secondary VictoriaMetrics datasource alias
+    │   │   └── actual-sqlite.yml             # Read-only SQLite datasource for Actual Budget analytics
     │   ├── dashboards/
     │   │   └── dashboards.yml                # File provider mapping for JSON dashboards
     │   └── alerting/
@@ -38,7 +39,8 @@ monitoring/
     └── dashboards/
         ├── README.md                         # Dashboard templates, JSON definitions, and IDs
         ├── host-metrics.json                 # Host overview & capacity dashboard (UID: host-overview)
-        └── container-metrics.json            # Container telemetry leaderboard (UID: container-telemetry)
+        ├── container-metrics.json            # Container telemetry leaderboard (UID: container-telemetry)
+        └── actual-budget-analytics.json      # Advanced Actual Budget SQLite Analytics (UID: actual-budget-analytics)
 ```
 
 ---

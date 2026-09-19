@@ -8,6 +8,7 @@ import fs from "fs";
 import {
   connectActual,
   disconnectActual,
+  exportDatabaseSnapshot,
   fetchAllTransactions,
   fetchAccounts,
   fetchPayees,
@@ -34,6 +35,7 @@ const CRON_SCHEDULE = process.env.CRON_SCHEDULE || "*/15 * * * *"; // Every 15 m
 const PORT = parseInt(process.env.PORT || "3080", 10);
 const MODELS_DIR = process.env.MODELS_DIR || path.resolve(process.cwd(), "src/models");
 const DEFAULT_DRY_RUN = process.env.DRY_RUN === "true";
+const ANALYTICS_EXPORT_PATH = process.env.ANALYTICS_EXPORT_PATH || path.resolve(process.cwd(), "export/db.sqlite");
 
 const predictor = new OnnxPredictorEngine(MODELS_DIR);
 let isSyncing = false;
@@ -475,6 +477,11 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
     try {
       await disconnectActual();
     } catch (_) {}
+    try {
+      exportDatabaseSnapshot(ANALYTICS_EXPORT_PATH);
+    } catch (err) {
+      console.warn(`[Snapshot] Post-sync snapshot export failed: ${(err as Error).message}`);
+    }
     isSyncing = false;
   }
 
@@ -500,12 +507,21 @@ app.use(express.json());
 const upload = multer({ dest: path.resolve(process.cwd(), ".tmp-uploads") });
 
 app.get("/health", (req, res) => {
+  const exportExists = fs.existsSync(ANALYTICS_EXPORT_PATH);
+  const exportStats = exportExists ? fs.statSync(ANALYTICS_EXPORT_PATH) : null;
+
   res.json({
     status: "ok",
     isSyncing,
     lastSyncTime,
     dryRunModeDefault: DEFAULT_DRY_RUN,
     modelsDir: MODELS_DIR,
+    analyticsExport: {
+      path: ANALYTICS_EXPORT_PATH,
+      exists: exportExists,
+      sizeBytes: exportStats ? exportStats.size : 0,
+      modifiedAt: exportStats ? exportStats.mtime.toISOString() : null
+    },
     lastReportSummary: latestReport
       ? {
           timestamp: latestReport.timestamp,
@@ -524,6 +540,32 @@ app.get("/api/reports/latest", (req, res) => {
     return res.status(404).json({ error: "No dry-run report available yet. Run /api/sync first." });
   }
   res.json(latestReport);
+});
+
+app.get("/api/export", (req, res) => {
+  const exportExists = fs.existsSync(ANALYTICS_EXPORT_PATH);
+  const exportStats = exportExists ? fs.statSync(ANALYTICS_EXPORT_PATH) : null;
+  res.json({
+    path: ANALYTICS_EXPORT_PATH,
+    exists: exportExists,
+    sizeBytes: exportStats ? exportStats.size : 0,
+    modifiedAt: exportStats ? exportStats.mtime.toISOString() : null
+  });
+});
+
+app.post("/api/export", (req, res) => {
+  const success = exportDatabaseSnapshot(ANALYTICS_EXPORT_PATH);
+  if (success) {
+    const stats = fs.statSync(ANALYTICS_EXPORT_PATH);
+    res.json({
+      status: "exported",
+      path: ANALYTICS_EXPORT_PATH,
+      sizeBytes: stats.size,
+      timestamp: new Date().toISOString()
+    });
+  } else {
+    res.status(500).json({ error: "Failed to export SQLite database snapshot" });
+  }
 });
 
 app.post("/api/sync", async (req, res) => {
@@ -586,7 +628,15 @@ async function startDaemon() {
     console.log(`   Health Check:   GET http://localhost:${PORT}/health`);
     console.log(`   Latest Report:  GET http://localhost:${PORT}/api/reports/latest`);
     console.log(`   Manual Sync:    POST http://localhost:${PORT}/api/sync (body: {"dryRun": true})`);
+    console.log(`   Export Status:  GET http://localhost:${PORT}/api/export`);
   });
+
+  // Attempt initial export of database snapshot if cached budget exists
+  try {
+    exportDatabaseSnapshot(ANALYTICS_EXPORT_PATH);
+  } catch (err) {
+    console.log(`[Snapshot] Initial startup export skipped or pending first sync: ${(err as Error).message}`);
+  }
 
   // Schedule Cron Sync Loop
   if (cron.validate(CRON_SCHEDULE)) {

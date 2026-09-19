@@ -1,0 +1,11 @@
+apiVersion: 1
+
+datasources:
+  - name: Actual Budget SQLite
+    uid: actual-sqlite
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: false
+    editable: false
+    jsonData:
+      path: /var/lib/grafana/data/actual/db.sqlite

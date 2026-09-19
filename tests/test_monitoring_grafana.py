@@ -80,6 +80,7 @@ class TestGrafanaCompose(unittest.TestCase):
         self.assertEqual(env_map.get("GF_ANALYTICS_REPORTING_ENABLED"), "false")
         self.assertEqual(env_map.get("GF_ANALYTICS_CHECK_FOR_UPDATES"), "false")
         self.assertEqual(env_map.get("GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES"), "false")
+        self.assertEqual(env_map.get("GF_INSTALL_PLUGINS"), "frser-sqlite-datasource")
 
     def test_grafana_volume_mounts_and_declarations(self):
         services = self.compose_data.get("services", {})
@@ -103,10 +104,15 @@ class TestGrafanaCompose(unittest.TestCase):
             any("./grafana/dashboards:/var/lib/grafana/dashboards:ro" in str(v) for v in volumes),
             f"grafana must mount dashboards folder read-only, found: {volumes}"
         )
+        self.assertTrue(
+            any("actual-analytics-data:/var/lib/grafana/data/actual:ro" in str(v) for v in volumes),
+            f"grafana must mount actual-analytics-data read-only, found: {volumes}"
+        )
 
         # Top-level volume declaration
         top_volumes = self.compose_data.get("volumes", {})
         self.assertIn("grafana-data", top_volumes)
+        self.assertIn("actual-analytics-data", top_volumes)
 
     def test_grafana_networks(self):
         services = self.compose_data.get("services", {})
@@ -173,6 +179,22 @@ class TestGrafanaProvisioning(unittest.TestCase):
         self.assertEqual(provider.get("type"), "file")
         options = provider.get("options", {})
         self.assertEqual(options.get("path"), "/var/lib/grafana/dashboards")
+
+    def test_actual_sqlite_datasource_provisioning(self):
+        sqlite_ds_file = DATASOURCES_DIR / "actual-sqlite.yml"
+        self.assertTrue(sqlite_ds_file.exists(), f"{sqlite_ds_file} must exist")
+        with open(sqlite_ds_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        self.assertIsInstance(data, dict)
+        datasources = data.get("datasources", [])
+        self.assertTrue(len(datasources) > 0)
+        actual_ds = datasources[0]
+        self.assertEqual(actual_ds.get("name"), "Actual Budget SQLite")
+        self.assertEqual(actual_ds.get("uid"), "actual-sqlite")
+        self.assertEqual(actual_ds.get("type"), "frser-sqlite-datasource")
+        self.assertEqual(actual_ds.get("access"), "proxy")
+        self.assertFalse(actual_ds.get("isDefault"))
+        self.assertEqual(actual_ds.get("jsonData", {}).get("path"), "/var/lib/grafana/data/actual/db.sqlite")
 
 
 class TestGrafanaDashboards(unittest.TestCase):
@@ -258,6 +280,146 @@ class TestGrafanaDashboards(unittest.TestCase):
         # Disk I/O
         self.assertIn('sum(rate(container_fs_reads_bytes_total{name!="",image!=""}[5m])) by (name)', expr_blob)
         self.assertIn('sum(rate(container_fs_writes_bytes_total{name!="",image!=""}[5m])) by (name)', expr_blob)
+
+
+class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dashboard_file = DASHBOARDS_JSON_DIR / "actual-budget-analytics.json"
+        cls.assertTrue(cls.dashboard_file.exists(), f"{cls.dashboard_file} must exist")
+        with open(cls.dashboard_file, "r", encoding="utf-8") as f:
+            cls.data = json.load(f)
+
+    def test_dashboard_metadata(self):
+        self.assertEqual(self.data.get("uid"), "actual-budget-analytics")
+        self.assertEqual(self.data.get("title"), "Actual Budget Analytics & Advanced Financial Intelligence")
+        self.assertIn("sqlite", self.data.get("tags", []))
+        self.assertIn("budget", self.data.get("tags", []))
+
+    def test_all_six_sections_present(self):
+        row_titles = [p.get("title") for p in self.data.get("panels", []) if p.get("type") == "row"]
+        self.assertEqual(len(row_titles), 6, f"Expected 6 section rows, found: {row_titles}")
+        expected_sections = [
+            "Executive Financial Health",
+            "Cash Flow Dynamics",
+            "Statistical Anomaly",
+            "Merchant & Payee Intelligence",
+            "Predictive Forecasting",
+            "Hierarchical Category Decomposition"
+        ]
+        for expected in expected_sections:
+            self.assertTrue(
+                any(expected.lower() in r.lower() for r in row_titles),
+                f"Missing expected section: {expected} in {row_titles}"
+            )
+
+    def test_plain_english_descriptions_on_all_visual_panels(self):
+        panels = self.data.get("panels", [])
+        visual_panels = [p for p in panels if p.get("type") not in ("row", "text")]
+        self.assertTrue(len(visual_panels) >= 12, f"Expected at least 12 visual panels, found {len(visual_panels)}")
+        for p in visual_panels:
+            desc = p.get("description", "")
+            self.assertTrue(len(desc) > 20, f"Panel '{p.get('title')}' is missing a detailed description")
+            self.assertIn("Plain English", desc, f"Panel '{p.get('title')}' must contain 'Plain English' in tooltip")
+
+    def test_markdown_guidance_cards_present(self):
+        text_panels = [p for p in self.data.get("panels", []) if p.get("type") == "text"]
+        self.assertEqual(len(text_panels), 6, f"Expected 6 guidance markdown panels (1 per section), found {len(text_panels)}")
+        for tp in text_panels:
+            content = tp.get("options", {}).get("content", "")
+            self.assertIn("How to Read", content, f"Guidance panel '{tp.get('title')}' should explain how to read the metrics")
+
+    def test_templating_variables(self):
+        templating = self.data.get("templating", {}).get("list", [])
+        var_names = [v.get("name") for v in templating]
+        self.assertIn("account", var_names, "Dashboard must have 'account' template variable")
+        self.assertIn("category_group", var_names, "Dashboard must have 'category_group' template variable")
+
+    def test_sqlite_queries_execute_cleanly(self):
+        import sqlite3
+        con = sqlite3.connect(":memory:")
+        cur = con.cursor()
+
+        # Seed mock schema matching Actual Budget db.sqlite
+        cur.executescript("""
+            CREATE TABLE accounts (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                closed INTEGER DEFAULT 0,
+                offbudget INTEGER DEFAULT 0,
+                tombstone INTEGER DEFAULT 0
+            );
+            CREATE TABLE category_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                is_income INTEGER DEFAULT 0,
+                tombstone INTEGER DEFAULT 0
+            );
+            CREATE TABLE categories (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                cat_group TEXT,
+                is_income INTEGER DEFAULT 0,
+                tombstone INTEGER DEFAULT 0
+            );
+            CREATE TABLE payees (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                tombstone INTEGER DEFAULT 0
+            );
+            CREATE TABLE transactions (
+                id TEXT PRIMARY KEY,
+                date INTEGER,
+                amount INTEGER,
+                acct TEXT,
+                category TEXT,
+                description TEXT,
+                imported_description TEXT,
+                tombstone INTEGER DEFAULT 0
+            );
+            CREATE TABLE zero_budgets (
+                id TEXT,
+                month INTEGER,
+                category TEXT,
+                amount INTEGER
+            );
+
+            INSERT INTO accounts (id, name, closed, offbudget, tombstone) VALUES
+                ('acc1', '360 Checking', 0, 0, 0),
+                ('acc2', '360 Savings', 0, 0, 0);
+            INSERT INTO category_groups (id, name, is_income, tombstone) VALUES
+                ('cg1', 'Expected', 0, 0),
+                ('cg2', 'Fun', 0, 0),
+                ('cg3', 'Income', 1, 0);
+            INSERT INTO categories (id, name, cat_group, is_income, tombstone) VALUES
+                ('c1', 'Groceries', 'cg1', 0, 0),
+                ('c2', 'Dining Out', 'cg2', 0, 0),
+                ('c3', 'Paycheck', 'cg3', 1, 0);
+            INSERT INTO payees (id, name, tombstone) VALUES
+                ('p1', 'Trader Joe', 0),
+                ('p2', 'Netflix', 0);
+            INSERT INTO zero_budgets (id, month, category, amount) VALUES
+                ('zb1', 202609, 'c1', 50000),
+                ('zb2', 202609, 'c2', 30000);
+            INSERT INTO transactions (id, date, amount, acct, category, description, imported_description, tombstone) VALUES
+                ('t1', 20260905, -7500, 'acc1', 'c1', 'p1', 'Trader Joe', 0),
+                ('t2', 20260910, -1500, 'acc1', 'c2', 'p2', 'Netflix', 0),
+                ('t3', 20260915, 300000, 'acc1', 'c3', NULL, 'Employer', 0);
+        """)
+
+        panels = self.data.get("panels", [])
+        executed_queries = 0
+        for p in panels:
+            for target in p.get("targets", []):
+                raw_sql = target.get("rawSql")
+                if raw_sql:
+                    try:
+                        cur.execute(raw_sql)
+                        executed_queries += 1
+                    except Exception as e:
+                        self.fail(f"Query in panel '{p.get('title')}' failed with error: {e}\\nSQL:\\n{raw_sql}")
+
+        self.assertTrue(executed_queries >= 12, f"Expected at least 12 SQL queries executed, got {executed_queries}")
 
 
 if __name__ == "__main__":
