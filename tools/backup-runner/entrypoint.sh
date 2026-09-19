@@ -38,6 +38,9 @@ chmod 700 /run/secrets
   printf 'export BACKUP_DEST_ACCESS_KEY_ID=%q\n' "${BACKUP_DEST_ACCESS_KEY_ID:-}"
   printf 'export BACKUP_DEST_SECRET_ACCESS_KEY=%q\n' "${BACKUP_DEST_SECRET_ACCESS_KEY:-}"
   printf 'export BACKUP_DEST_PREFIX=%q\n' "${BACKUP_DEST_PREFIX:-backups/${SERVICE_NAME:-unknown-service}}"
+  printf 'export BACKUP_RETENTION_DAYS=%q\n' "${BACKUP_RETENTION_DAYS:-30}"
+  printf 'export DRY_RUN=%q\n' "${DRY_RUN:-false}"
+  printf 'export B2_DEST_PATH=%q\n' "${B2_DEST_PATH:-}"
   printf 'export DISCORD_WEBHOOK_URL=%q\n' "${DISCORD_WEBHOOK_URL:-}"
   printf 'export HEALTHCHECK_PING_URL=%q\n' "${HEALTHCHECK_PING_URL:-}"
   printf 'export OUTPUT_DIR=%q\n' "${OUTPUT_DIR:-}"
@@ -57,6 +60,8 @@ echo "[+] Reusable Backup Runner initialized"
 echo "[+] Service: ${SERVICE_NAME:-unknown-service}"
 echo "[+] Mode: ${BACKUP_MODE:-sqlite-auto}"
 echo "[+] Source: ${BACKUP_SOURCE_DIR:-/data}"
+echo "[+] Retention Days: ${BACKUP_RETENTION_DAYS:-30}"
+echo "[+] Dry Run: ${DRY_RUN:-false}"
 echo "[+] Cron Schedule: ${CRON_SCHEDULE}"
 
 # ------------------------------------------------------------------------------
