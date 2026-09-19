@@ -258,10 +258,25 @@ The decrypted archive contains:
 
 ---
 
-## 4. Disaster Recovery Testing Checklist
+## 4. Disaster Recovery Testing & Automated Drills
 
-Quarterly, perform a dry-run restoration on a non-production machine:
+### 4.1 Automated Master DR Drill (`dr-drill.sh`)
+Automated disaster recovery drills execute routinely (e.g. weekly via cron / Coolify) using the unified orchestrator:
+
+```bash
+# Run automated DR drill (pulls latest B2 backup, verifies integrity, runs staging smoke tests):
+./tools/backup-dr/dr-drill.sh --service all
+
+# Or run safe pre-flight simulation:
+./tools/backup-dr/dr-drill.sh --dry-run
+```
+See [`tools/backup-dr/README.md`](../tools/backup-dr/README.md) for complete documentation on RTO/RPO calculation, Discord alerts, and Dead Man's Snitch integration.
+
+### 4.2 Manual Verification Checklist
+
+Quarterly, perform an independent manual dry-run restoration on a non-production machine:
 - [ ] Download latest archive from B2 bucket.
 - [ ] Decrypt using offline passphrase from fireproof safe.
 - [ ] Inspect SQLite integrity: `sqlite3 <extracted_db> "PRAGMA integrity_check;"` -> Output must be `ok`.
 - [ ] Verify tar extract contains no 0-byte corrupted files.
+
