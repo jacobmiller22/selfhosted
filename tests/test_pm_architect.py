@@ -180,6 +180,32 @@ class TestBenevolentDictator(unittest.TestCase):
         self.assertEqual(ruling.binding_verdict, "VETOED")
         self.assertTrue(any("VETOED UNDER AXIOM 3" in v for v in ruling.veto_reasons))
 
+    def test_dictator_does_not_veto_uuid_containing_k8s_substring(self):
+        issue = {
+            "number": 110,
+            "title": "feat(coolify): Monorepo Path-Filtering & Watch Paths Configuration",
+            "body": "Configure watch_paths for vaultwarden (UUID: i0k8s00c48gg4o48ks08o8wk) and actual (UUID: g8woog40sgkcogwkcksgwwoc)."
+        }
+        fc = self.checker.check_issue(issue)
+        delib = self.council.deliberate(issue, fc, self.checker.inventory)
+        ruling = self.dictator.arbitrate(issue, fc, delib, self.checker.inventory)
+
+        self.assertNotEqual(ruling.binding_verdict, "VETOED")
+        self.assertEqual(len(ruling.veto_reasons), 0)
+
+    def test_dictator_does_not_veto_tooling_maintenance_issues(self):
+        issue = {
+            "number": 111,
+            "title": "fix(architect): use word boundary matching for overengineering keywords",
+            "body": "The substring check if any(k in combined for k in ['kubernetes', 'k8s', ...]) falsely triggers on any string containing k8s as a substring."
+        }
+        fc = self.checker.check_issue(issue)
+        delib = self.council.deliberate(issue, fc, self.checker.inventory)
+        ruling = self.dictator.arbitrate(issue, fc, delib, self.checker.inventory)
+
+        self.assertNotEqual(ruling.binding_verdict, "VETOED")
+        self.assertEqual(len(ruling.veto_reasons), 0)
+
 
 class TestDependencyEngine(unittest.TestCase):
     def setUp(self):
@@ -230,6 +256,24 @@ class TestTicketGeneratorAndReporter(unittest.TestCase):
         types = [t.ticket_type for t in tickets]
         self.assertIn("SPIKE", types)
         self.assertIn("RECONCILIATION", types)
+
+    def test_generator_does_not_propose_spike_for_existing_spike(self):
+        spike_issue = {
+            "number": 201,
+            "title": "spike(security): Validate unprivileged socket proxy for Issue #18",
+            "labels": [{"name": "type:research"}, {"name": "security"}],
+            "body": "Mounts docker.sock into container. Mandating CONTAINMENT MANDATE."
+        }
+        fc = self.checker.check_issue(spike_issue)
+        delib = self.council.deliberate(spike_issue, fc, self.checker.inventory)
+        ruling = self.dictator.arbitrate(spike_issue, fc, delib, self.checker.inventory)
+
+        tickets = self.generator.generate_tickets(
+            {201: fc}, {201: delib}, {201: ruling}, self.checker.inventory, issues=[spike_issue]
+        )
+
+        spike_tickets = [t for t in tickets if t.ticket_type == "SPIKE"]
+        self.assertEqual(len(spike_tickets), 0)
 
     def test_report_generation(self):
         issue = {"number": 1, "title": "Task", "labels": [{"name": "priority:high"}], "body": ""}

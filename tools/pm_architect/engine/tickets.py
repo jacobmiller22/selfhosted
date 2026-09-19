@@ -32,12 +32,14 @@ class TicketGenerator:
         fact_checks: Dict[int, IssueFactCheckResult],
         deliberations: Dict[int, CouncilDeliberation],
         rulings: Dict[int, DictatorRuling],
-        inventory: CodebaseInventory
+        inventory: CodebaseInventory,
+        issues: Optional[List[dict]] = None
     ) -> List[ProposedTicket]:
         """Generate structured ticket proposals for knowledge gaps and documentation drift."""
         proposed: List[ProposedTicket] = []
         seen_spike_topics = set()
         seen_reconciliation_topics = set()
+        issue_map = {i.get("number"): i for i in (issues or [])}
 
         # 1. Inspect Fact-Check Results for Contradictions (Reconciliation Tickets)
         for num, fc in fact_checks.items():
@@ -74,6 +76,15 @@ class TicketGenerator:
 
         # 2. Inspect Unverified Assumptions & Research Needs (Spike Tickets)
         for num, fc in fact_checks.items():
+            title = fc.title.lower() if fc.title else ""
+            issue_dict = issue_map.get(num, {})
+            labels = [
+                l.get("name", "").lower() if isinstance(l, dict) else str(l).lower()
+                for l in issue_dict.get("labels", [])
+            ]
+            if title.startswith("spike") or "spike(" in title or "type:research" in labels:
+                continue
+
             for assumption in fc.unverified_assumptions:
                 topic_key = assumption[:50]
                 if topic_key in seen_spike_topics:
@@ -105,6 +116,16 @@ class TicketGenerator:
 
         # 3. Inspect Dictator Mandates requiring Spike / Prototyping
         for num, ruling in rulings.items():
+            fc = fact_checks.get(num)
+            title = fc.title.lower() if (fc and fc.title) else ""
+            issue_dict = issue_map.get(num, {})
+            labels = [
+                l.get("name", "").lower() if isinstance(l, dict) else str(l).lower()
+                for l in issue_dict.get("labels", [])
+            ]
+            if title.startswith("spike") or "spike(" in title or "type:research" in labels:
+                continue
+
             if ruling.binding_verdict == "AMENDED_WITH_CONSTRAINTS":
                 for safeguard in ruling.mandated_safeguards:
                     if "CONTAINMENT MANDATE" in safeguard:
