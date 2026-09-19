@@ -142,27 +142,24 @@ class TestGrafanaCompose(unittest.TestCase):
 class TestGrafanaProvisioning(unittest.TestCase):
     def test_datasource_provisioning_files(self):
         datasources_file = DATASOURCES_DIR / "datasources.yml"
-        vm_file = DATASOURCES_DIR / "victoriametrics.yml"
-
         self.assertTrue(datasources_file.exists(), f"{datasources_file} must exist")
-        self.assertTrue(vm_file.exists(), f"{vm_file} must exist")
 
-        for file_path in [datasources_file, vm_file]:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            self.assertIsInstance(data, dict)
-            datasources = data.get("datasources", [])
-            self.assertTrue(len(datasources) > 0)
+        with open(datasources_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        self.assertIsInstance(data, dict)
+        datasources = data.get("datasources", [])
+        self.assertTrue(len(datasources) > 0)
 
-            vm_ds = next((ds for ds in datasources if ds.get("name") == "VictoriaMetrics"), None)
-            self.assertIsNotNone(vm_ds, f"VictoriaMetrics datasource not found in {file_path}")
-            self.assertEqual(vm_ds.get("type"), "prometheus")
-            self.assertEqual(vm_ds.get("access"), "proxy")
-            self.assertEqual(vm_ds.get("url"), "http://victoria-metrics:8428")
-            self.assertTrue(vm_ds.get("isDefault"))
-            json_data = vm_ds.get("jsonData", {})
-            self.assertEqual(json_data.get("httpMethod"), "POST")
-            self.assertEqual(json_data.get("timeInterval"), "15s")
+        vm_ds = next((ds for ds in datasources if ds.get("name") == "VictoriaMetrics"), None)
+        self.assertIsNotNone(vm_ds, f"VictoriaMetrics datasource not found in {datasources_file}")
+        self.assertEqual(vm_ds.get("type"), "prometheus")
+        self.assertEqual(vm_ds.get("uid"), "victoriametrics")
+        self.assertEqual(vm_ds.get("access"), "proxy")
+        self.assertEqual(vm_ds.get("url"), "http://victoria-metrics:8428")
+        self.assertTrue(vm_ds.get("isDefault"))
+        json_data = vm_ds.get("jsonData", {})
+        self.assertEqual(json_data.get("httpMethod"), "POST")
+        self.assertEqual(json_data.get("timeInterval"), "15s")
 
     def test_dashboard_provider_configuration(self):
         dashboards_file = DASHBOARDS_DIR / "dashboards.yml"
