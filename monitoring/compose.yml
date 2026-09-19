@@ -85,6 +85,26 @@ services:
     mem_limit: 30m
     cpus: 0.10
 
+  blackbox-exporter:
+    image: prom/blackbox-exporter:latest
+    container_name: blackbox-exporter
+    restart: unless-stopped
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    ports:
+      - "9115:9115"
+    networks:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          cpus: '0.10'
+          memory: 64M
+        reservations:
+          memory: 32M
+    mem_limit: 64m
+    cpus: 0.10
+
   grafana:
     image: grafana/grafana:11.2.0
     container_name: grafana

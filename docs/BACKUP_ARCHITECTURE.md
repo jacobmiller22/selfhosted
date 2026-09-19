@@ -29,8 +29,9 @@ The self-hosted infrastructure hosts critical services including financial manag
 │  │  - Vaultwarden        │         │  1. Safe SQLite .backup / VACUUM│  │
 │  │  - Home Assistant     │         │  2. Tar + OpenSSL AES-256-CBC  │  │
 │  │  - Nginx Proxy Manager│         │  3. Timestamped B2/S3 Upload   │  │
-│  │  - Coolify DB         │         │  4. Trap ERR ──▶ Discord Alert │  │
-│  └───────────────────────┘         │  5. On Success ──▶ Snitch Ping │  │
+│  │  - Obsidian CouchDB   │         │  4. Trap ERR ──▶ Discord Alert │  │
+│  │  - Coolify DB         │         │  5. On Success ──▶ Snitch Ping │  │
+│  └───────────────────────┘         │                                │  │
 │                                    └────────────────────────────────┘  │
 └────────────────────────────────────────────────────┬───────────────────┘
                                                      │ TLS / S3 API
@@ -118,6 +119,7 @@ If the entire server crashes, Docker hangs, or cron fails to trigger, active err
 | **Vaultwarden** | Docker volume `vw-data`:<br>- `db.sqlite3`<br>- `rsa_key.pem` & `rsa_key.pub`<br>- `attachments/`<br>- `sends/`<br>- `config.json` | Run `sqlite3 db.sqlite3 ".backup <dest>"` for SQLite.<br>Copy RSA keypair, attachments, and sends directories. | Restoring `db.sqlite3` without `rsa_key.pem` invalidates existing auth/session tokens. |
 | **Home Assistant** | Bind mount `/data/coolify/applications/<id>/config`:<br>- `.storage/`<br>- `home-assistant_v2.db`<br>- `configuration.yaml` | Run `sqlite3 home-assistant_v2.db ".backup <dest>"` for SQLite.<br>Archive `.storage/` and YAML files. | `.storage/` holds all credentials and integration states; must be preserved intact. |
 | **Nginx Proxy Manager** | Bind mounts:<br>- `data/database.sqlite`<br>- `data/keys.json`<br>- `letsencrypt/` | Snapshot `database.sqlite`.<br>Archive `keys.json` and `/etc/letsencrypt`. | Restoring certificates prevents Let's Encrypt rate-limiting on rebuilds. |
+| **Obsidian LiveSync** | Bind mount `./db/data` (`/opt/couchdb/data`):<br>- `*.couch`<br>- `.shards/`<br>- View indexes | `filesystem` mode copy of `/data` via read-only bind mount (`:ro`). | Read-only mount prevents write lock contention during live sync. Ownership must be restored as `5984:5984`. |
 | **Coolify State** | Docker container `coolify-db` (Postgres 15) | Run `docker exec coolify-db pg_dump -U coolify -d coolify`. | Backs up all service configurations, deployment environments, and secrets. |
 
 ---
@@ -126,5 +128,24 @@ If the entire server crashes, Docker hangs, or cron fails to trigger, active err
 
 - **Target Bucket**: Backblaze B2 (`jacobmiller22-secure-backup`).
 - **Archive Path Format**: `backups/<service>/<service>-backup-%Y-%m-%d_%H-%M-%S.tar.gz.enc`
-- **Retention Rule**: Backblaze B2 lifecycle policy set to keep versions/objects for **30 days**.
+- **Configurable Snapshot Retention**: Managed via `BACKUP_RETENTION_DAYS` (default: **30 days**).
 - **Cold Off-site**: Once per quarter, download the latest archives for physical offline archive.
+
+### 7.1 Automated Archive Pruning Mechanics
+To prevent unbounded storage growth and cost accumulation on Backblaze B2, the universal backup engine executes automated remote pruning after each backup cycle via `prune_remote_backups()`:
+
+1. **Age-Based Remote Pruning**:
+   - Executes `rclone delete --min-age ${BACKUP_RETENTION_DAYS}d` against the service's remote prefix.
+   - Discovers and logs candidate archives with human-readable timestamps and byte sizes before deletion.
+2. **Bucket Cleanup**:
+   - Executes `rclone cleanup` against the destination bucket to purge uncompleted multipart uploads and old bucket version fragments.
+3. **Dry-Run Auditing (`DRY_RUN=true`)**:
+   - When `DRY_RUN=true` or `--dry-run` is supplied, candidate archives are identified and logged, and `rclone delete --dry-run` simulates the operation without modifying remote storage.
+
+### 7.2 Safety Upload Verification Latch
+To prevent data loss in the event of an upload failure, remote pruning enforces a strict safety latch:
+- Remote deletion commands (`rclone delete`) **ONLY** execute after:
+  1. The new encrypted backup archive is produced and non-empty.
+  2. The cloud upload completes with exit code 0.
+  3. The uploaded archive's existence on remote storage is affirmatively verified (via `rclone lsf` or `aws s3 ls`).
+- If backup creation, upload, or remote verification fails, `BACKUP_UPLOAD_VERIFIED` remains `false` and `prune_remote_backups()` immediately aborts execution, guaranteeing that existing recovery snapshots are never purged when a new backup has not been secured.

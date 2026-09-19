@@ -200,6 +200,64 @@ The decrypted archive contains:
 
 ---
 
+### 3.5 Obsidian CouchDB LiveSync (`obsidian`)
+
+#### Backup Contents
+The decrypted archive contains:
+- `*.couch` (CouchDB databases including note documents, LiveSync metadata, and design docs)
+- `_users.couch`, `_replicator.couch`, `_global_changes.couch` (CouchDB system databases)
+- `.shards/` (Database shards and partitioned document stores)
+- View index caches and compaction records
+
+#### Recovery Procedure
+1. **Stop Obsidian CouchDB Container**:
+   Stop `livesync-db` to prevent write contention during directory restoration:
+   ```bash
+   ssh bjorn "docker stop livesync-db"
+   ```
+2. **Locate Data Bind Mount**:
+   Obsidian CouchDB mounts host directory `./db/data` to `/opt/couchdb/data`:
+   ```bash
+   DATA_DIR="/Users/jacobmiller22/projects/selfhosted/obsidian/db/data"
+   # Or production Coolify application persistent directory on bjorn
+   ```
+3. **Unpack & Decrypt Encrypted Archive**:
+   Download the archive from Backblaze B2 and decrypt using standard OpenSSL into a clean staging folder:
+   ```bash
+   mkdir -p ./extracted-obsidian
+   openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
+     -in obsidian-backup-<timestamp>.tar.gz.enc \
+     -pass env:BACKUP_PASSPHRASE | \
+     tar -xz -C ./extracted-obsidian
+   ```
+4. **Copy Restored Files into Host Data Directory**:
+   ```bash
+   # Upload extracted files to bjorn staging
+   scp -r ./extracted-obsidian/* bjorn:/tmp/obsidian-restore-staging/
+
+   # Synchronize into target bind mount
+   ssh bjorn "sudo cp -r /tmp/obsidian-restore-staging/* $DATA_DIR/ && sudo rm -rf /tmp/obsidian-restore-staging"
+   ```
+5. **Fix File Permissions (CRITICAL QUIRK)**:
+   CouchDB executes internally as user `couchdb` (UID `5984`, GID `5984`). If files are owned by `root`, CouchDB fails to open database files and crashes:
+   ```bash
+   ssh bjorn "sudo chown -R 5984:5984 $DATA_DIR && sudo chmod -R 0750 $DATA_DIR"
+   ```
+6. **Restart Container**:
+   ```bash
+   ssh bjorn "docker start livesync-db"
+   ```
+7. **Verify Health & Sync Availability**:
+   Verify container logs and query the HTTP API endpoint:
+   ```bash
+   ssh bjorn "docker logs --tail 50 livesync-db"
+   ssh bjorn "curl -fsS http://localhost:5984/"
+   curl -I https://obsidian.cloud.jacobmiller22.com
+   ```
+   Open Obsidian on client devices and trigger LiveSync to confirm note replication resumes without conflict.
+
+---
+
 ## 4. Disaster Recovery Testing & Automated Drills
 
 ### 4.1 Automated Master DR Drill (`dr-drill.sh`)

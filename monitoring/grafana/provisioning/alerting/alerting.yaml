@@ -138,3 +138,54 @@ groups:
         annotations:
           summary: "Sustained host CPU utilization > 95% on bjorn"
           description: "Host CPU utilization on bjorn has exceeded 95% continuously for >20m."
+
+  - orgId: 1
+    name: Blackbox-Probe-Alerts
+    folder: Infrastructure-Alerts
+    interval: 1m
+    rules:
+      - uid: alert-blackbox-service-down
+        title: ServiceDown
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              editorMode: code
+              expr: 'probe_success == 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Outside-in probe failed: {{ $labels.instance }} is unreachable"
+          description: "Blackbox HTTP probe failed (probe_success == 0) for {{ $labels.instance }} for > 2m."
+
+      - uid: alert-blackbox-ssl-cert-expiring
+        title: SSLCertExpiringSoon
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: victoriametrics
+            model:
+              editorMode: code
+              expr: '(probe_ssl_earliest_cert_expiry - time()) / 86400 < 15'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "SSL certificate expiring soon for {{ $labels.instance }}"
+          description: "SSL certificate for {{ $labels.instance }} expires in less than 15 days."
