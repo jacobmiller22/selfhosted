@@ -5,9 +5,11 @@ services:
     restart: unless-stopped
     command:
       - -promscrape.config=/etc/prometheus/prometheus.yml
+      - -promscrape.config.strictParse=false
       - -storageDataPath=/victoria-metrics-data
       - -retentionPeriod=90d
       - -search.maxQueryDuration=30s
+      - -maxLabelsPerTimeseries=64
     volumes:
       - victoria-data:/victoria-metrics-data
       - ./victoriametrics/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -15,6 +17,8 @@ services:
       - "8428:8428"
     networks:
       - monitoring
+    extra_hosts:
+      - "node-exporter:host-gateway"
     deploy:
       resources:
         limits:
