@@ -20,14 +20,19 @@ DS = {
     "uid": "actual-sqlite"
 }
 
-def sql_target(ref_id, sql):
-    return {
+def sql_target(ref_id, sql, time_columns=None):
+    target = {
         "datasource": DS,
         "format": "table",
         "queryType": "table",
         "rawSql": sql.strip(),
+        "rawQueryText": sql.strip(),
+        "queryText": sql.strip(),
         "refId": ref_id
     }
+    if time_columns:
+        target["timeColumns"] = time_columns
+    return target
 
 def make_dashboard():
     panels = []
@@ -251,7 +256,7 @@ GROUP BY 1
         "options": {
             "legend": {"displayMode": "list", "placement": "right", "showLegend": true},
             "pieType": "donut",
-            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": true}
         }
     })
 
@@ -293,8 +298,12 @@ GROUP BY 1
         "datasource": DS,
         "targets": [
             sql_target("A", """
-WITH RECURSIVE days(d) AS (
-  SELECT 1 UNION ALL SELECT d + 1 FROM days WHERE d < 31
+WITH RECURSIVE
+month_info AS (
+  SELECT CAST(strftime('%d', date('now', 'start of month', '+1 month', '-1 day')) AS INTEGER) AS total_days
+),
+days(d) AS (
+  SELECT 1 UNION ALL SELECT d + 1 FROM days WHERE d < (SELECT total_days FROM month_info)
 ),
 current_m AS (
   SELECT
@@ -327,13 +336,13 @@ budget_ceiling AS (
   WHERE month = CAST(strftime('%Y%m', 'now') AS INTEGER)
 )
 SELECT
-  d AS "Day of Month",
+  CAST(strftime('%s', date('now', 'start of month', '+' || (d - 1) || ' days')) AS INTEGER) AS time,
   (SELECT SUM(daily_spend) FROM current_m WHERE day_num <= d) AS "Current Month Cumulative Spend ($)",
   (SELECT ROUND(SUM(avg_daily_spend), 2) FROM prior_3m WHERE day_num <= d) AS "3-Month Trailing Average Pace ($)",
-  ROUND((SELECT monthly_limit FROM budget_ceiling) * (d / 31.0), 2) AS "Budget Pace Ceiling Envelope ($)"
-FROM days
+  ROUND((SELECT monthly_limit FROM budget_ceiling) * (d * 1.0 / (SELECT total_days FROM month_info)), 2) AS "Budget Pace Ceiling Envelope ($)"
+FROM days, month_info
 ORDER BY d ASC
-""")
+""", time_columns=["time"])
         ],
         "fieldConfig": {
             "defaults": {
@@ -387,7 +396,7 @@ ORDER BY d ASC
 SELECT
   COALESCE(g.name, 'Uncategorized Group') AS "Category Group",
   COALESCE(c.name, 'Uncategorized') AS "Category",
-  COALESCE(p.name, t.imported_description, 'Unknown Payee') AS "Payee / Merchant",
+  COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Payee') AS "Payee / Merchant",
   ROUND(ABS(SUM(t.amount)) / 100.0, 2) AS "Total Outflow ($)"
 FROM transactions t
 LEFT JOIN categories c ON t.category = c.id
@@ -517,7 +526,7 @@ WITH stats AS (
 )
 SELECT
   substr(CAST(t.date AS TEXT), 1, 4) || '-' || substr(CAST(t.date AS TEXT), 5, 2) || '-' || substr(CAST(t.date AS TEXT), 7, 2) AS "Date",
-  COALESCE(p.name, t.imported_description, 'Unknown Payee') AS "Payee / Merchant",
+  COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Payee') AS "Payee / Merchant",
   c.name AS "Category",
   ROUND(ABS(t.amount) / 100.0, 2) AS "Charge Amount ($)",
   ROUND(s.avg_amt, 2) AS "Category Mean ($)",
@@ -602,7 +611,7 @@ LIMIT 12
         },
         "options": {
             "orientation": "horizontal",
-            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": true}
         }
     })
 
@@ -648,7 +657,7 @@ LIMIT 12
             sql_target("A", """
 WITH payee_spend AS (
   SELECT
-    COALESCE(p.name, t.imported_description, 'Unknown Payee') AS payee_name,
+    COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Payee') AS payee_name,
     ABS(SUM(t.amount)) / 100.0 AS spend
   FROM transactions t
   JOIN categories c ON t.category = c.id
@@ -702,16 +711,16 @@ LIMIT 12
             sql_target("A", """
 WITH recurring AS (
   SELECT
-    COALESCE(p.name, t.imported_description) AS merchant,
+    COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant') AS merchant,
     c.name AS category,
     t.date,
     ABS(t.amount) / 100.0 AS amount,
     LAG(ABS(t.amount) / 100.0) OVER (
-      PARTITION BY COALESCE(p.name, t.imported_description)
+      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')
       ORDER BY t.date ASC
     ) AS prev_amount,
     LAG(t.date) OVER (
-      PARTITION BY COALESCE(p.name, t.imported_description)
+      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')
       ORDER BY t.date ASC
     ) AS prev_date
   FROM transactions t
@@ -779,7 +788,7 @@ LIMIT 10
         "targets": [
             sql_target("A", """
 SELECT
-  COALESCE(p.name, t.imported_description, 'Unknown Payee') AS "Merchant",
+  COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Payee') AS "Merchant",
   COUNT(*) AS "Count",
   ROUND(AVG(ABS(t.amount)) / 100.0, 2) AS "Avg Ticket ($)",
   ROUND(ABS(SUM(t.amount)) / 100.0, 2) AS "Total ($)",

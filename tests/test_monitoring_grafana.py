@@ -335,6 +335,47 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
         self.assertIn("account", var_names, "Dashboard must have 'account' template variable")
         self.assertIn("category_group", var_names, "Dashboard must have 'category_group' template variable")
 
+    def test_sqlite_target_schema_compatibility(self):
+        panels = self.data.get("panels", [])
+        visual_panels = [p for p in panels if p.get("type") not in ("row", "text")]
+        checked = 0
+        for p in visual_panels:
+            targets = p.get("targets", [])
+            self.assertTrue(len(targets) > 0, f"Panel '{p.get('title')}' must have at least one target")
+            for t in targets:
+                self.assertIn("rawQueryText", t, f"Panel '{p.get('title')}' missing rawQueryText required by frser-sqlite-datasource")
+                self.assertIn("queryText", t, f"Panel '{p.get('title')}' missing queryText required by frser-sqlite-datasource")
+                self.assertTrue(len(t["rawQueryText"]) > 0, f"Panel '{p.get('title')}' rawQueryText cannot be empty")
+                self.assertEqual(t["rawQueryText"], t["queryText"])
+                checked += 1
+        self.assertTrue(checked >= 15, f"Expected at least 15 queries checked, got {checked}")
+
+    def test_timeseries_panel_configuration(self):
+        panels = {p.get("id"): p for p in self.data.get("panels", [])}
+        panel_202 = panels.get(202)
+        self.assertIsNotNone(panel_202, "Panel 202 must exist")
+        self.assertEqual(panel_202.get("type"), "timeseries")
+        targets = panel_202.get("targets", [])
+        self.assertTrue(len(targets) > 0)
+        target = targets[0]
+        self.assertIn("timeColumns", target, "Timeseries panel must define timeColumns for frser-sqlite-datasource")
+        self.assertIn("time", target["timeColumns"], "timeColumns must contain 'time'")
+        self.assertIn("AS time", target["rawQueryText"], "Query must alias timestamp column as 'time'")
+
+    def test_multi_row_panel_reduce_options(self):
+        panels = {p.get("id"): p for p in self.data.get("panels", [])}
+        panel_105 = panels.get(105)
+        self.assertIsNotNone(panel_105, "Panel 105 (piechart) must exist")
+        self.assertEqual(panel_105.get("type"), "piechart")
+        self.assertTrue(panel_105.get("options", {}).get("reduceOptions", {}).get("values"),
+                        "Panel 105 piechart must have reduceOptions.values = true to render multi-row slices")
+
+        panel_303 = panels.get(303)
+        self.assertIsNotNone(panel_303, "Panel 303 (bargauge) must exist")
+        self.assertEqual(panel_303.get("type"), "bargauge")
+        self.assertTrue(panel_303.get("options", {}).get("reduceOptions", {}).get("values"),
+                        "Panel 303 bargauge must have reduceOptions.values = true to render category bars")
+
     def test_sqlite_queries_execute_cleanly(self):
         import sqlite3
         con = sqlite3.connect(":memory:")
@@ -411,7 +452,7 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
         executed_queries = 0
         for p in panels:
             for target in p.get("targets", []):
-                raw_sql = target.get("rawSql")
+                raw_sql = target.get("rawQueryText") or target.get("rawSql")
                 if raw_sql:
                     try:
                         cur.execute(raw_sql)
