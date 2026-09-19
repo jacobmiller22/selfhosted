@@ -95,13 +95,13 @@ class TestMonitoringAlerting(unittest.TestCase):
                 "title": "Host Disk Exhaustion (Warning)",
                 "for": "15m",
                 "severity": "warning",
-                "expr": '100 - ((node_filesystem_avail_bytes{mountpoint="/host"} * 100) / node_filesystem_size_bytes{mountpoint="/host"}) > 80',
+                "expr": '100 - ((node_filesystem_avail_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"} * 100) / node_filesystem_size_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"}) > 80',
             },
             "alert-disk-critical": {
                 "title": "Host Disk Exhaustion (Critical)",
                 "for": "5m",
                 "severity": "critical",
-                "expr": '100 - ((node_filesystem_avail_bytes{mountpoint="/host"} * 100) / node_filesystem_size_bytes{mountpoint="/host"}) > 90',
+                "expr": '100 - ((node_filesystem_avail_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"} * 100) / node_filesystem_size_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"}) > 90',
             },
             "alert-memory-starvation": {
                 "title": "Host Memory Starvation",
