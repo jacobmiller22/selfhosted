@@ -44,7 +44,44 @@ When prompted to inspect, run, restart, debug, or test any service or container:
 
 ---
 
-## 3. Git Worktree Protocol with Worktrunk (`wt`)
+## 3. Outside-In Remote Deployment Verification Protocol (ODVP)
+
+> [!CRITICAL]
+> **Container presence on `bjorn` does NOT confirm service availability.**
+> All deployments must be verified across 5 operational layers from container stability to client-side HTTPS egress:
+
+- **L1: Container Stability & Healthcheck Latch (Remote)**:
+  Assert container status is `running` and not caught in crash-restart loops:
+  `ssh bjorn "docker inspect --format '{{.State.Status}}' <container>"`
+- **L2: Internal Business Logic & Data Probe (Remote)**:
+  Probe listening port directly on localhost to ensure daemon is active before routing:
+  `ssh bjorn "curl -fsS http://localhost:<port>/"`
+- **L3: Reverse Proxy & Bridge Network Verification (Remote)**:
+  Validate proxy network bridge attachment:
+  `ssh bjorn "docker inspect --format '{{range \$k, \$v := .NetworkSettings.Networks}}{{\$k}} {{end}}' <container>"`
+- **L4: Outside DNS & TLS Handshake Validation (Client Workstation)**:
+  Verify DNS resolution and TLS certificate handshake from client workstation:
+  `dig +short <domain> && curl -vI https://<domain>`
+- **L5: Outside-In HTTPS Egress Probe (Client Workstation)**:
+  Execute client-side HTTP egress probe; assert valid responses (200, 302, 401) and strictly disallow proxy failures (502, 504):
+  `curl -fsS -o /dev/null -w "%{http_code}" https://<domain>`
+
+### Automated Verification Harness
+Run automated smoke verification via:
+```bash
+# Full 5-layer verification:
+./tools/verify-deployment/verify_service.sh --host bjorn --service <container> --internal-port <port> --url <https-url>
+
+# Client-only outside-in probe:
+./tools/verify-deployment/verify_service.sh --skip-remote --url <https-url>
+
+# Dry-run validation:
+./tools/verify-deployment/verify_service.sh --service <container> --internal-port <port> --url <https-url> --dry-run
+```
+
+---
+
+## 4. Git Worktree Protocol with Worktrunk (`wt`)
 
 > [!IMPORTANT]
 > **NEVER make code changes directly on the primary working tree or default branch (`main` or `master`).**
@@ -57,7 +94,7 @@ When prompted to inspect, run, restart, debug, or test any service or container:
 
 ---
 
-## 4. Zero Untracked Work Protocol (`pm`)
+## 5. Zero Untracked Work Protocol (`pm`)
 
 > [!IMPORTANT]
 > **NEVER perform untracked "ghost work" that is lost to history.**
@@ -71,7 +108,7 @@ When prompted to inspect, run, restart, debug, or test any service or container:
 
 ---
 
-## 5. Security & Secret Protection
+## 6. Security & Secret Protection
 
 - **No Secrets in Git**: Never commit `.env`, `secrets.yaml`, private keys, passwords, or raw unencrypted backup databases.
 - **Offline Passphrase Storage**: Master passphrases (`BACKUP_PASSPHRASE`) remain in physical offline safe storage; runtime services receive them via Coolify environment variables.
@@ -79,7 +116,7 @@ When prompted to inspect, run, restart, debug, or test any service or container:
 
 ---
 
-## 6. Service Directory Directory Pointers
+## 7. Service Directory Directory Pointers
 
 Refer to the subsystem documentation and directives:
 - [docs/INFRASTRUCTURE_TOPOLOGY.md](file:///Users/jacobmiller22/projects/selfhosted.feature-task-40-remote-host-verification/docs/INFRASTRUCTURE_TOPOLOGY.md) – Global topology and host registry

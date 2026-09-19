@@ -52,7 +52,56 @@ flowchart TD
 
 ---
 
-## 3. Git Worktree Protocol with Worktrunk (`wt`)
+## 3. Outside-In Remote Deployment Verification Protocol (ODVP)
+
+> [!CRITICAL]
+> **A container reporting status `running` locally on `bjorn` does NOT constitute a healthy deployment.**
+> Runtime health must be proven across all 5 operational layers from bare-metal container execution to client-side HTTPS egress.
+
+### The 5-Layer Verification Model
+
+```mermaid
+flowchart TD
+    subgraph Client ["Client Workstation (macOS / WAN)"]
+        L5["L5: Outside-In HTTPS Egress Probe\nAssert HTTP 200/302/401 (No 502/504)"]
+        L4["L4: Outside DNS & TLS Handshake Validation\nVerify FQDN DNS resolution & TLS handshake"]
+    end
+    subgraph RemoteHost ["Remote Production Host (bjorn)"]
+        L3["L3: Reverse Proxy & Bridge Network Verification\nInspect NPM/Coolify proxy bridge attachment"]
+        L2["L2: Internal Business Logic & Data Probe\ncurl localhost:<port> via SSH (direct binding)"]
+        L1["L1: Container Stability & Healthcheck Latch\nInspect status == running, restart count, health"]
+    end
+    L5 --> L4
+    L4 --> L3
+    L3 --> L2
+    L2 --> L1
+```
+
+| Layer | Verification Name | Execution Scope | Verification Objective | Canonical Pattern / Tool Command |
+| :--- | :--- | :--- | :--- | :--- |
+| **L1** | **Container Stability & Healthcheck Latch** | Remote Host (`bjorn`) | Confirm container is `running`, zero restart loops, healthy | `ssh bjorn "docker inspect --format '{{.State.Status}}' <svc>"` |
+| **L2** | **Internal Business Logic & Data Probe** | Remote Host (`bjorn`) | Verify daemon is bound to port and responding before proxy | `ssh bjorn "curl -fsS http://localhost:<port>/"` |
+| **L3** | **Reverse Proxy & Bridge Network** | Remote Host (`bjorn`) | Verify container bridge network & NPM upstream routing | `ssh bjorn "docker network inspect bridge ..."` |
+| **L4** | **Outside DNS & TLS Handshake Validation** | Client Workstation | Resolve public DNS records and validate valid TLS certificate | `dig +short <fqdn> && curl -vI https://<fqdn>` |
+| **L5** | **Outside-In HTTPS Egress Probe** | Client Workstation | End-to-end client probe; assert 200/302/401; no 502/504 | `curl -fsS -o /dev/null -w "%{http_code}" https://<fqdn>` |
+
+### Automated Verification Smoke Harness
+
+All services can be verified end-to-end using the automated deployment smoke harness:
+```bash
+# Full 5-layer verification (L1-L5):
+./tools/verify-deployment/verify_service.sh --host bjorn --service <container> --internal-port <port> --url <https-url>
+
+# Client-only outside-in verification (L4-L5):
+./tools/verify-deployment/verify_service.sh --skip-remote --url <https-url>
+
+# Dry-run execution validation:
+./tools/verify-deployment/verify_service.sh --service <container> --internal-port <port> --url <https-url> --dry-run
+```
+
+---
+
+## 4. Git Worktree Protocol with Worktrunk (`wt`)
 
 > [!IMPORTANT]
 > **NEVER make code changes directly on the primary working tree or default branch (`main` or `master`).**
@@ -70,7 +119,7 @@ flowchart TD
 
 ---
 
-## 4. Zero Untracked Work Protocol (`pm`)
+## 5. Zero Untracked Work Protocol (`pm`)
 
 > [!IMPORTANT]
 > **NEVER perform untracked "ghost work" that is lost to history.**
@@ -93,7 +142,7 @@ flowchart TD
 
 ---
 
-## 5. Security & Secret Hygiene
+## 6. Security & Secret Hygiene
 
 1. **Zero Plaintext Secrets in Git**:
    - Never commit `.env`, `secrets.yaml`, private keys (`rsa_key.pem`, `id_ed25519`), credentials, or raw unencrypted backup dumps.
@@ -107,7 +156,7 @@ flowchart TD
 
 ---
 
-## 6. Service & Subsystem Navigation
+## 7. Service & Subsystem Navigation
 
 When working inside a specific service directory, consult its folder-level `AGENTS.md` and [docs/INFRASTRUCTURE_TOPOLOGY.md](file:///Users/jacobmiller22/projects/selfhosted.feature-task-40-remote-host-verification/docs/INFRASTRUCTURE_TOPOLOGY.md):
 

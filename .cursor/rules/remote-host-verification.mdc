@@ -51,3 +51,16 @@ This workspace configures and manages remote production servers. **Services do n
      scp -r <local-path> <target-host>:/tmp/<staging-path>
      ssh <target-host> "docker cp /tmp/<staging-path>/. <container-name>:<dest-path>"
      ```
+
+6. **Outside-In Remote Deployment Verification Protocol (ODVP)**:
+   - Deployments must be verified across 5 distinct operational layers:
+     * **L1: Container Stability & Healthcheck Latch (Remote)**: Assert container status is `running` and restart count is stable via SSH.
+     * **L2: Internal Business Logic & Data Probe (Remote)**: Assert internal port responds directly on localhost via SSH.
+     * **L3: Reverse Proxy & Bridge Network (Remote)**: Inspect reverse proxy bridge network attachment via SSH.
+     * **L4: Outside DNS & TLS Handshake Validation (Client Workstation)**: Resolve public DNS records and validate valid TLS certificate.
+     * **L5: Outside-In HTTPS Egress Probe (Client Workstation)**: Assert client egress probe returns 200/302/401 and no 502/504 gateway failures.
+   - Run automated smoke verification harness:
+     ```bash
+     ./tools/verify-deployment/verify_service.sh --host bjorn --service <container> --internal-port <port> --url <https-url>
+     ```
+
