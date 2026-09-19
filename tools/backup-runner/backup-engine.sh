@@ -40,37 +40,20 @@ Usage: $(basename "$0") [OPTIONS]
 
 Canonical backup runner engine supporting sqlite-auto, filesystem, and hook modes,
 with automated OpenSSL AES-256-CBC PBKDF2 encryption, B2/S3 cloud upload, and
-retention pruning via rclone.
+upload verification. Retention is managed server-side via Backblaze B2 lifecycle rules.
 
 Options:
-  --retention-days <N>   Retention period in days before pruning old snapshots (default: 30)
-  --dry-run              Simulate pruning without deleting remote files
   --service <name>       Service identifier (default: unknown-service)
   --mode <mode>          Backup strategy: sqlite-auto, filesystem, hook
   --source-dir <path>    Source directory for sqlite-auto / filesystem modes
   --output-dir <path>    Destination directory for generated encrypted archive
   --b2-dest-path <path>  Explicit remote B2/S3 path (e.g. b2:bucket/prefix)
-  --prune-only           Execute remote pruning routine only (requires verified upload or override)
   --help, -h             Display this help message
 EOF
 }
 
-PRUNE_ONLY=false
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --retention-days)
-      if [[ -z "${2:-}" ]]; then
-        echo "[-] ERROR: Missing value for --retention-days" >&2
-        exit 1
-      fi
-      BACKUP_RETENTION_DAYS="$2"
-      shift 2
-      ;;
-    --dry-run)
-      DRY_RUN="true"
-      shift
-      ;;
     --service)
       if [[ -z "${2:-}" ]]; then
         echo "[-] ERROR: Missing value for --service" >&2
@@ -111,10 +94,6 @@ while [[ $# -gt 0 ]]; do
       B2_DEST_PATH="$2"
       shift 2
       ;;
-    --prune-only)
-      PRUNE_ONLY=true
-      shift
-      ;;
     --help|-h)
       show_help
       exit 0
@@ -152,26 +131,7 @@ BACKUP_DEST_BUCKET="${BACKUP_DEST_BUCKET:-}"
 BACKUP_DEST_ACCESS_KEY_ID="${BACKUP_DEST_ACCESS_KEY_ID:-}"
 BACKUP_DEST_SECRET_ACCESS_KEY="${BACKUP_DEST_SECRET_ACCESS_KEY:-}"
 BACKUP_DEST_PREFIX="${BACKUP_DEST_PREFIX:-backups/${SERVICE_NAME}}"
-
-# Retention & Pruning Configuration
-BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
-DRY_RUN="${DRY_RUN:-false}"
 B2_DEST_PATH="${B2_DEST_PATH:-}"
-
-# Normalize DRY_RUN
-case "$(echo "${DRY_RUN}" | tr '[:upper:]' '[:lower:]')" in
-  true|1|yes) DRY_RUN=true ;;
-  *) DRY_RUN=false ;;
-esac
-
-# Validate BACKUP_RETENTION_DAYS
-if ! [[ "${BACKUP_RETENTION_DAYS}" =~ ^[0-9]+$ ]] || [[ "${BACKUP_RETENTION_DAYS}" -lt 1 ]]; then
-  echo "[-] FATAL: Invalid BACKUP_RETENTION_DAYS='${BACKUP_RETENTION_DAYS}'. Must be a positive integer >= 1." >&2
-  exit 1
-fi
-
-# Upload verification latch state (must be true before pruning will execute)
-BACKUP_UPLOAD_VERIFIED="${BACKUP_UPLOAD_VERIFIED:-false}"
 
 # ------------------------------------------------------------------------------
 # Guaranteed Cleanup Trap (Exit & Error)
@@ -221,117 +181,6 @@ EOF
   fi
 }
 trap 'on_error "${LINENO}" "${BASH_COMMAND}" "$?"' ERR
-
-# ------------------------------------------------------------------------------
-# Remote Backup Retention & Pruning Function
-# ------------------------------------------------------------------------------
-# shellcheck disable=SC2120
-prune_remote_backups() {
-  local target_dest="${1:-}"
-
-  echo "[+] Initiating remote backup pruning (retention policy: ${BACKUP_RETENTION_DAYS} days)..."
-
-  # 1. Enforce safety latch: must run strictly AFTER upload verification succeeds
-  if [[ "${BACKUP_UPLOAD_VERIFIED:-false}" != "true" ]]; then
-    echo "[-] SAFETY ABORT: prune_remote_backups() refused to execute: new backup upload has not been verified." >&2
-    exit 1
-  fi
-
-  # 2. Determine target remote destination
-  if [[ -z "${target_dest}" ]]; then
-    if [[ -n "${B2_DEST_PATH:-}" ]]; then
-      target_dest="${B2_DEST_PATH}"
-    elif [[ -n "${BACKUP_DEST_BUCKET:-}" ]]; then
-      local dest_prefix="${BACKUP_DEST_PREFIX:-backups/${SERVICE_NAME}}"
-      dest_prefix="${dest_prefix#/}"
-      dest_prefix="${dest_prefix%/}"
-      target_dest=":s3:${BACKUP_DEST_BUCKET}/${dest_prefix}"
-    else
-      echo "[!] Pruning skipped: No remote destination configured (neither B2_DEST_PATH nor BACKUP_DEST_BUCKET is set)."
-      return 0
-    fi
-  fi
-
-  if ! command -v rclone >/dev/null 2>&1; then
-    echo "[-] WARNING: rclone not found in PATH. Skipping remote backup pruning." >&2
-    return 0
-  fi
-
-  # 3. Assemble rclone authentication / endpoint arguments
-  local rclone_args=()
-  local cleanup_target="${target_dest}"
-
-  if [[ "${target_dest}" == :s3:* ]]; then
-    rclone_args+=("--s3-provider=Other" "--s3-no-check-bucket")
-    local endpoint="${BACKUP_DEST_ENDPOINT:-}"
-    if [[ -n "${endpoint}" ]]; then
-      if [[ "${endpoint}" != http* ]]; then
-        endpoint="https://${endpoint}"
-      fi
-      rclone_args+=("--s3-endpoint=${endpoint}")
-    fi
-    if [[ -n "${BACKUP_DEST_ACCESS_KEY_ID:-}" ]]; then
-      rclone_args+=("--s3-access-key-id=${BACKUP_DEST_ACCESS_KEY_ID}")
-    fi
-    if [[ -n "${BACKUP_DEST_SECRET_ACCESS_KEY:-}" ]]; then
-      rclone_args+=("--s3-secret-access-key=${BACKUP_DEST_SECRET_ACCESS_KEY}")
-    fi
-    cleanup_target=":s3:${BACKUP_DEST_BUCKET}"
-  fi
-
-  local min_age_arg="${BACKUP_RETENTION_DAYS}d"
-
-  # 4. Discover and log candidates older than BACKUP_RETENTION_DAYS
-  echo "[+] Scanning ${target_dest} for archives older than ${BACKUP_RETENTION_DAYS} days..."
-  local candidate_list
-  candidate_list=$(rclone lsl "${target_dest}" "${rclone_args[@]}" --min-age "${min_age_arg}" 2>/dev/null || true)
-
-  if [[ -z "${candidate_list//[[:space:]]/}" ]]; then
-    echo "[+] No remote archives older than ${BACKUP_RETENTION_DAYS} day(s) found in ${target_dest}. Nothing to prune."
-  else
-    local candidate_count
-    candidate_count=$(echo "${candidate_list}" | grep -c . || true)
-    echo "[+] Discovered ${candidate_count} remote archive(s) eligible for pruning in ${target_dest}:"
-    while IFS= read -r line; do
-      [[ -z "${line}" ]] && continue
-      echo "    - ${line}"
-    done <<< "${candidate_list}"
-
-    # 5. Execute pruning (or simulate if DRY_RUN)
-    if [[ "${DRY_RUN}" == "true" ]]; then
-      echo "[*] DRY_RUN is true: Simulating deletion with --dry-run (no remote files will be deleted)..."
-      rclone delete "${target_dest}" "${rclone_args[@]}" --min-age "${min_age_arg}" --dry-run
-      echo "[+] DRY_RUN simulation completed successfully. The above candidate(s) would be pruned."
-    else
-      echo "[+] Deleting archives older than ${BACKUP_RETENTION_DAYS} day(s)..."
-      rclone delete "${target_dest}" "${rclone_args[@]}" --min-age "${min_age_arg}"
-      echo "[+] Pruning completed successfully. Pruned archive(s) with timestamp and size:"
-      while IFS= read -r line; do
-        [[ -z "${line}" ]] && continue
-        echo "    [PRUNED] ${line}"
-      done <<< "${candidate_list}"
-    fi
-  fi
-
-  # 6. Call rclone cleanup if supported
-  echo "[+] Invoking rclone cleanup on ${cleanup_target}..."
-  local cleanup_opts=("${rclone_args[@]}")
-  if [[ "${DRY_RUN}" == "true" ]]; then
-    cleanup_opts+=("--dry-run")
-  fi
-  if rclone cleanup "${cleanup_target}" "${cleanup_opts[@]}" 2>/dev/null; then
-    echo "[+] Remote cleanup completed successfully on ${cleanup_target}."
-  else
-    echo "[*] Remote cleanup completed (or not supported on remote backend; non-fatal)."
-  fi
-
-  return 0
-}
-
-if [[ "${PRUNE_ONLY}" == "true" ]]; then
-  prune_remote_backups
-  exit 0
-fi
 
 # ------------------------------------------------------------------------------
 # Validation
@@ -510,7 +359,6 @@ if [[ -n "${B2_DEST_PATH:-}" || ( -n "${BACKUP_DEST_BUCKET:-}" && -n "${BACKUP_D
       echo "[-] FATAL: Upload verification failed: ${ARCHIVE_FILENAME} not found on remote after upload." >&2
       exit 1
     fi
-    BACKUP_UPLOAD_VERIFIED=true
     echo "[+] Cloud upload verified successfully: ${verify_target}"
 
   elif command -v aws >/dev/null 2>&1; then
@@ -530,16 +378,12 @@ if [[ -n "${B2_DEST_PATH:-}" || ( -n "${BACKUP_DEST_BUCKET:-}" && -n "${BACKUP_D
       echo "[-] FATAL: Upload verification failed: ${ARCHIVE_FILENAME} not found on remote after upload." >&2
       exit 1
     fi
-    BACKUP_UPLOAD_VERIFIED=true
     echo "[+] Cloud upload verified successfully: s3://${BACKUP_DEST_BUCKET}/${s3_dest_path}"
   else
     echo "[-] Error: Neither rclone nor aws-cli found in PATH. Skipping cloud upload." >&2
     exit 1
   fi
   echo "[+] Cloud upload completed successfully."
-
-  # Prune remote backups strictly AFTER new backup creation and upload verification have succeeded
-  prune_remote_backups
 else
   echo "[!] Cloud upload skipped (destination bucket or credentials not configured)."
 fi

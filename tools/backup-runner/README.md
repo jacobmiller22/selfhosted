@@ -15,9 +15,8 @@ A canonical, reusable backup runner engine and Docker image consolidating all ba
 - **Guaranteed Staging Lifecycle**: Staging directories are cleaned up on both normal termination and failures via bash `EXIT` traps.
 - **Active Failure Notification**: ERR trap dispatches rich JSON embeds to Discord webhooks (`DISCORD_WEBHOOK_URL`).
 - **Standardized Encryption**: Zero-dependency OpenSSL AES-256-CBC PBKDF2 (`-iter 100000`, `-md sha256`, `-salt`) matching [`docs/RESTORE.md`](../../docs/RESTORE.md).
-- **Cloud Rotation & Pruning**: Uploads directly to S3 / Backblaze B2 using `rclone copyto` with `--s3-no-check-bucket` and executes automated retention pruning via `prune_remote_backups()`.
-- **Safety Upload Verification Latch**: Ensures remote snapshot pruning runs strictly AFTER the newly created backup has uploaded and its presence on remote storage is verified.
-- **Dry-Run Simulation**: Supports `DRY_RUN=true` to simulate pruning operations and audit candidates without deleting remote files.
+- **Cloud Rotation & Verification**: Uploads directly to S3 / Backblaze B2 using `rclone copyto` with `--s3-no-check-bucket` and affirmatively verifies remote presence before signaling success.
+- **Server-Side Lifecycle Retention**: Snapshot retention (30 days) is managed natively by Backblaze B2 bucket lifecycle rules, eliminating destructive client-side deletion commands and enforcing the principle of least privilege.
 - **Dead Man's Snitch / Healthchecks.io**: Automated success pings (`HEALTHCHECK_PING_URL`).
 - **Dynamic Crontab & Secret Isolation**: Entrypoint securely writes environment variables to `/run/secrets/env_vars` (mode `0600`) and executes cron jobs.
 - **Signal Handling**: Graceful shutdown on `SIGTERM` and `SIGINT`.
@@ -35,8 +34,6 @@ A canonical, reusable backup runner engine and Docker image consolidating all ba
 | `PRE_BACKUP_SCRIPT` | `/hooks/pre-backup.sh` | Hook script executed when `BACKUP_MODE=hook`. |
 | `CRON_SCHEDULE` | `0 16 * * *` | Cron schedule string (runs in UTC by default). |
 | `BACKUP_ON_STARTUP` | `false` | Run an immediate backup upon container startup before scheduling. |
-| `BACKUP_RETENTION_DAYS` | `30` | Number of days to retain remote snapshot archives before pruning. |
-| `DRY_RUN` | `false` | If `true`, simulates archive pruning via `rclone --dry-run` without deleting remote files. |
 | `DISCORD_WEBHOOK_URL` | *(Optional)* | Discord webhook URL for failure alert embeds. |
 | `HEALTHCHECK_PING_URL` | *(Optional)* | URL to ping upon successful backup completion. |
 | `BACKUP_DEST_BUCKET` | *(Optional)* | S3 / B2 bucket name for remote storage. |
@@ -48,29 +45,23 @@ A canonical, reusable backup runner engine and Docker image consolidating all ba
 
 ---
 
-## Remote Retention Policy & Pruning Mechanics
+## Backblaze B2 Server-Side Lifecycle Rules & Least Privilege
 
-The backup runner includes automated remote snapshot retention management in `tools/backup-runner/backup-engine.sh` via the `prune_remote_backups()` routine:
+Snapshot retention is managed **server-side** by Backblaze B2 bucket lifecycle rules rather than client-side container pruning:
 
-1. **Ordering & Safety Latch**:
-   - Remote archive pruning is gated by a strict ordering latch (`BACKUP_UPLOAD_VERIFIED=true`).
-   - Pruning executes strictly AFTER the new backup snapshot has been created, uploaded, and verified on the remote storage backend (via `rclone lsf` or `aws s3 ls`).
-   - If the new backup creation or cloud upload fails, pruning is immediately aborted, preventing any scenario where existing backups are deleted after an upload failure.
+1. **Principle of Least Privilege (Ransomware Defense)**:
+   - Backup containers on host `bjorn` only require `writeFiles` (plus `listFiles` and `readFiles` for upload verification).
+   - Containers **DO NOT possess `deleteFiles` capability**.
+   - If container credentials or the server host are ever compromised, historical backups on Backblaze B2 cannot be wiped or held for ransom.
 
-2. **Age-Based Pruning (`rclone delete`)**:
-   - Queries candidate archives using `rclone lsl <remote> --min-age ${BACKUP_RETENTION_DAYS}d`.
-   - Logs candidate archives with timestamp and size.
-   - Deletes snapshots exceeding the retention period:
-     ```bash
-     rclone delete "${B2_DEST_PATH}" --min-age "${BACKUP_RETENTION_DAYS}d"
-     ```
+2. **Zero Client Compute & Quota Overhead**:
+   - Eliminates recurring `rclone delete` and `rclone lsl` sweeps on the server.
+   - Eliminates unnecessary Class B/C API transactions and latency.
 
-3. **Bucket Cleanup (`rclone cleanup`)**:
-   - Calls `rclone cleanup` on the target remote to remove uncompleted multipart uploads and old version fragments where supported by the storage backend (e.g. Backblaze B2).
-
-4. **Dry-Run Simulation (`DRY_RUN=true` or `--dry-run`)**:
-   - When enabled, appends `--dry-run` to all `rclone` operations.
-   - Discovers and logs candidate archives without deleting any files from remote storage.
+3. **B2 Lifecycle Rule Configuration**:
+   - `daysFromUploadingToHiding: 30` (marks versions older than 30 days as hidden).
+   - `daysFromHidingToDeleting: 1` (permanently deletes hidden versions after 1 day).
+   - See [`docs/BACKUP_ARCHITECTURE.md`](../../docs/BACKUP_ARCHITECTURE.md) Section 7 for full JSON rules and CLI instructions.
 
 ---
 

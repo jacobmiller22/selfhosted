@@ -124,28 +124,53 @@ If the entire server crashes, Docker hangs, or cron fails to trigger, active err
 
 ---
 
-## 7. Storage Lifecycle & Retention Policy
+## 7. Storage Lifecycle & Backblaze B2 Server-Side Retention Policy
 
 - **Target Bucket**: Backblaze B2 (`jacobmiller22-secure-backup`).
 - **Archive Path Format**: `backups/<service>/<service>-backup-%Y-%m-%d_%H-%M-%S.tar.gz.enc`
-- **Configurable Snapshot Retention**: Managed via `BACKUP_RETENTION_DAYS` (default: **30 days**).
+- **Snapshot Retention**: Managed natively via **Backblaze B2 Bucket Lifecycle Rules** (30-day retention).
 - **Cold Off-site**: Once per quarter, download the latest archives for physical offline archive.
 
-### 7.1 Automated Archive Pruning Mechanics
-To prevent unbounded storage growth and cost accumulation on Backblaze B2, the universal backup engine executes automated remote pruning after each backup cycle via `prune_remote_backups()`:
+### 7.1 Server-Side Lifecycle Rules vs. Client-Side Pruning
+Snapshot retention is enforced **server-side** by Backblaze B2 rather than having individual backup runner containers execute destructive client-side delete commands:
 
-1. **Age-Based Remote Pruning**:
-   - Executes `rclone delete --min-age ${BACKUP_RETENTION_DAYS}d` against the service's remote prefix.
-   - Discovers and logs candidate archives with human-readable timestamps and byte sizes before deletion.
-2. **Bucket Cleanup**:
-   - Executes `rclone cleanup` against the destination bucket to purge uncompleted multipart uploads and old bucket version fragments.
-3. **Dry-Run Auditing (`DRY_RUN=true`)**:
-   - When `DRY_RUN=true` or `--dry-run` is supplied, candidate archives are identified and logged, and `rclone delete --dry-run` simulates the operation without modifying remote storage.
+1. **Principle of Least Privilege & Ransomware Protection**:
+   - Application keys injected into Docker containers on `bjorn` only require `writeFiles` (plus `listFiles` and `readFiles` for upload verification).
+   - Containers **DO NOT possess `deleteFiles` capability**.
+   - If a container on `bjorn` is ever compromised by an attacker or rogue script, existing remote historical backups cannot be purged or held for ransom.
+2. **Zero Client Compute & Network Quota Overhead**:
+   - Eliminates recurring `rclone delete` or `rclone lsl` scans across all services every day.
+   - Eliminates Class B / Class C API transaction charges and network latency on container backup runs.
+3. **High Reliability & Self-Healing**:
+   - Backblaze B2's storage infrastructure handles expiration and file deletion asynchronously in the background, independent of server uptime or container execution.
 
-### 7.2 Safety Upload Verification Latch
-To prevent data loss in the event of an upload failure, remote pruning enforces a strict safety latch:
-- Remote deletion commands (`rclone delete`) **ONLY** execute after:
-  1. The new encrypted backup archive is produced and non-empty.
-  2. The cloud upload completes with exit code 0.
-  3. The uploaded archive's existence on remote storage is affirmatively verified (via `rclone lsf` or `aws s3 ls`).
-- If backup creation, upload, or remote verification fails, `BACKUP_UPLOAD_VERIFIED` remains `false` and `prune_remote_backups()` immediately aborts execution, guaranteeing that existing recovery snapshots are never purged when a new backup has not been secured.
+### 7.2 Backblaze B2 Lifecycle Configuration Specification
+The B2 bucket `jacobmiller22-secure-backup` is configured with the following lifecycle rules:
+
+```json
+[
+  {
+    "daysFromUploadingToHiding": 30,
+    "daysFromHidingToDeleting": 1,
+    "fileNamePrefix": "backups/"
+  }
+]
+```
+
+- **`daysFromUploadingToHiding: 30`**: Snapshots older than 30 days are automatically hidden (marked as non-current).
+- **`daysFromHidingToDeleting: 1`**: Hidden versions are permanently purged after 1 day, maintaining a clean 30-day rolling retention window.
+
+#### Applying Lifecycle Rules via B2 CLI or AWS S3 API
+Administrators can inspect or apply lifecycle policies from their management workstation:
+
+```bash
+# Using Backblaze B2 CLI:
+b2 update-bucket \
+  --lifecycleRule '{"daysFromUploadingToHiding": 30, "daysFromHidingToDeleting": 1, "fileNamePrefix": "backups/"}' \
+  jacobmiller22-secure-backup allPrivate
+
+# Or using AWS S3 API:
+aws s3api put-bucket-lifecycle-configuration \
+  --bucket jacobmiller22-secure-backup \
+  --lifecycle-configuration file://b2-lifecycle.json
+```

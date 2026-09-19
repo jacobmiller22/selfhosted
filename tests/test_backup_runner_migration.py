@@ -175,16 +175,16 @@ class TestBackupRunnerMigration(unittest.TestCase):
                 f"docker compose config failed for {name}:\nSTDOUT: {res.stdout}\nSTDERR: {res.stderr}",
             )
 
-    def test_backup_retention_and_pruning_features(self):
-        """Verify that backup-engine.sh implements BACKUP_RETENTION_DAYS, DRY_RUN, and prune_remote_backups."""
+    def test_backup_server_side_lifecycle_architecture(self):
+        """Verify that backup-engine.sh relies on server-side B2 lifecycle rules rather than client-side deletion."""
         engine_script = REPO_ROOT / "tools" / "backup-runner" / "backup-engine.sh"
         content = engine_script.read_text(encoding="utf-8")
-        self.assertIn("BACKUP_RETENTION_DAYS", content)
-        self.assertIn("DRY_RUN", content)
-        self.assertIn("prune_remote_backups", content)
-        self.assertIn("BACKUP_UPLOAD_VERIFIED", content)
-        self.assertIn("rclone delete", content)
-        self.assertIn("rclone cleanup", content)
+        # Ensure client-side deletion routines are eliminated from the engine
+        self.assertNotIn("prune_remote_backups", content)
+        self.assertNotIn("rclone delete", content)
+        # Ensure upload verification remains active
+        self.assertIn("Verifying cloud upload", content)
+        self.assertIn("lifecycle", content.lower())
 
 
 if __name__ == "__main__":
