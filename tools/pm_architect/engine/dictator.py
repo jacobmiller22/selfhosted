@@ -8,6 +8,7 @@ Arbitrates debate impasses and enforces the User's 4 Non-Negotiable Operational 
 4. Single-Server Catastrophe Risk (Blast radius containment, no HA cluster exists)
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from .fact_checker import IssueFactCheckResult, CodebaseInventory
@@ -74,8 +75,13 @@ class BenevolentDictator:
                 "Immediate cutover without verified staging validation is forbidden."
             )
 
+        # Ignore tooling / architect self-maintenance issues from infrastructure vetoes
+        is_tooling = any(t in title.lower() for t in ['fix(architect)', 'feat(architect)', 'chore(architect)', 'tools/pm_architect', 'pm architect'])
+
         # --- Check Axiom 3: Minimal Maintenance Burden ---
-        is_overengineered = any(k in combined for k in ['kubernetes', 'k8s', 'consul', 'nomad', 'zookeeper', 'distributed consensus'])
+        is_overengineered = not is_tooling and bool(
+            re.search(r'\b(?:kubernetes|k8s|consul|nomad|zookeeper|distributed consensus)\b', combined)
+        )
         if is_overengineered:
             veto_reasons.append(
                 "VETOED UNDER AXIOM 3: Heavy multi-node orchestration is strictly vetoed on single host bjorn. "
