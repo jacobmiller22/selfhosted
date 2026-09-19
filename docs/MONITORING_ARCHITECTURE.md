@@ -468,7 +468,7 @@ Alert rules reside in the `Host-And-Container-Alerts` rule group (folder `Infras
    - **UID**: `alert-disk-warning`
    - **PromQL Expression**:
      ```promql
-     100 - ((node_filesystem_avail_bytes{mountpoint="/host"} * 100) / node_filesystem_size_bytes{mountpoint="/host"}) > 80
+     100 - ((node_filesystem_avail_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"} * 100) / node_filesystem_size_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"}) > 80
      ```
    - **Duration (`for`)**: `15m`
    - **Severity**: `warning`
@@ -478,7 +478,7 @@ Alert rules reside in the `Host-And-Container-Alerts` rule group (folder `Infras
    - **UID**: `alert-disk-critical`
    - **PromQL Expression**:
      ```promql
-     100 - ((node_filesystem_avail_bytes{mountpoint="/host"} * 100) / node_filesystem_size_bytes{mountpoint="/host"}) > 90
+     100 - ((node_filesystem_avail_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"} * 100) / node_filesystem_size_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"}) > 90
      ```
    - **Duration (`for`)**: `5m`
    - **Severity**: `critical`
