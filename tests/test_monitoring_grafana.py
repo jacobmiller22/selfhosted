@@ -370,6 +370,12 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
         self.assertTrue(panel_105.get("options", {}).get("reduceOptions", {}).get("values"),
                         "Panel 105 piechart must have reduceOptions.values = true to render multi-row slices")
 
+        panel_107 = panels.get(107)
+        self.assertIsNotNone(panel_107, "Panel 107 (Asset Allocation piechart) must exist")
+        self.assertEqual(panel_107.get("type"), "piechart")
+        self.assertTrue(panel_107.get("options", {}).get("reduceOptions", {}).get("values"),
+                        "Panel 107 piechart must have reduceOptions.values = true to render asset class slices")
+
         panel_303 = panels.get(303)
         self.assertIsNotNone(panel_303, "Panel 303 (bargauge) must exist")
         self.assertEqual(panel_303.get("type"), "bargauge")
@@ -406,16 +412,20 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
             CREATE TABLE payees (
                 id TEXT PRIMARY KEY,
                 name TEXT,
+                transfer_acct TEXT,
                 tombstone INTEGER DEFAULT 0
             );
             CREATE TABLE transactions (
                 id TEXT PRIMARY KEY,
+                isParent INTEGER DEFAULT 0,
+                isChild INTEGER DEFAULT 0,
                 date INTEGER,
                 amount INTEGER,
                 acct TEXT,
                 category TEXT,
                 description TEXT,
                 imported_description TEXT,
+                transferred_id TEXT,
                 tombstone INTEGER DEFAULT 0
             );
             CREATE TABLE zero_budgets (
@@ -454,11 +464,17 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
             for target in p.get("targets", []):
                 raw_sql = target.get("rawQueryText") or target.get("rawSql")
                 if raw_sql:
+                    # Grafana frontend expands template variables before passing SQL to SQLite.
+                    # Simulate default '$__all' expansion:
+                    clean_sql = (
+                        raw_sql.replace("${category_group:singlequote}", "'$__all'")
+                        .replace("${account:singlequote}", "'$__all'")
+                    )
                     try:
-                        cur.execute(raw_sql)
+                        cur.execute(clean_sql)
                         executed_queries += 1
                     except Exception as e:
-                        self.fail(f"Query in panel '{p.get('title')}' failed with error: {e}\\nSQL:\\n{raw_sql}")
+                        self.fail(f"Query in panel '{p.get('title')}' failed with error: {e}\nSQL:\n{clean_sql}")
 
         self.assertTrue(executed_queries >= 12, f"Expected at least 12 SQL queries executed, got {executed_queries}")
 
