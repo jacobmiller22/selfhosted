@@ -77,3 +77,20 @@ ssh bjorn "curl -fsS -o /dev/null -w '%{http_code}\n' http://localhost:7277/aliv
 
 ### 3.4 Ingress & WebSockets
 - Vaultwarden supports live sync notifications via WebSockets on port `3012` (or built-in rocket routes in modern versions). Ensure NPM routes traffic properly with WebSocket upgrade headers enabled.
+
+---
+
+## 4. Staging Upgrade & Migration Verification Protocol
+
+Prior to performing any production container image upgrade or schema migration:
+
+1. **Pre-flight Ephemeral Staging Validation**:
+   Always execute the automated staging validation harness to test candidate images against a fresh production snapshot:
+   ```bash
+   ./tools/staging/verify-vaultwarden-upgrade.sh --host bjorn <new-image-tag>
+   ```
+2. **Schema & Log Assertion**:
+   Ensure container logs report clean Diesel migrations without SQLite lock errors (`database is locked`) or Rust panics.
+3. **Integrity & Segregation Verification**:
+   The verification harness asserts `PRAGMA integrity_check` on `vw-stage-data/db.sqlite3` and verifies `SIGNUPS_ALLOWED=false` with host port `7278` isolation before exiting.
+

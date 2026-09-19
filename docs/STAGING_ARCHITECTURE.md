@@ -185,3 +185,46 @@ The `tools/staging/hydrate.sh` utility automates fast, zero-downtime online snap
 ./tools/staging/hydrate.sh actual --dry-run
 ```
 
+---
+
+## 7. Vaultwarden Staging Upgrade & Schema Migration Runbook (`tools/staging/verify-vaultwarden-upgrade.sh`)
+
+The `tools/staging/verify-vaultwarden-upgrade.sh` helper automates pre-flight staging upgrade testing, SQLite schema migration validation, and client segregation assertion against live snapshots before production deployment.
+
+### 7.1 Upgrade Validation Steps
+
+```mermaid
+flowchart TD
+    S1["1. Pre-Flight Hydration\n(hydrate.sh vaultwarden)"] --> S2["2. Spin up vaultwarden-staging\n(IMAGE_TAG=<tag> on port 7278)"]
+    S2 --> S3["3. Monitor Container Logs\n(detect schema migration, panics, locks)"]
+    S3 --> S4["4. Health Probing\n(HTTP 200 on /alive and Web Vault UI /)"]
+    S4 --> S5["5. SQLite Integrity Check\n(PRAGMA integrity_check on db.sqlite3)"]
+    S5 --> S6["6. Client Segregation Assertion\n(SIGNUPS_ALLOWED=false, DOMAIN=http://localhost:7278)"]
+    S6 --> S7["7. Teardown / Cleanup\n(docker compose down via EXIT trap)"]
+```
+
+1. **Pre-flight Hydration**: Runs `tools/staging/hydrate.sh vaultwarden` to snapshot production `db.sqlite3`, `rsa_key.pem` (600), `rsa_key.pub`, attachments, and sends into `vw-stage-data`.
+2. **Container Launch**: Boots `vaultwarden-staging` with candidate image tag on port `7278` (`IMAGE_TAG=<tag> docker compose -f vaultwarden/compose.yml --profile staging up -d vaultwarden-staging`).
+3. **Log Monitoring**: Scans container logs for SQLite schema migration output, database lock errors (`DatabaseLocked`), or Rust panics.
+4. **Health Probe**: Probes `http://localhost:7278/alive` for HTTP 200 OK and asserts Web Vault UI assets (`http://localhost:7278/`) load within timeout.
+5. **SQLite Integrity Check**: Executes `PRAGMA integrity_check;` on the staging database (`vw-stage-data/db.sqlite3`), asserting output is `ok`.
+6. **Client Segregation Validation**: Confirms staging configuration has `SIGNUPS_ALLOWED=false` and isolated domain `http://localhost:7278` so production mobile/browser clients do not receive push notifications or attempt sync.
+7. **Guaranteed Teardown**: Automatically cleans up containers (`docker compose --profile staging down`) in a bash `EXIT` trap unless `--keep` is specified.
+
+### 7.2 CLI Syntax & Operational Patterns
+
+```bash
+# Dry-run validation of upgrade to candidate version:
+./tools/staging/verify-vaultwarden-upgrade.sh --dry-run 1.35.5
+
+# Standard upgrade test on target host bjorn:
+./tools/staging/verify-vaultwarden-upgrade.sh --host bjorn 1.35.5
+
+# Test candidate image without re-hydrating snapshot:
+./tools/staging/verify-vaultwarden-upgrade.sh --skip-hydrate 1.35.5
+
+# Validate and keep staging container running for manual UI testing:
+./tools/staging/verify-vaultwarden-upgrade.sh --keep 1.35.5
+```
+
+
