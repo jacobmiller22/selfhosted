@@ -26,11 +26,12 @@ services:
 
   actual-backup:
     build:
-      context: ./backup
+      context: ../tools/backup-runner
     container_name: actual-backup
     restart: unless-stopped
     environment:
       - SERVICE_NAME=actual
+      - BACKUP_MODE=sqlite-auto
       - BACKUP_SOURCE_DIR=/tmp/actual-data
       - BACKUP_DEST_PREFIX=backups/actual
       - BACKUP_DEST_ENDPOINT=${BACKUP_DEST_ENDPOINT}
