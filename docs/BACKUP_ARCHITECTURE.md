@@ -128,5 +128,24 @@ If the entire server crashes, Docker hangs, or cron fails to trigger, active err
 
 - **Target Bucket**: Backblaze B2 (`jacobmiller22-secure-backup`).
 - **Archive Path Format**: `backups/<service>/<service>-backup-%Y-%m-%d_%H-%M-%S.tar.gz.enc`
-- **Retention Rule**: Backblaze B2 lifecycle policy set to keep versions/objects for **30 days**.
+- **Configurable Snapshot Retention**: Managed via `BACKUP_RETENTION_DAYS` (default: **30 days**).
 - **Cold Off-site**: Once per quarter, download the latest archives for physical offline archive.
+
+### 7.1 Automated Archive Pruning Mechanics
+To prevent unbounded storage growth and cost accumulation on Backblaze B2, the universal backup engine executes automated remote pruning after each backup cycle via `prune_remote_backups()`:
+
+1. **Age-Based Remote Pruning**:
+   - Executes `rclone delete --min-age ${BACKUP_RETENTION_DAYS}d` against the service's remote prefix.
+   - Discovers and logs candidate archives with human-readable timestamps and byte sizes before deletion.
+2. **Bucket Cleanup**:
+   - Executes `rclone cleanup` against the destination bucket to purge uncompleted multipart uploads and old bucket version fragments.
+3. **Dry-Run Auditing (`DRY_RUN=true`)**:
+   - When `DRY_RUN=true` or `--dry-run` is supplied, candidate archives are identified and logged, and `rclone delete --dry-run` simulates the operation without modifying remote storage.
+
+### 7.2 Safety Upload Verification Latch
+To prevent data loss in the event of an upload failure, remote pruning enforces a strict safety latch:
+- Remote deletion commands (`rclone delete`) **ONLY** execute after:
+  1. The new encrypted backup archive is produced and non-empty.
+  2. The cloud upload completes with exit code 0.
+  3. The uploaded archive's existence on remote storage is affirmatively verified (via `rclone lsf` or `aws s3 ls`).
+- If backup creation, upload, or remote verification fails, `BACKUP_UPLOAD_VERIFIED` remains `false` and `prune_remote_backups()` immediately aborts execution, guaranteeing that existing recovery snapshots are never purged when a new backup has not been secured.
