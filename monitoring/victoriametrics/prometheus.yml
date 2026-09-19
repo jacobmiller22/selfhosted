@@ -35,3 +35,23 @@ scrape_configs:
         labels:
           instance: 'bjorn'
           environment: 'production'
+
+  # 4. Outside-In Blackbox Probing
+  - job_name: 'blackbox-http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - https://budget.cloud.jacobmiller22.com
+        - https://vw.cloud.jacobmiller22.com
+        - https://ha.cloud.jacobmiller22.com
+        - https://coolify.cloud.jacobmiller22.com
+        - https://monitoring.cloud.jacobmiller22.com
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
