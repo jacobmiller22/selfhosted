@@ -225,6 +225,7 @@ trap 'on_error "${LINENO}" "${BASH_COMMAND}" "$?"' ERR
 # ------------------------------------------------------------------------------
 # Remote Backup Retention & Pruning Function
 # ------------------------------------------------------------------------------
+# shellcheck disable=SC2120
 prune_remote_backups() {
   local target_dest="${1:-}"
 
