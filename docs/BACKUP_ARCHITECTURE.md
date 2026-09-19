@@ -29,8 +29,9 @@ The self-hosted infrastructure hosts critical services including financial manag
 │  │  - Vaultwarden        │         │  1. Safe SQLite .backup / VACUUM│  │
 │  │  - Home Assistant     │         │  2. Tar + OpenSSL AES-256-CBC  │  │
 │  │  - Nginx Proxy Manager│         │  3. Timestamped B2/S3 Upload   │  │
-│  │  - Coolify DB         │         │  4. Trap ERR ──▶ Discord Alert │  │
-│  └───────────────────────┘         │  5. On Success ──▶ Snitch Ping │  │
+│  │  - Obsidian CouchDB   │         │  4. Trap ERR ──▶ Discord Alert │  │
+│  │  - Coolify DB         │         │  5. On Success ──▶ Snitch Ping │  │
+│  └───────────────────────┘         │                                │  │
 │                                    └────────────────────────────────┘  │
 └────────────────────────────────────────────────────┬───────────────────┘
                                                      │ TLS / S3 API
@@ -118,6 +119,7 @@ If the entire server crashes, Docker hangs, or cron fails to trigger, active err
 | **Vaultwarden** | Docker volume `vw-data`:<br>- `db.sqlite3`<br>- `rsa_key.pem` & `rsa_key.pub`<br>- `attachments/`<br>- `sends/`<br>- `config.json` | Run `sqlite3 db.sqlite3 ".backup <dest>"` for SQLite.<br>Copy RSA keypair, attachments, and sends directories. | Restoring `db.sqlite3` without `rsa_key.pem` invalidates existing auth/session tokens. |
 | **Home Assistant** | Bind mount `/data/coolify/applications/<id>/config`:<br>- `.storage/`<br>- `home-assistant_v2.db`<br>- `configuration.yaml` | Run `sqlite3 home-assistant_v2.db ".backup <dest>"` for SQLite.<br>Archive `.storage/` and YAML files. | `.storage/` holds all credentials and integration states; must be preserved intact. |
 | **Nginx Proxy Manager** | Bind mounts:<br>- `data/database.sqlite`<br>- `data/keys.json`<br>- `letsencrypt/` | Snapshot `database.sqlite`.<br>Archive `keys.json` and `/etc/letsencrypt`. | Restoring certificates prevents Let's Encrypt rate-limiting on rebuilds. |
+| **Obsidian LiveSync** | Bind mount `./db/data` (`/opt/couchdb/data`):<br>- `*.couch`<br>- `.shards/`<br>- View indexes | `filesystem` mode copy of `/data` via read-only bind mount (`:ro`). | Read-only mount prevents write lock contention during live sync. Ownership must be restored as `5984:5984`. |
 | **Coolify State** | Docker container `coolify-db` (Postgres 15) | Run `docker exec coolify-db pg_dump -U coolify -d coolify`. | Backs up all service configurations, deployment environments, and secrets. |
 
 ---

@@ -14,6 +14,26 @@ services:
     restart: unless-stopped
     networks:
       - nginx-proxy-manager
+
+  obsidian-backup:
+    build:
+      context: ../tools/backup-runner
+    container_name: obsidian-backup
+    restart: unless-stopped
+    mem_limit: 256M
+    cpus: 0.50
+    environment:
+      SERVICE_NAME: obsidian
+      BACKUP_MODE: filesystem
+      BACKUP_SOURCE_DIR: /data
+      CRON_SCHEDULE: "0 17 * * *"
+      B2_BUCKET: ${B2_BUCKET}
+      B2_KEY_ID: ${B2_KEY_ID}
+      B2_APPLICATION_KEY: ${B2_APPLICATION_KEY}
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+    volumes:
+      - ./db/data:/data:ro
 networks:
   nginx-proxy-manager:
     name: nginx-proxy-manager
