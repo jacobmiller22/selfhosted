@@ -92,7 +92,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "100 - ((node_filesystem_avail_bytes{mountpoint=\"/host\"} * 100) / node_filesystem_size_bytes{mountpoint=\"/host\"})",
+          "expr": "100 - ((node_filesystem_avail_bytes{mountpoint=~\"/|/host\",fstype!~\"tmpfs|ramfs\"} * 100) / node_filesystem_size_bytes{mountpoint=~\"/|/host\",fstype!~\"tmpfs|ramfs\"})",
           "legendFormat": "Root FS Used %",
           "refId": "A"
         }
@@ -139,7 +139,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "node_filesystem_size_bytes{mountpoint=\"/host\"}",
+          "expr": "node_filesystem_size_bytes{mountpoint=~\"/|/host\",fstype!~\"tmpfs|ramfs\"}",
           "legendFormat": "Total Storage",
           "refId": "A"
         }
@@ -186,7 +186,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "node_filesystem_size_bytes{mountpoint=\"/host\"} - node_filesystem_free_bytes{mountpoint=\"/host\"}",
+          "expr": "node_filesystem_size_bytes{mountpoint=~\"/|/host\",fstype!~\"tmpfs|ramfs\"} - node_filesystem_free_bytes{mountpoint=~\"/|/host\",fstype!~\"tmpfs|ramfs\"}",
           "legendFormat": "Used Storage",
           "refId": "A"
         }
@@ -233,7 +233,7 @@
             "type": "prometheus",
             "uid": "victoriametrics"
           },
-          "expr": "node_filesystem_free_bytes{mountpoint=\"/host\"}",
+          "expr": "node_filesystem_free_bytes{mountpoint=~\"/|/host\",fstype!~\"tmpfs|ramfs\"}",
           "legendFormat": "Free Storage",
           "refId": "A"
         }
