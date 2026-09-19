@@ -532,8 +532,6 @@ WHERE t.tombstone = 0
   AND (c.is_income = 0 OR c.is_income IS NULL)
   AND t.amount < 0
   AND g.name NOT IN ('Investments and Savings')
-  AND ('$__all' IN (${category_group:singlequote}) OR g.name IN (${category_group:singlequote}))
-  AND ('$__all' IN (${account:singlequote}) OR a.name IN (${account:singlequote}))
   AND t.date >= CAST(strftime('%Y%m01', date('now', '-60 day')) AS INTEGER)
 GROUP BY 1, 2, 3
 ORDER BY 4 DESC
@@ -588,7 +586,6 @@ WHERE t.tombstone = 0
   AND c.is_income = 0
   AND t.amount < 0
   AND g.name NOT IN ('Investments and Savings', 'One-Time')
-  AND ('$__all' IN (${category_group:singlequote}) OR g.name IN (${category_group:singlequote}))
   AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
 GROUP BY 1, 2
 ORDER BY 3 DESC
@@ -662,7 +659,6 @@ WITH stats AS (
     AND c.is_income = 0
     AND t.amount < 0
     AND g.name NOT IN ('Investments and Savings')
-    AND ('$__all' IN (${category_group:singlequote}) OR g.name IN (${category_group:singlequote}))
     AND t.date >= CAST(strftime('%Y%m01', date('now', '-180 day')) AS INTEGER)
   GROUP BY t.category
   HAVING COUNT(*) >= 5
@@ -691,7 +687,6 @@ WHERE t.tombstone = 0
   AND c.is_income = 0
   AND t.amount < 0
   AND g.name NOT IN ('Investments and Savings')
-  AND ('$__all' IN (${category_group:singlequote}) OR g.name IN (${category_group:singlequote}))
   AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
   AND (ABS(t.amount) / 100.0 - s.avg_amt) / s.std_amt >= 2.0
 ORDER BY "Z-Score" DESC
@@ -741,7 +736,6 @@ WHERE t.tombstone = 0
   AND c.is_income = 0
   AND t.amount < 0
   AND g.name NOT IN ('Investments and Savings', 'One-Time')
-  AND ('$__all' IN (${category_group:singlequote}) OR g.name IN (${category_group:singlequote}))
   AND t.date >= CAST(strftime('%Y%m01', date('now', '-180 day')) AS INTEGER)
 GROUP BY c.id, c.name
 HAVING COUNT(*) >= 4
@@ -826,8 +820,6 @@ WITH payee_spend AS (
     AND c.is_income = 0
     AND t.amount < 0
     AND g.name NOT IN ('Investments and Savings')
-    AND ('$__all' IN (${category_group:singlequote}) OR g.name IN (${category_group:singlequote}))
-    AND ('$__all' IN (${account:singlequote}) OR a.name IN (${account:singlequote}))
     AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
   GROUP BY payee_name
 ),
@@ -1000,8 +992,6 @@ WHERE t.tombstone = 0
   AND c.is_income = 0
   AND t.amount < 0
   AND g.name NOT IN ('Investments and Savings')
-  AND ('$__all' IN (${category_group:singlequote}) OR g.name IN (${category_group:singlequote}))
-  AND ('$__all' IN (${account:singlequote}) OR a.name IN (${account:singlequote}))
   AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
 GROUP BY 1
 HAVING COUNT(*) >= 3
@@ -1172,7 +1162,6 @@ budget_limits AS (
   WHERE zb.month = CAST(strftime('%Y%m', 'now') AS INTEGER)
     AND zb.amount > 0
     AND g.name NOT IN ('Investments and Savings', 'One-Time')
-    AND ('$__all' IN (${category_group:singlequote}) OR g.name IN (${category_group:singlequote}))
 )
 SELECT
   c.name AS "Category",
@@ -1278,7 +1267,6 @@ WHERE t.tombstone = 0
   AND c.is_income = 0
   AND t.amount < 0
   AND g.name NOT IN ('Investments and Savings')
-  AND ('$__all' IN (${category_group:singlequote}) OR g.name IN (${category_group:singlequote}))
   AND t.date >= CAST(strftime('%Y%m01', date('now', '-30 day')) AS INTEGER)
 GROUP BY g.name, c.name
 ORDER BY 3 DESC
@@ -1342,7 +1330,6 @@ FROM category_groups g
 LEFT JOIN budgeted b ON g.id = b.cat_group
 LEFT JOIN actuals a ON g.id = a.cat_group
 WHERE g.tombstone = 0 AND g.is_income = 0
-  AND ('$__all' IN (${category_group:singlequote}) OR g.name IN (${category_group:singlequote}))
   AND (COALESCE(b.budget_amt, 0) > 0 OR COALESCE(a.actual_amt, 0) > 0)
 ORDER BY "Net Variance ($)" ASC
 """)
@@ -1402,8 +1389,6 @@ ORDER BY "Net Variance ($)" ASC
         "templating": {
             "list": [
                 {
-                    "allValue": "$__all",
-                    "current": {"selected": true, "text": "All", "value": "$__all"},
                     "datasource": DS,
                     "definition": "SELECT name FROM accounts WHERE tombstone = 0 AND closed = 0 ORDER BY name ASC",
                     "hide": 0,
@@ -1418,8 +1403,6 @@ ORDER BY "Net Variance ($)" ASC
                     "type": "query"
                 },
                 {
-                    "allValue": "$__all",
-                    "current": {"selected": true, "text": "All", "value": "$__all"},
                     "datasource": DS,
                     "definition": "SELECT name FROM category_groups WHERE tombstone = 0 AND is_income = 0 ORDER BY name ASC",
                     "hide": 0,
@@ -1440,7 +1423,7 @@ ORDER BY "Net Variance ($)" ASC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 1
+        "version": 10
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)

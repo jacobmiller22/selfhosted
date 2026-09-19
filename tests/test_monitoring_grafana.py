@@ -471,17 +471,11 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
             for target in p.get("targets", []):
                 raw_sql = target.get("rawQueryText") or target.get("rawSql")
                 if raw_sql:
-                    # Grafana frontend expands template variables before passing SQL to SQLite.
-                    # Simulate default '$__all' expansion:
-                    clean_sql = (
-                        raw_sql.replace("${category_group:singlequote}", "'$__all'")
-                        .replace("${account:singlequote}", "'$__all'")
-                    )
                     try:
-                        cur.execute(clean_sql)
+                        cur.execute(raw_sql)
                         executed_queries += 1
                     except Exception as e:
-                        self.fail(f"Query in panel '{p.get('title')}' failed with error: {e}\nSQL:\n{clean_sql}")
+                        self.fail(f"Query in panel '{p.get('title')}' failed with error: {e}\nSQL:\n{raw_sql}")
 
         self.assertTrue(executed_queries >= 12, f"Expected at least 12 SQL queries executed, got {executed_queries}")
 
