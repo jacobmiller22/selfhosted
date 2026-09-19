@@ -227,4 +227,40 @@ flowchart TD
 ./tools/staging/verify-vaultwarden-upgrade.sh --keep 1.35.5
 ```
 
+---
+
+## 8. Ephemeral Staging Smoke Test Runner (`tools/backup-dr/staging-smoke-test.sh`)
+
+The `tools/backup-dr/staging-smoke-test.sh` utility automates end-to-end failover drill verification. It spins up ephemeral staging containers on isolated networks, executes HTTP health probes, and guarantees complete cleanup via signal and exit traps.
+
+### 8.1 Architecture & Verification Pipeline
+1. **Isolated Network Provisioning**: Creates or attaches to isolated bridge network `staging-net`, ensuring zero network traffic escapes into production or reverse proxies.
+2. **Resource Capping & Port Segregation**: Runs containers with 256m memory limits, 0.50 CPU, mapping ports `5006:5006` (Actual Budget) and `7278:80` (Vaultwarden).
+3. **HTTP Health Probing**:
+   - **Actual Budget**: Polls `http://localhost:5006/` asserting HTTP 200 or 302 within `--timeout <sec>` (default: 30s).
+   - **Vaultwarden**: Polls `http://localhost:7278/alive` asserting HTTP 200 within `--timeout <sec>` (default: 30s).
+4. **Log Inspection**: Inspects container logs for fatal panics or SQLite lock errors (`panic:`, `fatal error:`, `database is locked`).
+5. **Guaranteed Teardown Traps**: Binds `ERR`, `EXIT`, `INT`, and `TERM` traps to guarantee container termination (`docker stop`, `docker rm -f`) and ephemeral network deletion, unless `--keep` is specified.
+6. **Remote Host Execution**: Wraps commands in SSH when `--host <hostname>` is supplied, adhering to the Remote Host Verification Protocol (RHVP).
+
+### 8.2 CLI Syntax & Invocations
+```bash
+# Run staging smoke tests for all services locally
+./tools/backup-dr/staging-smoke-test.sh
+
+# Run staging smoke test for Actual Budget only
+./tools/backup-dr/staging-smoke-test.sh --service actual
+
+# Run staging smoke test for Vaultwarden only
+./tools/backup-dr/staging-smoke-test.sh --service vaultwarden
+
+# Execute remotely on production host bjorn
+./tools/backup-dr/staging-smoke-test.sh --host bjorn --timeout 30
+
+# Test restored backup data directory and retain containers for debugging
+./tools/backup-dr/staging-smoke-test.sh --data-dir /path/to/decrypted --keep
+
+# Deterministic pre-flight simulation (no Docker daemon required)
+./tools/backup-dr/staging-smoke-test.sh --dry-run
+```
 
