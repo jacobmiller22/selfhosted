@@ -382,6 +382,13 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
         self.assertTrue(panel_303.get("options", {}).get("reduceOptions", {}).get("values"),
                         "Panel 303 bargauge must have reduceOptions.values = true to render category bars")
 
+        panel_103 = panels.get(103)
+        self.assertIsNotNone(panel_103, "Panel 103 (runway gauge) must exist")
+        self.assertEqual(panel_103.get("type"), "gauge")
+        unit_103 = panel_103.get("fieldConfig", {}).get("defaults", {}).get("unit")
+        self.assertEqual(unit_103, "suffix: mo",
+                         f"Panel 103 unit must be 'suffix: mo' to avoid Grafana interpreting 'm' as minutes, got '{unit_103}'")
+
     def test_sqlite_queries_execute_cleanly(self):
         import sqlite3
         con = sqlite3.connect(":memory:")

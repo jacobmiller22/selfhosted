@@ -208,7 +208,7 @@ FROM liquid, operating_burn
             "defaults": {
                 "min": 0,
                 "max": 18,
-                "unit": "m",
+                "unit": "suffix: mo",
                 "color": {"mode": "thresholds"},
                 "thresholds": {
                     "mode": "absolute",
