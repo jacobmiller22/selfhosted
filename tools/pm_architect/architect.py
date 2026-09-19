@@ -168,7 +168,7 @@ def main():
     print("🔬 Detecting Knowledge Gaps & Proposing Spike Tickets...")
     ticket_gen = TicketGenerator()
     proposed_tickets = ticket_gen.generate_tickets(
-        fact_checks, deliberations, rulings, fact_checker.inventory
+        fact_checks, deliberations, rulings, fact_checker.inventory, open_issues
     )
 
     # 7. Generate Synthesis Report
