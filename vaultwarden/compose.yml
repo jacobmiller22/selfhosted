@@ -14,7 +14,7 @@ services:
       - nginx-proxy-manager
 
   vaultwarden-staging:
-    image: vaultwarden/server:1.35.4
+    image: ${VAULTWARDEN_IMAGE:-vaultwarden/server:${IMAGE_TAG:-1.35.4}}
     container_name: vaultwarden-staging
     profiles: ["staging"]
     restart: unless-stopped
