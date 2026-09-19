@@ -203,9 +203,9 @@ class TestGrafanaDashboards(unittest.TestCase):
         expr_blob = " ".join(exprs)
 
         # Storage
-        self.assertIn("node_filesystem_size_bytes{mountpoint=\"/host\"}", expr_blob)
-        self.assertIn("node_filesystem_free_bytes{mountpoint=\"/host\"}", expr_blob)
-        self.assertIn("100 - ((node_filesystem_avail_bytes{mountpoint=\"/host\"} * 100) / node_filesystem_size_bytes{mountpoint=\"/host\"})", expr_blob)
+        self.assertIn('node_filesystem_size_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"}', expr_blob)
+        self.assertIn('node_filesystem_free_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"}', expr_blob)
+        self.assertIn('100 - ((node_filesystem_avail_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"} * 100) / node_filesystem_size_bytes{mountpoint=~"/|/host",fstype!~"tmpfs|ramfs"})', expr_blob)
 
         # Memory & Swap
         self.assertIn("node_memory_MemTotal_bytes", expr_blob)
