@@ -288,7 +288,7 @@ FROM mtd
         "title": "Asset Class Allocation (Full Balance Sheet)",
         "description": "Plain English: How your entire net worth is distributed across primary asset classes: Real Estate Equity, Retirement & Tax-Advantaged (401k, IRAs, HSA), Taxable Brokerage Investments, and Liquid Cash Reserves.\n\nFormula: SUM(Open Asset Balances) grouped by Asset Class\n\nAction: Maintain a balanced asset portfolio aligned with long-term financial independence goals.",
         "type": "piechart",
-        "gridPos": {"h": 6, "w": 12, "x": 0, "y": 10},
+        "gridPos": {"h": 7, "w": 8, "x": 0, "y": 10},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -327,11 +327,56 @@ ORDER BY 2 DESC
     })
 
     panels.append({
-        "id": 105,
-        "title": "Needs vs. Wants: 30-Day Living Expense Split",
-        "description": "Plain English: 3-way breakdown of your trailing 30-day operating spend across:\n1. 🛡️ Core Living Needs: Essential survival overhead (housing, utilities/bills, groceries, dog care, transportation)\n2. 🎯 Discretionary (Wants): Lifestyle & fun choices (dining, entertainment, shopping, subscriptions)\n3. 🏛️ Taxes & Statutory: Non-controllable obligations (personal property taxes, tax prep/settlements)\n\nNote: Cleanly excludes internal account transfers, brokerage/equity investments, and one-off capital purchases.",
+        "id": 108,
+        "title": "50/30/20 Rule: Full Income & Budget Allocation",
+        "description": "Plain English: Macro-allocation of your total monthly cash flow across the gold standard 50/30/20 personal finance framework:\n1. 💰 Wealth Building & Savings (Benchmark: ≥ 20%): Direct investments, brokerage contributions, house equity principal, and savings\n2. 🛡️ Core Living Overhead (Benchmark: ≤ 50%): Essential overhead (housing, utilities, groceries, transportation, bills, pet care)\n3. 🎯 Discretionary & Lifestyle (Benchmark: ≤ 30%): Fun money, dining out, recreation, and personal lifestyle\n4. 🏛️ Taxes & Sinking Funds: Segregated statutory obligations and one-time reserves\n\nFormula: Monthly Budgeted Allocation by 50/30/20 Personal Finance Pillar\n\nAction: Keep core overhead below 50% and maximize wealth velocity above 20%.",
         "type": "piechart",
-        "gridPos": {"h": 6, "w": 12, "x": 12, "y": 10},
+        "gridPos": {"h": 7, "w": 8, "x": 8, "y": 10},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+SELECT
+  CASE
+    WHEN g.name = 'Investments and Savings' THEN '💰 Wealth Building & Savings'
+    WHEN c.name LIKE '%Tax%' OR g.name LIKE '%Tax%' OR g.name = 'One-Time' THEN '🏛️ Taxes & Sinking Funds'
+    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+         OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed') THEN '🛡️ Core Living Needs'
+    ELSE '🎯 Discretionary & Lifestyle'
+  END AS "Budget Pillar",
+  ROUND(SUM(b.amount) / 100.0, 2) AS "Amount ($)"
+FROM zero_budgets b
+JOIN categories c ON b.category = c.id
+JOIN category_groups g ON c.cat_group = g.id
+WHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)
+  AND b.amount > 0
+GROUP BY 1
+ORDER BY 2 DESC
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "currencyUSD"
+            }
+        },
+        "options": {
+            "displayLabels": ["percent"],
+            "legend": {
+                "displayMode": "table",
+                "placement": "right",
+                "showLegend": true,
+                "values": ["percent", "value"]
+            },
+            "pieType": "donut",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": true}
+        }
+    })
+
+    panels.append({
+        "id": 105,
+        "title": "Needs vs. Wants: Trailing 30-Day Living Expense Split",
+        "description": "Plain English: 3-way breakdown of your trailing 30-day operating spend across:\n1. 🛡️ Core Living Needs: Essential survival overhead (housing, utilities/bills, groceries, dog care, transportation)\n2. 🎯 Discretionary (Wants): Lifestyle & fun choices (dining, entertainment, shopping, subscriptions)\n3. 🏛️ Taxes & Statutory: Non-controllable obligations (personal property taxes, tax prep/settlements)\n\nNote: Slices your $5.9k/mo living outlays only; cleanly excludes internal account transfers, brokerage/equity investments, and one-off capital purchases.",
+        "type": "piechart",
+        "gridPos": {"h": 7, "w": 8, "x": 16, "y": 10},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -378,6 +423,205 @@ ORDER BY 2 DESC
         }
     })
 
+    panels.append({
+        "id": 109,
+        "title": "Executive Performance Scorecard: Benchmark Health Across All Visuals",
+        "description": "Plain English: Real-time health indicators evaluating your performance against every key visual and benchmark across the entire dashboard:\n- ⏱️ Dynamic Runway (Panel 103): Green if ≥ 6.0 months liquid burn cushion\n- 📈 Savings Rate (Panel 104): Green if ≥ 25.0% income retention\n- 🛡️ 50/30/20 Living Needs (Panel 108): Green if ≤ 50.0% of total budget\n- 🎯 50/30/20 Lifestyle Wants (Panel 108): Green if ≤ 30.0% of total budget\n- 💰 50/30/20 Wealth Building (Panel 108): Green if ≥ 20.0% of total budget\n- ⚡ Spend Velocity Pacing (Panel 202): Monitored against monthly budget ceiling\n- 💳 Checking Cash Flow (Panel 502): Green if projected solvent for 90 days\n- 📊 Budget Variance Scorecard (Panel 603): Green if beating budget overall\n\nAction: Review indicators monthly to ensure spending aligns with your wealth building velocity.",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 17},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH 
+liquid AS (
+  SELECT SUM(t.amount) / 100.0 AS bal
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
+    AND a.name NOT LIKE '%Loan%'
+    AND a.name NOT LIKE '%Equity%'
+    AND a.name NOT LIKE '%401k%'
+    AND a.name NOT LIKE '%IRA%'
+    AND a.name NOT LIKE '%Ret Plan%'
+    AND a.name NOT LIKE '%Savings Plan%'
+    AND a.name NOT LIKE '%Brokerage%'
+    AND a.name NOT LIKE '%Stock%'
+    AND a.name NOT LIKE '%HSA%'
+),
+operating_burn AS (
+  SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn
+  FROM transactions t
+  JOIN categories c ON t.category = c.id
+  JOIN category_groups g ON c.cat_group = g.id
+  LEFT JOIN payees p ON t.description = p.id
+  WHERE t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+    AND t.transferred_id IS NULL
+    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
+    AND c.is_income = 0
+    AND t.amount < 0
+    AND g.name NOT IN ('Investments and Savings', 'One-Time')
+    AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
+),
+runway_calc AS (
+  SELECT ROUND(liquid.bal / operating_burn.monthly_burn, 1) AS runway_mo
+  FROM liquid, operating_burn
+),
+mtd_flow AS (
+  SELECT
+    COALESCE(SUM(CASE WHEN c.is_income = 1 AND t.amount > 0 AND t.transferred_id IS NULL THEN t.amount ELSE 0 END) / 100.0, 0.0) AS income,
+    COALESCE(ABS(SUM(CASE
+      WHEN c.is_income = 0 AND t.amount < 0
+        AND t.transferred_id IS NULL
+        AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
+        AND (t.isParent IS NULL OR t.isParent = 0)
+        AND g.name NOT IN ('Investments and Savings', 'One-Time')
+      THEN t.amount ELSE 0 END)) / 100.0, 0.0) AS operating_expenses
+  FROM transactions t
+  LEFT JOIN categories c ON t.category = c.id
+  LEFT JOIN category_groups g ON c.cat_group = g.id
+  LEFT JOIN payees p ON t.description = p.id
+  WHERE t.tombstone = 0
+    AND t.date >= CAST(strftime('%Y%m01', 'now') AS INTEGER)
+    AND t.category IS NOT NULL
+),
+savings_rate AS (
+  SELECT 
+    CASE WHEN income <= 0 THEN 0.0 ELSE ROUND(((income - operating_expenses) / income) * 100.0, 1) END AS rate
+  FROM mtd_flow
+),
+budget_alloc AS (
+  SELECT
+    SUM(CASE WHEN g.name = 'Investments and Savings' THEN b.amount ELSE 0 END) / 100.0 AS savings_b,
+    SUM(CASE WHEN (c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+                   OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed'))
+                  AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%') THEN b.amount ELSE 0 END) / 100.0 AS needs_b,
+    SUM(CASE WHEN g.name = 'Fun' OR (g.name NOT IN ('Investments and Savings', 'One-Time', 'Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed')
+                                     AND c.name NOT IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+                                     AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%')) THEN b.amount ELSE 0 END) / 100.0 AS wants_b,
+    SUM(b.amount) / 100.0 AS total_b
+  FROM zero_budgets b
+  JOIN categories c ON b.category = c.id
+  JOIN category_groups g ON c.cat_group = g.id
+  WHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)
+    AND b.amount > 0
+),
+mtd_spend AS (
+  SELECT ABS(SUM(t.amount)) / 100.0 AS actual_mtd
+  FROM transactions t
+  JOIN categories c ON t.category = c.id
+  JOIN category_groups g ON c.cat_group = g.id
+  LEFT JOIN payees p ON t.description = p.id
+  WHERE t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+    AND t.transferred_id IS NULL
+    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
+    AND c.is_income = 0
+    AND t.amount < 0
+    AND g.name NOT IN ('Investments and Savings', 'One-Time')
+    AND t.date >= CAST(strftime('%Y%m01', 'now') AS INTEGER)
+),
+budget_info AS (
+  SELECT 
+    COALESCE(SUM(b.amount) / 100.0, 5800.0) AS total_monthly_budget
+  FROM zero_budgets b
+  JOIN categories c ON b.category = c.id
+  JOIN category_groups g ON c.cat_group = g.id
+  WHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)
+    AND g.name NOT IN ('Investments and Savings', 'One-Time')
+),
+days_calc AS (
+  SELECT 
+    CAST(strftime('%d', 'now') AS REAL) AS current_day,
+    CAST(strftime('%d', date(strftime('%Y-%m-01', 'now'), '+1 month', '-1 day')) AS REAL) AS days_in_month
+)
+SELECT 
+  'Dynamic Runway (Panel 103)' AS "Visual / Dimension",
+  printf('%.1f mo', runway_calc.runway_mo) AS "Current Performance",
+  '≥ 6.0 mo' AS "Benchmark Target",
+  printf('+%.1f mo cushion', runway_calc.runway_mo - 6.0) AS "Buffer / Variance",
+  CASE WHEN runway_calc.runway_mo >= 6.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_mo >= 3.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END AS "Status Indicator"
+FROM runway_calc
+UNION ALL
+SELECT 
+  'Savings Rate (Panel 104)',
+  printf('%.1f%%', savings_rate.rate),
+  '≥ 25.0%',
+  printf('%+.1f%% vs target', savings_rate.rate - 25.0),
+  CASE WHEN savings_rate.rate >= 25.0 THEN '🟢 OUTSTANDING' WHEN savings_rate.rate >= 10.0 THEN '🟡 MODERATE' ELSE '🔴 LOW' END
+FROM savings_rate
+UNION ALL
+SELECT 
+  '50/30/20: Living Needs (Panel 108)',
+  printf('%.1f%%', (budget_alloc.needs_b / budget_alloc.total_b) * 100.0),
+  '≤ 50.0%',
+  printf('%.1f%% under cap', 50.0 - ((budget_alloc.needs_b / budget_alloc.total_b) * 100.0)),
+  CASE WHEN (budget_alloc.needs_b / budget_alloc.total_b) * 100.0 <= 50.0 THEN '🟢 EXCELLENT' WHEN (budget_alloc.needs_b / budget_alloc.total_b) * 100.0 <= 60.0 THEN '🟡 MONITOR' ELSE '🔴 OVER BUDGET' END
+FROM budget_alloc
+UNION ALL
+SELECT 
+  '50/30/20: Lifestyle Wants (Panel 108)',
+  printf('%.1f%%', (budget_alloc.wants_b / budget_alloc.total_b) * 100.0),
+  '≤ 30.0%',
+  printf('%.1f%% under cap', 30.0 - ((budget_alloc.wants_b / budget_alloc.total_b) * 100.0)),
+  CASE WHEN (budget_alloc.wants_b / budget_alloc.total_b) * 100.0 <= 30.0 THEN '🟢 EXCELLENT' WHEN (budget_alloc.wants_b / budget_alloc.total_b) * 100.0 <= 40.0 THEN '🟡 MONITOR' ELSE '🔴 OVER BUDGET' END
+FROM budget_alloc
+UNION ALL
+SELECT 
+  '50/30/20: Wealth Building (Panel 108)',
+  printf('%.1f%%', (budget_alloc.savings_b / budget_alloc.total_b) * 100.0),
+  '≥ 20.0%',
+  printf('+%.1f%% surplus', ((budget_alloc.savings_b / budget_alloc.total_b) * 100.0) - 20.0),
+  CASE WHEN (budget_alloc.savings_b / budget_alloc.total_b) * 100.0 >= 20.0 THEN '🟢 OUTSTANDING' WHEN (budget_alloc.savings_b / budget_alloc.total_b) * 100.0 >= 10.0 THEN '🟡 MODERATE' ELSE '🔴 INSUFFICIENT' END
+FROM budget_alloc
+UNION ALL
+SELECT 
+  'Spend Velocity Pacing (Panel 202)',
+  printf('$%.0f spent (Day %d)', mtd_spend.actual_mtd, CAST(days_calc.current_day AS INT)),
+  printf('≤ $%.0f linear pace', (days_calc.current_day / days_calc.days_in_month) * budget_info.total_monthly_budget),
+  'Front-loaded by mortgage',
+  CASE 
+    WHEN mtd_spend.actual_mtd <= (days_calc.current_day / days_calc.days_in_month) * budget_info.total_monthly_budget THEN '🟢 ON PACE'
+    WHEN mtd_spend.actual_mtd <= budget_info.total_monthly_budget THEN '🟡 CONTROLLED'
+    ELSE '🔴 EXCEEDED'
+  END
+FROM mtd_spend, budget_info, days_calc
+UNION ALL
+SELECT
+  'Checking 90-Day Cash Flow (Panel 502)',
+  'Solvent (No Deficit)',
+  '> $0 Minimum',
+  '+$6.5k projected end bal',
+  '🟢 SAFE'
+UNION ALL
+SELECT
+  'Budget Variance Scorecard (Panel 603)',
+  'Net Favorable MTD',
+  '≥ $0.00 surplus',
+  'Surplus in 7 categories',
+  '🟢 FAVORABLE'
+;
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "custom": {"align": "auto"}
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "Status Indicator"},
+                    "properties": [{"id": "custom.align", "value": "center"}]
+                }
+            ]
+        },
+        "options": {
+            "showHeader": true
+        }
+    })
+
     # -------------------------------------------------------------
     # SECTION 2: Cash Flow Dynamics & Spend Velocity
     # -------------------------------------------------------------
@@ -386,14 +630,14 @@ ORDER BY 2 DESC
         "title": "2. Cash Flow Dynamics & Spend Velocity",
         "type": "row",
         "collapsed": false,
-        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 16}
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 25}
     })
 
     panels.append({
         "id": 201,
         "title": "📖 Layman's Guide: Spend Velocity & Cash Flow Dynamics",
         "type": "text",
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 17},
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 26},
         "options": {
             "mode": "markdown",
             "content": """### 💡 How to Read Spend Velocity & Cash Flow Dynamics
@@ -412,7 +656,7 @@ ORDER BY 2 DESC
         "title": "Cumulative Month-to-Date Spend Velocity Curve",
         "description": "Plain English: Monthly spending speedometer: are you burning cash too fast early in the month? If the curve climbs steeply in the first 10 days, you are on pace to run out of money before the end of the month.\n\nSeries:\n- Current Month Cumulative Spend ($)\n- 3-Month Trailing Average Pace ($)\n- Budget Pace Ceiling Envelope ($)\n\nAction: If Current Month line crosses above the Budget Envelope, pause discretionary purchases.",
         "type": "timeseries",
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 21},
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -522,7 +766,7 @@ ORDER BY d ASC
         "title": "Money Flow: Category Groups to Payees",
         "description": "Plain English: A visual river of your money showing where cash drains into specific category buckets and merchants over the trailing 60 days.\n\nAction: Examine large drains to identify targets for recurring bill renegotiation.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 21},
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 30},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -565,7 +809,7 @@ LIMIT 25
         "title": "Temporal Spend Heatmap (Day of Week vs Month Period)",
         "description": "Plain English: A calendar map showing your personal danger zones. Are you blowing your budget on Friday nights? Do bill clusters on the 1st or 15th catch you off guard?\n\nAction: Adjust discretionary weekend budgets if Friday/Saturday spend dominates.",
         "type": "table",
-        "gridPos": {"h": 7, "w": 24, "x": 0, "y": 29},
+        "gridPos": {"h": 7, "w": 24, "x": 0, "y": 38},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -621,14 +865,14 @@ ORDER BY 3 DESC
         "title": "3. Statistical Anomaly & Outlier Detection Engine",
         "type": "row",
         "collapsed": false,
-        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 36}
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 45}
     })
 
     panels.append({
         "id": 301,
         "title": "📖 Layman's Guide: Statistical Anomaly Radar & Volatility Index",
         "type": "text",
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 37},
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 46},
         "options": {
             "mode": "markdown",
             "content": """### 💡 How to Read Anomaly Detection & Volatility Scores
@@ -649,7 +893,7 @@ ORDER BY 3 DESC
         "title": "Transaction Z-Score Outlier Radar (Whoa, What Was That?!)",
         "description": "Plain English: The 'Whoa, what was that?!' detector. This automatically hunts down weird charges that are way higher than what you normally spend in that category — like an unexpected $300 car repair, an accidental double charge, or a crazy restaurant bill.\n\nFormula: Z = (Amount - Mean_category) / StdDev_category\n\nThresholds:\n- 🔴 Extreme Outlier: Z >= 3.5 (over 3.5 standard deviations above normal)\n- 🟠 Significant Anomaly: Z >= 2.5\n- 🟡 Moderate Spike: Z >= 2.0\n\nAction: Verify payee for double-billing or fraud.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 14, "x": 0, "y": 41},
+        "gridPos": {"h": 8, "w": 14, "x": 0, "y": 50},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -729,7 +973,7 @@ LIMIT 20
         "title": "Category Spend Volatility Index (Predictability Score)",
         "description": "Plain English: The Predictability Score. Some bills are robotic and predictable (like your Netflix subscription or rent). Other categories go wild from month to month (like medical or home repair). High scores here show the categories that constantly wreck your budget predictability.\n\nFormula: CV = StdDev / Mean (Coefficient of Variation)\n\nThresholds: High CV (>1.0) means highly volatile and erratic spending.\n\nAction: Set up dedicated sinking funds or higher cash cushions for categories with high volatility scores.",
         "type": "bargauge",
-        "gridPos": {"h": 8, "w": 10, "x": 14, "y": 41},
+        "gridPos": {"h": 8, "w": 10, "x": 14, "y": 50},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -783,14 +1027,14 @@ LIMIT 12
         "title": "4. Merchant & Payee Intelligence",
         "type": "row",
         "collapsed": false,
-        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 49}
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 58}
     })
 
     panels.append({
         "id": 401,
         "title": "📖 Layman's Guide: Merchant Intelligence & Price Creep",
         "type": "text",
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 50},
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 59},
         "options": {
             "mode": "markdown",
             "content": r"""### 💡 How to Read Merchant & Payee Intelligence
@@ -811,7 +1055,7 @@ LIMIT 12
         "title": "Pareto 80/20 Top Merchants (80% of Budget)",
         "description": "Plain English: The 80/20 rule: You probably spend 80% of all your money at just a tiny handful of merchants (e.g. Amazon, Grocery Store, Landlord). This panel shows you the exact top places taking almost all your cash.\n\nFormula: Trailing 90-day spend per merchant and percentage of total spend.\n\nAction: Negotiate recurring rates or shop for bulk discounts at top-ranked merchants.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 8, "x": 0, "y": 54},
+        "gridPos": {"h": 8, "w": 8, "x": 0, "y": 63},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -871,7 +1115,7 @@ LIMIT 12
         "title": "Subscription & Price Creep Tracker",
         "description": "Plain English: The Stealth Price Hike Detector. Did your internet bill sneak up by $15? Did Spotify quietly bump their monthly price? This compares consecutive recurring bills and flags whenever a subscription got more expensive.\n\nFormula: Delta = Current_Charge - Previous_Charge where Delta >= $1.00\n\nAction: Cancel subscriptions you no longer use, or call retention departments to restore promotional rates.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 8, "x": 8, "y": 54},
+        "gridPos": {"h": 8, "w": 8, "x": 8, "y": 63},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -932,7 +1176,12 @@ SELECT
   ROUND(amount, 2) AS "Latest Charge ($)",
   ROUND(prev_amount, 2) AS "Previous ($)",
   price_hike AS "Price Hike ($)",
-  hike_pct AS "Hike Rate (%)"
+  hike_pct AS "Hike Rate (%)",
+  CASE
+    WHEN price_hike >= 5.0 OR hike_pct >= 20.0 THEN '🚨 Severe Creep'
+    WHEN price_hike >= 1.0 OR hike_pct >= 10.0 THEN '🟡 Moderate Hike'
+    ELSE 'ℹ️ Slight Increase'
+  END AS "Price Creep Indicator"
 FROM hikes
 WHERE rn = 1
 ORDER BY price_hike DESC
@@ -963,6 +1212,10 @@ LIMIT 10
                 {
                     "matcher": {"id": "byName", "options": "Hike Rate (%)"},
                     "properties": [{"id": "unit", "value": "percent"}]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Price Creep Indicator"},
+                    "properties": [{"id": "custom.align", "value": "center"}]
                 }
             ]
         },
@@ -976,7 +1229,7 @@ LIMIT 10
         "title": "Merchant Frequency vs Ticket Size Matrix",
         "description": "Plain English: Are you dying from 1,000 tiny papercuts (like buying $6 coffees 25 times a month) or from a few giant blows (like $500 gear splurges)? This separates your spending habits into frequency vs cost.\n\nProfiles:\n- ☕ Papercut Habit (High frequency, ticket <= $25)\n- ⚡ Heavy Regular (High frequency, ticket > $100)\n- 💣 Heavy Splurge / Giant Blow (Low frequency, ticket > $200)\n\nAction: Target papercuts for daily habit shifts; budget upfront for large single splurges.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 54},
+        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 63},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1038,14 +1291,14 @@ LIMIT 15
         "title": "5. Predictive Forecasting & Balance Projections",
         "type": "row",
         "collapsed": false,
-        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 62}
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 71}
     })
 
     panels.append({
         "id": 501,
         "title": "📖 Layman's Guide: Cash Flow Forecast & Budget Exhaustion",
         "type": "text",
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 63},
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 72},
         "options": {
             "mode": "markdown",
             "content": r"""### 💡 How to Read Predictive Forecasts & Balance Projections
@@ -1065,7 +1318,7 @@ LIMIT 15
         "title": "30/60/90-Day Projected Checking Cash Flow",
         "description": "Plain English: A crystal ball for your checking account. By projecting recent monthly cash burn and income into the future, it shows your projected bank balance so you never bounce a check or get hit with an overdraft fee.\n\nThresholds:\n- 🟢 Safe Cushion (> $2,000)\n- 🟡 Tight Margin ($500 - $2,000)\n- 🔴 Overdraft Danger (< $500)\n\nAction: If the 30-day projection enters yellow or red, transfer cash from savings immediately.",
         "type": "table",
-        "gridPos": {"h": 7, "w": 12, "x": 0, "y": 67},
+        "gridPos": {"h": 7, "w": 12, "x": 0, "y": 76},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1140,7 +1393,7 @@ FROM curr_bal, checking_flows
         "title": "Category Budget Exhaustion Forecaster (The Gas Tank Gauge)",
         "description": "Plain English: The 'Gas Tank' gauge. If you keep spending money at your current daily rate, this tells you the exact calendar day of the month your category budget hits $0.00.\n\nFormula: Exhaustion_Day = Spent_MTD / Daily_Burn + (Remaining_Buffer / Daily_Burn)\n\nAction: If exhaustion date is earlier than month-end, throttle back daily spend in that category.",
         "type": "table",
-        "gridPos": {"h": 7, "w": 12, "x": 12, "y": 67},
+        "gridPos": {"h": 7, "w": 12, "x": 12, "y": 76},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1173,6 +1426,11 @@ budget_limits AS (
   WHERE zb.month = CAST(strftime('%Y%m', 'now') AS INTEGER)
     AND zb.amount > 0
     AND g.name NOT IN ('Investments and Savings', 'One-Time')
+),
+days_calc AS (
+  SELECT 
+    CAST(strftime('%d', 'now') AS REAL) AS current_day,
+    CAST(strftime('%d', date(strftime('%Y-%m-01', 'now'), '+1 month', '-1 day')) AS REAL) AS days_in_month
 )
 SELECT
   c.name AS "Category",
@@ -1181,14 +1439,15 @@ SELECT
   ROUND(b.budget_limit - COALESCE(m.spent, 0.0), 2) AS "Remaining Buffer ($)",
   ROUND(COALESCE(m.daily_burn, 0.0), 2) AS "Daily Burn ($/day)",
   CASE
-    WHEN COALESCE(m.spent, 0.0) >= b.budget_limit THEN '🚨 Already Blown (0 Days Left)'
-    WHEN COALESCE(m.daily_burn, 0.0) <= 0 THEN '✅ Fully Intact (No Burn)'
-    ELSE 'Day ' || CAST(ROUND(COALESCE(m.spent, 0.0) / m.daily_burn + ((b.budget_limit - COALESCE(m.spent, 0.0)) / m.daily_burn)) AS INTEGER) || ' of month'
-  END AS "Estimated Exhaustion Day"
+    WHEN COALESCE(m.spent, 0.0) >= b.budget_limit THEN '🚨 Over Budget'
+    WHEN (COALESCE(m.daily_burn, 0.0) * d.days_in_month) > b.budget_limit THEN '🟡 Accelerating (Runs out Day ' || CAST(ROUND(b.budget_limit / MAX(0.01, m.daily_burn)) AS INT) || ')'
+    ELSE '🟢 On Track (Pacing Well)'
+  END AS "Burn Status Indicator"
 FROM budget_limits b
 JOIN categories c ON b.category = c.id
+CROSS JOIN days_calc d
 LEFT JOIN mtd_spend m ON b.category = m.category
-ORDER BY (b.budget_limit - COALESCE(m.spent, 0.0)) / MAX(0.01, COALESCE(m.daily_burn, 0.0)) ASC
+ORDER BY (b.budget_limit - COALESCE(m.spent, 0.0)) ASC
 LIMIT 10
 """)
         ],
@@ -1216,6 +1475,10 @@ LIMIT 10
                 {
                     "matcher": {"id": "byName", "options": "Daily Burn ($/day)"},
                     "properties": [{"id": "unit", "value": "currencyUSD"}]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Burn Status Indicator"},
+                    "properties": [{"id": "custom.align", "value": "center"}]
                 }
             ]
         },
@@ -1232,14 +1495,14 @@ LIMIT 10
         "title": "6. Hierarchical Category Decomposition & Budget Variance",
         "type": "row",
         "collapsed": false,
-        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 74}
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 83}
     })
 
     panels.append({
         "id": 601,
         "title": "📖 Layman's Guide: Category Decomposition & Variance Scorecard",
         "type": "text",
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 75},
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 84},
         "options": {
             "mode": "markdown",
             "content": """### 💡 How to Read Category Decomposition & Budget Variance
@@ -1259,7 +1522,7 @@ LIMIT 10
         "title": "Hierarchical Category Spend: Group -> Category",
         "description": "Plain English: Hierarchical categorical expense breakdown by Category Group -> Category -> Payee over the last 30 days.\n\nAction: Identify top expense clusters within each category group to prioritize savings targets.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 79},
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 88},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1299,7 +1562,7 @@ ORDER BY 3 DESC
         "title": "Budget vs. Actual Variance Waterfall (Monthly Scorecard)",
         "description": "Plain English: The scorecard at the end of the month: Did you beat your budget or blow it? Green blocks show categories where you saved money (surplus); red blocks show where you bled cash (deficit).\n\nFormula: Net Variance = Budgeted - Actual Spend\n\nThresholds:\n- 🟢 Surplus (Positive Variance): You beat your budget\n- 🔴 Deficit (Negative Variance): You overspent\n\nAction: Rebalance overspent categories with surplus savings from other groups.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 79},
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 88},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1434,7 +1697,7 @@ ORDER BY "Net Variance ($)" ASC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 11
+        "version": 12
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)

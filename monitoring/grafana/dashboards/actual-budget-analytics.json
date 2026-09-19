@@ -321,8 +321,8 @@
       "description": "Plain English: How your entire net worth is distributed across primary asset classes: Real Estate Equity, Retirement & Tax-Advantaged (401k, IRAs, HSA), Taxable Brokerage Investments, and Liquid Cash Reserves.\n\nFormula: SUM(Open Asset Balances) grouped by Asset Class\n\nAction: Maintain a balanced asset portfolio aligned with long-term financial independence goals.",
       "type": "piechart",
       "gridPos": {
-        "h": 6,
-        "w": 12,
+        "h": 7,
+        "w": 8,
         "x": 0,
         "y": 10
       },
@@ -373,14 +373,71 @@
       }
     },
     {
-      "id": 105,
-      "title": "Needs vs. Wants: 30-Day Living Expense Split",
-      "description": "Plain English: 3-way breakdown of your trailing 30-day operating spend across:\n1. \ud83d\udee1\ufe0f Core Living Needs: Essential survival overhead (housing, utilities/bills, groceries, dog care, transportation)\n2. \ud83c\udfaf Discretionary (Wants): Lifestyle & fun choices (dining, entertainment, shopping, subscriptions)\n3. \ud83c\udfdb\ufe0f Taxes & Statutory: Non-controllable obligations (personal property taxes, tax prep/settlements)\n\nNote: Cleanly excludes internal account transfers, brokerage/equity investments, and one-off capital purchases.",
+      "id": 108,
+      "title": "50/30/20 Rule: Full Income & Budget Allocation",
+      "description": "Plain English: Macro-allocation of your total monthly cash flow across the gold standard 50/30/20 personal finance framework:\n1. \ud83d\udcb0 Wealth Building & Savings (Benchmark: \u2265 20%): Direct investments, brokerage contributions, house equity principal, and savings\n2. \ud83d\udee1\ufe0f Core Living Overhead (Benchmark: \u2264 50%): Essential overhead (housing, utilities, groceries, transportation, bills, pet care)\n3. \ud83c\udfaf Discretionary & Lifestyle (Benchmark: \u2264 30%): Fun money, dining out, recreation, and personal lifestyle\n4. \ud83c\udfdb\ufe0f Taxes & Sinking Funds: Segregated statutory obligations and one-time reserves\n\nFormula: Monthly Budgeted Allocation by 50/30/20 Personal Finance Pillar\n\nAction: Keep core overhead below 50% and maximize wealth velocity above 20%.",
       "type": "piechart",
       "gridPos": {
-        "h": 6,
-        "w": 12,
-        "x": 12,
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 10
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "actual-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "actual-sqlite"
+          },
+          "format": "table",
+          "queryType": "table",
+          "rawSql": "SELECT\n  CASE\n    WHEN g.name = 'Investments and Savings' THEN '\ud83d\udcb0 Wealth Building & Savings'\n    WHEN c.name LIKE '%Tax%' OR g.name LIKE '%Tax%' OR g.name = 'One-Time' THEN '\ud83c\udfdb\ufe0f Taxes & Sinking Funds'\n    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')\n         OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed') THEN '\ud83d\udee1\ufe0f Core Living Needs'\n    ELSE '\ud83c\udfaf Discretionary & Lifestyle'\n  END AS \"Budget Pillar\",\n  ROUND(SUM(b.amount) / 100.0, 2) AS \"Amount ($)\"\nFROM zero_budgets b\nJOIN categories c ON b.category = c.id\nJOIN category_groups g ON c.cat_group = g.id\nWHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)\n  AND b.amount > 0\nGROUP BY 1\nORDER BY 2 DESC",
+          "rawQueryText": "SELECT\n  CASE\n    WHEN g.name = 'Investments and Savings' THEN '\ud83d\udcb0 Wealth Building & Savings'\n    WHEN c.name LIKE '%Tax%' OR g.name LIKE '%Tax%' OR g.name = 'One-Time' THEN '\ud83c\udfdb\ufe0f Taxes & Sinking Funds'\n    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')\n         OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed') THEN '\ud83d\udee1\ufe0f Core Living Needs'\n    ELSE '\ud83c\udfaf Discretionary & Lifestyle'\n  END AS \"Budget Pillar\",\n  ROUND(SUM(b.amount) / 100.0, 2) AS \"Amount ($)\"\nFROM zero_budgets b\nJOIN categories c ON b.category = c.id\nJOIN category_groups g ON c.cat_group = g.id\nWHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)\n  AND b.amount > 0\nGROUP BY 1\nORDER BY 2 DESC",
+          "queryText": "SELECT\n  CASE\n    WHEN g.name = 'Investments and Savings' THEN '\ud83d\udcb0 Wealth Building & Savings'\n    WHEN c.name LIKE '%Tax%' OR g.name LIKE '%Tax%' OR g.name = 'One-Time' THEN '\ud83c\udfdb\ufe0f Taxes & Sinking Funds'\n    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')\n         OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed') THEN '\ud83d\udee1\ufe0f Core Living Needs'\n    ELSE '\ud83c\udfaf Discretionary & Lifestyle'\n  END AS \"Budget Pillar\",\n  ROUND(SUM(b.amount) / 100.0, 2) AS \"Amount ($)\"\nFROM zero_budgets b\nJOIN categories c ON b.category = c.id\nJOIN category_groups g ON c.cat_group = g.id\nWHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)\n  AND b.amount > 0\nGROUP BY 1\nORDER BY 2 DESC",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        }
+      },
+      "options": {
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": [
+            "percent",
+            "value"
+          ]
+        },
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      }
+    },
+    {
+      "id": 105,
+      "title": "Needs vs. Wants: Trailing 30-Day Living Expense Split",
+      "description": "Plain English: 3-way breakdown of your trailing 30-day operating spend across:\n1. \ud83d\udee1\ufe0f Core Living Needs: Essential survival overhead (housing, utilities/bills, groceries, dog care, transportation)\n2. \ud83c\udfaf Discretionary (Wants): Lifestyle & fun choices (dining, entertainment, shopping, subscriptions)\n3. \ud83c\udfdb\ufe0f Taxes & Statutory: Non-controllable obligations (personal property taxes, tax prep/settlements)\n\nNote: Slices your $5.9k/mo living outlays only; cleanly excludes internal account transfers, brokerage/equity investments, and one-off capital purchases.",
+      "type": "piechart",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
         "y": 10
       },
       "datasource": {
@@ -430,6 +487,60 @@
       }
     },
     {
+      "id": 109,
+      "title": "Executive Performance Scorecard: Benchmark Health Across All Visuals",
+      "description": "Plain English: Real-time health indicators evaluating your performance against every key visual and benchmark across the entire dashboard:\n- \u23f1\ufe0f Dynamic Runway (Panel 103): Green if \u2265 6.0 months liquid burn cushion\n- \ud83d\udcc8 Savings Rate (Panel 104): Green if \u2265 25.0% income retention\n- \ud83d\udee1\ufe0f 50/30/20 Living Needs (Panel 108): Green if \u2264 50.0% of total budget\n- \ud83c\udfaf 50/30/20 Lifestyle Wants (Panel 108): Green if \u2264 30.0% of total budget\n- \ud83d\udcb0 50/30/20 Wealth Building (Panel 108): Green if \u2265 20.0% of total budget\n- \u26a1 Spend Velocity Pacing (Panel 202): Monitored against monthly budget ceiling\n- \ud83d\udcb3 Checking Cash Flow (Panel 502): Green if projected solvent for 90 days\n- \ud83d\udcca Budget Variance Scorecard (Panel 603): Green if beating budget overall\n\nAction: Review indicators monthly to ensure spending aligns with your wealth building velocity.",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "actual-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "actual-sqlite"
+          },
+          "format": "table",
+          "queryType": "table",
+          "rawSql": "WITH \nliquid AS (\n  SELECT SUM(t.amount) / 100.0 AS bal\n  FROM transactions t\n  JOIN accounts a ON t.acct = a.id\n  WHERE t.tombstone = 0\n    AND a.tombstone = 0\n    AND a.closed = 0\n    AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')\n    AND a.name NOT LIKE '%Loan%'\n    AND a.name NOT LIKE '%Equity%'\n    AND a.name NOT LIKE '%401k%'\n    AND a.name NOT LIKE '%IRA%'\n    AND a.name NOT LIKE '%Ret Plan%'\n    AND a.name NOT LIKE '%Savings Plan%'\n    AND a.name NOT LIKE '%Brokerage%'\n    AND a.name NOT LIKE '%Stock%'\n    AND a.name NOT LIKE '%HSA%'\n),\noperating_burn AS (\n  SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)\n),\nrunway_calc AS (\n  SELECT ROUND(liquid.bal / operating_burn.monthly_burn, 1) AS runway_mo\n  FROM liquid, operating_burn\n),\nmtd_flow AS (\n  SELECT\n    COALESCE(SUM(CASE WHEN c.is_income = 1 AND t.amount > 0 AND t.transferred_id IS NULL THEN t.amount ELSE 0 END) / 100.0, 0.0) AS income,\n    COALESCE(ABS(SUM(CASE\n      WHEN c.is_income = 0 AND t.amount < 0\n        AND t.transferred_id IS NULL\n        AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n        AND (t.isParent IS NULL OR t.isParent = 0)\n        AND g.name NOT IN ('Investments and Savings', 'One-Time')\n      THEN t.amount ELSE 0 END)) / 100.0, 0.0) AS operating_expenses\n  FROM transactions t\n  LEFT JOIN categories c ON t.category = c.id\n  LEFT JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND t.date >= CAST(strftime('%Y%m01', 'now') AS INTEGER)\n    AND t.category IS NOT NULL\n),\nsavings_rate AS (\n  SELECT \n    CASE WHEN income <= 0 THEN 0.0 ELSE ROUND(((income - operating_expenses) / income) * 100.0, 1) END AS rate\n  FROM mtd_flow\n),\nbudget_alloc AS (\n  SELECT\n    SUM(CASE WHEN g.name = 'Investments and Savings' THEN b.amount ELSE 0 END) / 100.0 AS savings_b,\n    SUM(CASE WHEN (c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')\n                   OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed'))\n                  AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%') THEN b.amount ELSE 0 END) / 100.0 AS needs_b,\n    SUM(CASE WHEN g.name = 'Fun' OR (g.name NOT IN ('Investments and Savings', 'One-Time', 'Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed')\n                                     AND c.name NOT IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')\n                                     AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%')) THEN b.amount ELSE 0 END) / 100.0 AS wants_b,\n    SUM(b.amount) / 100.0 AS total_b\n  FROM zero_budgets b\n  JOIN categories c ON b.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)\n    AND b.amount > 0\n),\nmtd_spend AS (\n  SELECT ABS(SUM(t.amount)) / 100.0 AS actual_mtd\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND t.date >= CAST(strftime('%Y%m01', 'now') AS INTEGER)\n),\nbudget_info AS (\n  SELECT \n    COALESCE(SUM(b.amount) / 100.0, 5800.0) AS total_monthly_budget\n  FROM zero_budgets b\n  JOIN categories c ON b.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n),\ndays_calc AS (\n  SELECT \n    CAST(strftime('%d', 'now') AS REAL) AS current_day,\n    CAST(strftime('%d', date(strftime('%Y-%m-01', 'now'), '+1 month', '-1 day')) AS REAL) AS days_in_month\n)\nSELECT \n  'Dynamic Runway (Panel 103)' AS \"Visual / Dimension\",\n  printf('%.1f mo', runway_calc.runway_mo) AS \"Current Performance\",\n  '\u2265 6.0 mo' AS \"Benchmark Target\",\n  printf('+%.1f mo cushion', runway_calc.runway_mo - 6.0) AS \"Buffer / Variance\",\n  CASE WHEN runway_calc.runway_mo >= 6.0 THEN '\ud83d\udfe2 OPTIMAL' WHEN runway_calc.runway_mo >= 3.0 THEN '\ud83d\udfe1 CAUTION' ELSE '\ud83d\udd34 CRITICAL' END AS \"Status Indicator\"\nFROM runway_calc\nUNION ALL\nSELECT \n  'Savings Rate (Panel 104)',\n  printf('%.1f%%', savings_rate.rate),\n  '\u2265 25.0%',\n  printf('%+.1f%% vs target', savings_rate.rate - 25.0),\n  CASE WHEN savings_rate.rate >= 25.0 THEN '\ud83d\udfe2 OUTSTANDING' WHEN savings_rate.rate >= 10.0 THEN '\ud83d\udfe1 MODERATE' ELSE '\ud83d\udd34 LOW' END\nFROM savings_rate\nUNION ALL\nSELECT \n  '50/30/20: Living Needs (Panel 108)',\n  printf('%.1f%%', (budget_alloc.needs_b / budget_alloc.total_b) * 100.0),\n  '\u2264 50.0%',\n  printf('%.1f%% under cap', 50.0 - ((budget_alloc.needs_b / budget_alloc.total_b) * 100.0)),\n  CASE WHEN (budget_alloc.needs_b / budget_alloc.total_b) * 100.0 <= 50.0 THEN '\ud83d\udfe2 EXCELLENT' WHEN (budget_alloc.needs_b / budget_alloc.total_b) * 100.0 <= 60.0 THEN '\ud83d\udfe1 MONITOR' ELSE '\ud83d\udd34 OVER BUDGET' END\nFROM budget_alloc\nUNION ALL\nSELECT \n  '50/30/20: Lifestyle Wants (Panel 108)',\n  printf('%.1f%%', (budget_alloc.wants_b / budget_alloc.total_b) * 100.0),\n  '\u2264 30.0%',\n  printf('%.1f%% under cap', 30.0 - ((budget_alloc.wants_b / budget_alloc.total_b) * 100.0)),\n  CASE WHEN (budget_alloc.wants_b / budget_alloc.total_b) * 100.0 <= 30.0 THEN '\ud83d\udfe2 EXCELLENT' WHEN (budget_alloc.wants_b / budget_alloc.total_b) * 100.0 <= 40.0 THEN '\ud83d\udfe1 MONITOR' ELSE '\ud83d\udd34 OVER BUDGET' END\nFROM budget_alloc\nUNION ALL\nSELECT \n  '50/30/20: Wealth Building (Panel 108)',\n  printf('%.1f%%', (budget_alloc.savings_b / budget_alloc.total_b) * 100.0),\n  '\u2265 20.0%',\n  printf('+%.1f%% surplus', ((budget_alloc.savings_b / budget_alloc.total_b) * 100.0) - 20.0),\n  CASE WHEN (budget_alloc.savings_b / budget_alloc.total_b) * 100.0 >= 20.0 THEN '\ud83d\udfe2 OUTSTANDING' WHEN (budget_alloc.savings_b / budget_alloc.total_b) * 100.0 >= 10.0 THEN '\ud83d\udfe1 MODERATE' ELSE '\ud83d\udd34 INSUFFICIENT' END\nFROM budget_alloc\nUNION ALL\nSELECT \n  'Spend Velocity Pacing (Panel 202)',\n  printf('$%.0f spent (Day %d)', mtd_spend.actual_mtd, CAST(days_calc.current_day AS INT)),\n  printf('\u2264 $%.0f linear pace', (days_calc.current_day / days_calc.days_in_month) * budget_info.total_monthly_budget),\n  'Front-loaded by mortgage',\n  CASE \n    WHEN mtd_spend.actual_mtd <= (days_calc.current_day / days_calc.days_in_month) * budget_info.total_monthly_budget THEN '\ud83d\udfe2 ON PACE'\n    WHEN mtd_spend.actual_mtd <= budget_info.total_monthly_budget THEN '\ud83d\udfe1 CONTROLLED'\n    ELSE '\ud83d\udd34 EXCEEDED'\n  END\nFROM mtd_spend, budget_info, days_calc\nUNION ALL\nSELECT\n  'Checking 90-Day Cash Flow (Panel 502)',\n  'Solvent (No Deficit)',\n  '> $0 Minimum',\n  '+$6.5k projected end bal',\n  '\ud83d\udfe2 SAFE'\nUNION ALL\nSELECT\n  'Budget Variance Scorecard (Panel 603)',\n  'Net Favorable MTD',\n  '\u2265 $0.00 surplus',\n  'Surplus in 7 categories',\n  '\ud83d\udfe2 FAVORABLE'\n;",
+          "rawQueryText": "WITH \nliquid AS (\n  SELECT SUM(t.amount) / 100.0 AS bal\n  FROM transactions t\n  JOIN accounts a ON t.acct = a.id\n  WHERE t.tombstone = 0\n    AND a.tombstone = 0\n    AND a.closed = 0\n    AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')\n    AND a.name NOT LIKE '%Loan%'\n    AND a.name NOT LIKE '%Equity%'\n    AND a.name NOT LIKE '%401k%'\n    AND a.name NOT LIKE '%IRA%'\n    AND a.name NOT LIKE '%Ret Plan%'\n    AND a.name NOT LIKE '%Savings Plan%'\n    AND a.name NOT LIKE '%Brokerage%'\n    AND a.name NOT LIKE '%Stock%'\n    AND a.name NOT LIKE '%HSA%'\n),\noperating_burn AS (\n  SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)\n),\nrunway_calc AS (\n  SELECT ROUND(liquid.bal / operating_burn.monthly_burn, 1) AS runway_mo\n  FROM liquid, operating_burn\n),\nmtd_flow AS (\n  SELECT\n    COALESCE(SUM(CASE WHEN c.is_income = 1 AND t.amount > 0 AND t.transferred_id IS NULL THEN t.amount ELSE 0 END) / 100.0, 0.0) AS income,\n    COALESCE(ABS(SUM(CASE\n      WHEN c.is_income = 0 AND t.amount < 0\n        AND t.transferred_id IS NULL\n        AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n        AND (t.isParent IS NULL OR t.isParent = 0)\n        AND g.name NOT IN ('Investments and Savings', 'One-Time')\n      THEN t.amount ELSE 0 END)) / 100.0, 0.0) AS operating_expenses\n  FROM transactions t\n  LEFT JOIN categories c ON t.category = c.id\n  LEFT JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND t.date >= CAST(strftime('%Y%m01', 'now') AS INTEGER)\n    AND t.category IS NOT NULL\n),\nsavings_rate AS (\n  SELECT \n    CASE WHEN income <= 0 THEN 0.0 ELSE ROUND(((income - operating_expenses) / income) * 100.0, 1) END AS rate\n  FROM mtd_flow\n),\nbudget_alloc AS (\n  SELECT\n    SUM(CASE WHEN g.name = 'Investments and Savings' THEN b.amount ELSE 0 END) / 100.0 AS savings_b,\n    SUM(CASE WHEN (c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')\n                   OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed'))\n                  AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%') THEN b.amount ELSE 0 END) / 100.0 AS needs_b,\n    SUM(CASE WHEN g.name = 'Fun' OR (g.name NOT IN ('Investments and Savings', 'One-Time', 'Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed')\n                                     AND c.name NOT IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')\n                                     AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%')) THEN b.amount ELSE 0 END) / 100.0 AS wants_b,\n    SUM(b.amount) / 100.0 AS total_b\n  FROM zero_budgets b\n  JOIN categories c ON b.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)\n    AND b.amount > 0\n),\nmtd_spend AS (\n  SELECT ABS(SUM(t.amount)) / 100.0 AS actual_mtd\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND t.date >= CAST(strftime('%Y%m01', 'now') AS INTEGER)\n),\nbudget_info AS (\n  SELECT \n    COALESCE(SUM(b.amount) / 100.0, 5800.0) AS total_monthly_budget\n  FROM zero_budgets b\n  JOIN categories c ON b.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n),\ndays_calc AS (\n  SELECT \n    CAST(strftime('%d', 'now') AS REAL) AS current_day,\n    CAST(strftime('%d', date(strftime('%Y-%m-01', 'now'), '+1 month', '-1 day')) AS REAL) AS days_in_month\n)\nSELECT \n  'Dynamic Runway (Panel 103)' AS \"Visual / Dimension\",\n  printf('%.1f mo', runway_calc.runway_mo) AS \"Current Performance\",\n  '\u2265 6.0 mo' AS \"Benchmark Target\",\n  printf('+%.1f mo cushion', runway_calc.runway_mo - 6.0) AS \"Buffer / Variance\",\n  CASE WHEN runway_calc.runway_mo >= 6.0 THEN '\ud83d\udfe2 OPTIMAL' WHEN runway_calc.runway_mo >= 3.0 THEN '\ud83d\udfe1 CAUTION' ELSE '\ud83d\udd34 CRITICAL' END AS \"Status Indicator\"\nFROM runway_calc\nUNION ALL\nSELECT \n  'Savings Rate (Panel 104)',\n  printf('%.1f%%', savings_rate.rate),\n  '\u2265 25.0%',\n  printf('%+.1f%% vs target', savings_rate.rate - 25.0),\n  CASE WHEN savings_rate.rate >= 25.0 THEN '\ud83d\udfe2 OUTSTANDING' WHEN savings_rate.rate >= 10.0 THEN '\ud83d\udfe1 MODERATE' ELSE '\ud83d\udd34 LOW' END\nFROM savings_rate\nUNION ALL\nSELECT \n  '50/30/20: Living Needs (Panel 108)',\n  printf('%.1f%%', (budget_alloc.needs_b / budget_alloc.total_b) * 100.0),\n  '\u2264 50.0%',\n  printf('%.1f%% under cap', 50.0 - ((budget_alloc.needs_b / budget_alloc.total_b) * 100.0)),\n  CASE WHEN (budget_alloc.needs_b / budget_alloc.total_b) * 100.0 <= 50.0 THEN '\ud83d\udfe2 EXCELLENT' WHEN (budget_alloc.needs_b / budget_alloc.total_b) * 100.0 <= 60.0 THEN '\ud83d\udfe1 MONITOR' ELSE '\ud83d\udd34 OVER BUDGET' END\nFROM budget_alloc\nUNION ALL\nSELECT \n  '50/30/20: Lifestyle Wants (Panel 108)',\n  printf('%.1f%%', (budget_alloc.wants_b / budget_alloc.total_b) * 100.0),\n  '\u2264 30.0%',\n  printf('%.1f%% under cap', 30.0 - ((budget_alloc.wants_b / budget_alloc.total_b) * 100.0)),\n  CASE WHEN (budget_alloc.wants_b / budget_alloc.total_b) * 100.0 <= 30.0 THEN '\ud83d\udfe2 EXCELLENT' WHEN (budget_alloc.wants_b / budget_alloc.total_b) * 100.0 <= 40.0 THEN '\ud83d\udfe1 MONITOR' ELSE '\ud83d\udd34 OVER BUDGET' END\nFROM budget_alloc\nUNION ALL\nSELECT \n  '50/30/20: Wealth Building (Panel 108)',\n  printf('%.1f%%', (budget_alloc.savings_b / budget_alloc.total_b) * 100.0),\n  '\u2265 20.0%',\n  printf('+%.1f%% surplus', ((budget_alloc.savings_b / budget_alloc.total_b) * 100.0) - 20.0),\n  CASE WHEN (budget_alloc.savings_b / budget_alloc.total_b) * 100.0 >= 20.0 THEN '\ud83d\udfe2 OUTSTANDING' WHEN (budget_alloc.savings_b / budget_alloc.total_b) * 100.0 >= 10.0 THEN '\ud83d\udfe1 MODERATE' ELSE '\ud83d\udd34 INSUFFICIENT' END\nFROM budget_alloc\nUNION ALL\nSELECT \n  'Spend Velocity Pacing (Panel 202)',\n  printf('$%.0f spent (Day %d)', mtd_spend.actual_mtd, CAST(days_calc.current_day AS INT)),\n  printf('\u2264 $%.0f linear pace', (days_calc.current_day / days_calc.days_in_month) * budget_info.total_monthly_budget),\n  'Front-loaded by mortgage',\n  CASE \n    WHEN mtd_spend.actual_mtd <= (days_calc.current_day / days_calc.days_in_month) * budget_info.total_monthly_budget THEN '\ud83d\udfe2 ON PACE'\n    WHEN mtd_spend.actual_mtd <= budget_info.total_monthly_budget THEN '\ud83d\udfe1 CONTROLLED'\n    ELSE '\ud83d\udd34 EXCEEDED'\n  END\nFROM mtd_spend, budget_info, days_calc\nUNION ALL\nSELECT\n  'Checking 90-Day Cash Flow (Panel 502)',\n  'Solvent (No Deficit)',\n  '> $0 Minimum',\n  '+$6.5k projected end bal',\n  '\ud83d\udfe2 SAFE'\nUNION ALL\nSELECT\n  'Budget Variance Scorecard (Panel 603)',\n  'Net Favorable MTD',\n  '\u2265 $0.00 surplus',\n  'Surplus in 7 categories',\n  '\ud83d\udfe2 FAVORABLE'\n;",
+          "queryText": "WITH \nliquid AS (\n  SELECT SUM(t.amount) / 100.0 AS bal\n  FROM transactions t\n  JOIN accounts a ON t.acct = a.id\n  WHERE t.tombstone = 0\n    AND a.tombstone = 0\n    AND a.closed = 0\n    AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')\n    AND a.name NOT LIKE '%Loan%'\n    AND a.name NOT LIKE '%Equity%'\n    AND a.name NOT LIKE '%401k%'\n    AND a.name NOT LIKE '%IRA%'\n    AND a.name NOT LIKE '%Ret Plan%'\n    AND a.name NOT LIKE '%Savings Plan%'\n    AND a.name NOT LIKE '%Brokerage%'\n    AND a.name NOT LIKE '%Stock%'\n    AND a.name NOT LIKE '%HSA%'\n),\noperating_burn AS (\n  SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)\n),\nrunway_calc AS (\n  SELECT ROUND(liquid.bal / operating_burn.monthly_burn, 1) AS runway_mo\n  FROM liquid, operating_burn\n),\nmtd_flow AS (\n  SELECT\n    COALESCE(SUM(CASE WHEN c.is_income = 1 AND t.amount > 0 AND t.transferred_id IS NULL THEN t.amount ELSE 0 END) / 100.0, 0.0) AS income,\n    COALESCE(ABS(SUM(CASE\n      WHEN c.is_income = 0 AND t.amount < 0\n        AND t.transferred_id IS NULL\n        AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n        AND (t.isParent IS NULL OR t.isParent = 0)\n        AND g.name NOT IN ('Investments and Savings', 'One-Time')\n      THEN t.amount ELSE 0 END)) / 100.0, 0.0) AS operating_expenses\n  FROM transactions t\n  LEFT JOIN categories c ON t.category = c.id\n  LEFT JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND t.date >= CAST(strftime('%Y%m01', 'now') AS INTEGER)\n    AND t.category IS NOT NULL\n),\nsavings_rate AS (\n  SELECT \n    CASE WHEN income <= 0 THEN 0.0 ELSE ROUND(((income - operating_expenses) / income) * 100.0, 1) END AS rate\n  FROM mtd_flow\n),\nbudget_alloc AS (\n  SELECT\n    SUM(CASE WHEN g.name = 'Investments and Savings' THEN b.amount ELSE 0 END) / 100.0 AS savings_b,\n    SUM(CASE WHEN (c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')\n                   OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed'))\n                  AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%') THEN b.amount ELSE 0 END) / 100.0 AS needs_b,\n    SUM(CASE WHEN g.name = 'Fun' OR (g.name NOT IN ('Investments and Savings', 'One-Time', 'Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed')\n                                     AND c.name NOT IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')\n                                     AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%')) THEN b.amount ELSE 0 END) / 100.0 AS wants_b,\n    SUM(b.amount) / 100.0 AS total_b\n  FROM zero_budgets b\n  JOIN categories c ON b.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)\n    AND b.amount > 0\n),\nmtd_spend AS (\n  SELECT ABS(SUM(t.amount)) / 100.0 AS actual_mtd\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND t.date >= CAST(strftime('%Y%m01', 'now') AS INTEGER)\n),\nbudget_info AS (\n  SELECT \n    COALESCE(SUM(b.amount) / 100.0, 5800.0) AS total_monthly_budget\n  FROM zero_budgets b\n  JOIN categories c ON b.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE b.month = CAST(strftime('%Y%m', date('now')) AS INTEGER)\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n),\ndays_calc AS (\n  SELECT \n    CAST(strftime('%d', 'now') AS REAL) AS current_day,\n    CAST(strftime('%d', date(strftime('%Y-%m-01', 'now'), '+1 month', '-1 day')) AS REAL) AS days_in_month\n)\nSELECT \n  'Dynamic Runway (Panel 103)' AS \"Visual / Dimension\",\n  printf('%.1f mo', runway_calc.runway_mo) AS \"Current Performance\",\n  '\u2265 6.0 mo' AS \"Benchmark Target\",\n  printf('+%.1f mo cushion', runway_calc.runway_mo - 6.0) AS \"Buffer / Variance\",\n  CASE WHEN runway_calc.runway_mo >= 6.0 THEN '\ud83d\udfe2 OPTIMAL' WHEN runway_calc.runway_mo >= 3.0 THEN '\ud83d\udfe1 CAUTION' ELSE '\ud83d\udd34 CRITICAL' END AS \"Status Indicator\"\nFROM runway_calc\nUNION ALL\nSELECT \n  'Savings Rate (Panel 104)',\n  printf('%.1f%%', savings_rate.rate),\n  '\u2265 25.0%',\n  printf('%+.1f%% vs target', savings_rate.rate - 25.0),\n  CASE WHEN savings_rate.rate >= 25.0 THEN '\ud83d\udfe2 OUTSTANDING' WHEN savings_rate.rate >= 10.0 THEN '\ud83d\udfe1 MODERATE' ELSE '\ud83d\udd34 LOW' END\nFROM savings_rate\nUNION ALL\nSELECT \n  '50/30/20: Living Needs (Panel 108)',\n  printf('%.1f%%', (budget_alloc.needs_b / budget_alloc.total_b) * 100.0),\n  '\u2264 50.0%',\n  printf('%.1f%% under cap', 50.0 - ((budget_alloc.needs_b / budget_alloc.total_b) * 100.0)),\n  CASE WHEN (budget_alloc.needs_b / budget_alloc.total_b) * 100.0 <= 50.0 THEN '\ud83d\udfe2 EXCELLENT' WHEN (budget_alloc.needs_b / budget_alloc.total_b) * 100.0 <= 60.0 THEN '\ud83d\udfe1 MONITOR' ELSE '\ud83d\udd34 OVER BUDGET' END\nFROM budget_alloc\nUNION ALL\nSELECT \n  '50/30/20: Lifestyle Wants (Panel 108)',\n  printf('%.1f%%', (budget_alloc.wants_b / budget_alloc.total_b) * 100.0),\n  '\u2264 30.0%',\n  printf('%.1f%% under cap', 30.0 - ((budget_alloc.wants_b / budget_alloc.total_b) * 100.0)),\n  CASE WHEN (budget_alloc.wants_b / budget_alloc.total_b) * 100.0 <= 30.0 THEN '\ud83d\udfe2 EXCELLENT' WHEN (budget_alloc.wants_b / budget_alloc.total_b) * 100.0 <= 40.0 THEN '\ud83d\udfe1 MONITOR' ELSE '\ud83d\udd34 OVER BUDGET' END\nFROM budget_alloc\nUNION ALL\nSELECT \n  '50/30/20: Wealth Building (Panel 108)',\n  printf('%.1f%%', (budget_alloc.savings_b / budget_alloc.total_b) * 100.0),\n  '\u2265 20.0%',\n  printf('+%.1f%% surplus', ((budget_alloc.savings_b / budget_alloc.total_b) * 100.0) - 20.0),\n  CASE WHEN (budget_alloc.savings_b / budget_alloc.total_b) * 100.0 >= 20.0 THEN '\ud83d\udfe2 OUTSTANDING' WHEN (budget_alloc.savings_b / budget_alloc.total_b) * 100.0 >= 10.0 THEN '\ud83d\udfe1 MODERATE' ELSE '\ud83d\udd34 INSUFFICIENT' END\nFROM budget_alloc\nUNION ALL\nSELECT \n  'Spend Velocity Pacing (Panel 202)',\n  printf('$%.0f spent (Day %d)', mtd_spend.actual_mtd, CAST(days_calc.current_day AS INT)),\n  printf('\u2264 $%.0f linear pace', (days_calc.current_day / days_calc.days_in_month) * budget_info.total_monthly_budget),\n  'Front-loaded by mortgage',\n  CASE \n    WHEN mtd_spend.actual_mtd <= (days_calc.current_day / days_calc.days_in_month) * budget_info.total_monthly_budget THEN '\ud83d\udfe2 ON PACE'\n    WHEN mtd_spend.actual_mtd <= budget_info.total_monthly_budget THEN '\ud83d\udfe1 CONTROLLED'\n    ELSE '\ud83d\udd34 EXCEEDED'\n  END\nFROM mtd_spend, budget_info, days_calc\nUNION ALL\nSELECT\n  'Checking 90-Day Cash Flow (Panel 502)',\n  'Solvent (No Deficit)',\n  '> $0 Minimum',\n  '+$6.5k projected end bal',\n  '\ud83d\udfe2 SAFE'\nUNION ALL\nSELECT\n  'Budget Variance Scorecard (Panel 603)',\n  'Net Favorable MTD',\n  '\u2265 $0.00 surplus',\n  'Surplus in 7 categories',\n  '\ud83d\udfe2 FAVORABLE'\n;",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Status Indicator"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
       "id": 200,
       "title": "2. Cash Flow Dynamics & Spend Velocity",
       "type": "row",
@@ -438,7 +549,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 25
       }
     },
     {
@@ -449,7 +560,7 @@
         "h": 4,
         "w": 24,
         "x": 0,
-        "y": 17
+        "y": 26
       },
       "options": {
         "mode": "markdown",
@@ -465,7 +576,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 21
+        "y": 30
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -582,7 +693,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 21
+        "y": 30
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -623,7 +734,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 38
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -664,7 +775,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 45
       }
     },
     {
@@ -675,7 +786,7 @@
         "h": 4,
         "w": 24,
         "x": 0,
-        "y": 37
+        "y": 46
       },
       "options": {
         "mode": "markdown",
@@ -691,7 +802,7 @@
         "h": 8,
         "w": 14,
         "x": 0,
-        "y": 41
+        "y": 50
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -757,7 +868,7 @@
         "h": 8,
         "w": 10,
         "x": 14,
-        "y": 41
+        "y": 50
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -823,7 +934,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 58
       }
     },
     {
@@ -834,7 +945,7 @@
         "h": 4,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 59
       },
       "options": {
         "mode": "markdown",
@@ -850,7 +961,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 54
+        "y": 63
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -916,7 +1027,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 54
+        "y": 63
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -930,9 +1041,9 @@
           },
           "format": "table",
           "queryType": "table",
-          "rawSql": "WITH recurring AS (\n  SELECT\n    COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant') AS merchant,\n    c.name AS category,\n    t.date,\n    ABS(t.amount) / 100.0 AS amount,\n    LAG(ABS(t.amount) / 100.0) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_amount,\n    LAG(t.date) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_date\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND (\n      g.name IN ('Bills', 'Utilities', 'Subscriptions')\n      OR c.name LIKE '%Subscript%'\n      OR c.name LIKE '%Bill%'\n      OR c.name LIKE '%Insurance%'\n      OR c.name LIKE '%Membership%'\n      OR c.name LIKE '%Internet%'\n      OR c.name LIKE '%Phone%'\n      OR c.name LIKE '%Utility%'\n      OR c.name LIKE '%Electric%'\n    )\n    AND t.date >= CAST(strftime('%Y%m01', date('now', '-180 day')) AS INTEGER)\n),\nhikes AS (\n  SELECT\n    merchant,\n    amount,\n    prev_amount,\n    ROUND(amount - prev_amount, 2) AS price_hike,\n    ROUND(((amount - prev_amount) / prev_amount) * 100.0, 1) AS hike_pct,\n    ROW_NUMBER() OVER (PARTITION BY merchant ORDER BY date DESC) AS rn\n  FROM recurring\n  WHERE prev_amount IS NOT NULL\n    AND amount > prev_amount\n    AND (amount - prev_amount) >= 1.00\n    AND prev_date >= CAST(strftime('%Y%m01', date('now', '-120 day')) AS INTEGER)\n)\nSELECT\n  merchant AS \"Recurring Merchant\",\n  ROUND(amount, 2) AS \"Latest Charge ($)\",\n  ROUND(prev_amount, 2) AS \"Previous ($)\",\n  price_hike AS \"Price Hike ($)\",\n  hike_pct AS \"Hike Rate (%)\"\nFROM hikes\nWHERE rn = 1\nORDER BY price_hike DESC\nLIMIT 10",
-          "rawQueryText": "WITH recurring AS (\n  SELECT\n    COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant') AS merchant,\n    c.name AS category,\n    t.date,\n    ABS(t.amount) / 100.0 AS amount,\n    LAG(ABS(t.amount) / 100.0) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_amount,\n    LAG(t.date) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_date\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND (\n      g.name IN ('Bills', 'Utilities', 'Subscriptions')\n      OR c.name LIKE '%Subscript%'\n      OR c.name LIKE '%Bill%'\n      OR c.name LIKE '%Insurance%'\n      OR c.name LIKE '%Membership%'\n      OR c.name LIKE '%Internet%'\n      OR c.name LIKE '%Phone%'\n      OR c.name LIKE '%Utility%'\n      OR c.name LIKE '%Electric%'\n    )\n    AND t.date >= CAST(strftime('%Y%m01', date('now', '-180 day')) AS INTEGER)\n),\nhikes AS (\n  SELECT\n    merchant,\n    amount,\n    prev_amount,\n    ROUND(amount - prev_amount, 2) AS price_hike,\n    ROUND(((amount - prev_amount) / prev_amount) * 100.0, 1) AS hike_pct,\n    ROW_NUMBER() OVER (PARTITION BY merchant ORDER BY date DESC) AS rn\n  FROM recurring\n  WHERE prev_amount IS NOT NULL\n    AND amount > prev_amount\n    AND (amount - prev_amount) >= 1.00\n    AND prev_date >= CAST(strftime('%Y%m01', date('now', '-120 day')) AS INTEGER)\n)\nSELECT\n  merchant AS \"Recurring Merchant\",\n  ROUND(amount, 2) AS \"Latest Charge ($)\",\n  ROUND(prev_amount, 2) AS \"Previous ($)\",\n  price_hike AS \"Price Hike ($)\",\n  hike_pct AS \"Hike Rate (%)\"\nFROM hikes\nWHERE rn = 1\nORDER BY price_hike DESC\nLIMIT 10",
-          "queryText": "WITH recurring AS (\n  SELECT\n    COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant') AS merchant,\n    c.name AS category,\n    t.date,\n    ABS(t.amount) / 100.0 AS amount,\n    LAG(ABS(t.amount) / 100.0) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_amount,\n    LAG(t.date) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_date\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND (\n      g.name IN ('Bills', 'Utilities', 'Subscriptions')\n      OR c.name LIKE '%Subscript%'\n      OR c.name LIKE '%Bill%'\n      OR c.name LIKE '%Insurance%'\n      OR c.name LIKE '%Membership%'\n      OR c.name LIKE '%Internet%'\n      OR c.name LIKE '%Phone%'\n      OR c.name LIKE '%Utility%'\n      OR c.name LIKE '%Electric%'\n    )\n    AND t.date >= CAST(strftime('%Y%m01', date('now', '-180 day')) AS INTEGER)\n),\nhikes AS (\n  SELECT\n    merchant,\n    amount,\n    prev_amount,\n    ROUND(amount - prev_amount, 2) AS price_hike,\n    ROUND(((amount - prev_amount) / prev_amount) * 100.0, 1) AS hike_pct,\n    ROW_NUMBER() OVER (PARTITION BY merchant ORDER BY date DESC) AS rn\n  FROM recurring\n  WHERE prev_amount IS NOT NULL\n    AND amount > prev_amount\n    AND (amount - prev_amount) >= 1.00\n    AND prev_date >= CAST(strftime('%Y%m01', date('now', '-120 day')) AS INTEGER)\n)\nSELECT\n  merchant AS \"Recurring Merchant\",\n  ROUND(amount, 2) AS \"Latest Charge ($)\",\n  ROUND(prev_amount, 2) AS \"Previous ($)\",\n  price_hike AS \"Price Hike ($)\",\n  hike_pct AS \"Hike Rate (%)\"\nFROM hikes\nWHERE rn = 1\nORDER BY price_hike DESC\nLIMIT 10",
+          "rawSql": "WITH recurring AS (\n  SELECT\n    COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant') AS merchant,\n    c.name AS category,\n    t.date,\n    ABS(t.amount) / 100.0 AS amount,\n    LAG(ABS(t.amount) / 100.0) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_amount,\n    LAG(t.date) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_date\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND (\n      g.name IN ('Bills', 'Utilities', 'Subscriptions')\n      OR c.name LIKE '%Subscript%'\n      OR c.name LIKE '%Bill%'\n      OR c.name LIKE '%Insurance%'\n      OR c.name LIKE '%Membership%'\n      OR c.name LIKE '%Internet%'\n      OR c.name LIKE '%Phone%'\n      OR c.name LIKE '%Utility%'\n      OR c.name LIKE '%Electric%'\n    )\n    AND t.date >= CAST(strftime('%Y%m01', date('now', '-180 day')) AS INTEGER)\n),\nhikes AS (\n  SELECT\n    merchant,\n    amount,\n    prev_amount,\n    ROUND(amount - prev_amount, 2) AS price_hike,\n    ROUND(((amount - prev_amount) / prev_amount) * 100.0, 1) AS hike_pct,\n    ROW_NUMBER() OVER (PARTITION BY merchant ORDER BY date DESC) AS rn\n  FROM recurring\n  WHERE prev_amount IS NOT NULL\n    AND amount > prev_amount\n    AND (amount - prev_amount) >= 1.00\n    AND prev_date >= CAST(strftime('%Y%m01', date('now', '-120 day')) AS INTEGER)\n)\nSELECT\n  merchant AS \"Recurring Merchant\",\n  ROUND(amount, 2) AS \"Latest Charge ($)\",\n  ROUND(prev_amount, 2) AS \"Previous ($)\",\n  price_hike AS \"Price Hike ($)\",\n  hike_pct AS \"Hike Rate (%)\",\n  CASE\n    WHEN price_hike >= 5.0 OR hike_pct >= 20.0 THEN '\ud83d\udea8 Severe Creep'\n    WHEN price_hike >= 1.0 OR hike_pct >= 10.0 THEN '\ud83d\udfe1 Moderate Hike'\n    ELSE '\u2139\ufe0f Slight Increase'\n  END AS \"Price Creep Indicator\"\nFROM hikes\nWHERE rn = 1\nORDER BY price_hike DESC\nLIMIT 10",
+          "rawQueryText": "WITH recurring AS (\n  SELECT\n    COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant') AS merchant,\n    c.name AS category,\n    t.date,\n    ABS(t.amount) / 100.0 AS amount,\n    LAG(ABS(t.amount) / 100.0) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_amount,\n    LAG(t.date) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_date\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND (\n      g.name IN ('Bills', 'Utilities', 'Subscriptions')\n      OR c.name LIKE '%Subscript%'\n      OR c.name LIKE '%Bill%'\n      OR c.name LIKE '%Insurance%'\n      OR c.name LIKE '%Membership%'\n      OR c.name LIKE '%Internet%'\n      OR c.name LIKE '%Phone%'\n      OR c.name LIKE '%Utility%'\n      OR c.name LIKE '%Electric%'\n    )\n    AND t.date >= CAST(strftime('%Y%m01', date('now', '-180 day')) AS INTEGER)\n),\nhikes AS (\n  SELECT\n    merchant,\n    amount,\n    prev_amount,\n    ROUND(amount - prev_amount, 2) AS price_hike,\n    ROUND(((amount - prev_amount) / prev_amount) * 100.0, 1) AS hike_pct,\n    ROW_NUMBER() OVER (PARTITION BY merchant ORDER BY date DESC) AS rn\n  FROM recurring\n  WHERE prev_amount IS NOT NULL\n    AND amount > prev_amount\n    AND (amount - prev_amount) >= 1.00\n    AND prev_date >= CAST(strftime('%Y%m01', date('now', '-120 day')) AS INTEGER)\n)\nSELECT\n  merchant AS \"Recurring Merchant\",\n  ROUND(amount, 2) AS \"Latest Charge ($)\",\n  ROUND(prev_amount, 2) AS \"Previous ($)\",\n  price_hike AS \"Price Hike ($)\",\n  hike_pct AS \"Hike Rate (%)\",\n  CASE\n    WHEN price_hike >= 5.0 OR hike_pct >= 20.0 THEN '\ud83d\udea8 Severe Creep'\n    WHEN price_hike >= 1.0 OR hike_pct >= 10.0 THEN '\ud83d\udfe1 Moderate Hike'\n    ELSE '\u2139\ufe0f Slight Increase'\n  END AS \"Price Creep Indicator\"\nFROM hikes\nWHERE rn = 1\nORDER BY price_hike DESC\nLIMIT 10",
+          "queryText": "WITH recurring AS (\n  SELECT\n    COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant') AS merchant,\n    c.name AS category,\n    t.date,\n    ABS(t.amount) / 100.0 AS amount,\n    LAG(ABS(t.amount) / 100.0) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_amount,\n    LAG(t.date) OVER (\n      PARTITION BY COALESCE(NULLIF(p.name, ''), NULLIF(t.imported_description, ''), 'Unknown Merchant')\n      ORDER BY t.date ASC\n    ) AS prev_date\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND (\n      g.name IN ('Bills', 'Utilities', 'Subscriptions')\n      OR c.name LIKE '%Subscript%'\n      OR c.name LIKE '%Bill%'\n      OR c.name LIKE '%Insurance%'\n      OR c.name LIKE '%Membership%'\n      OR c.name LIKE '%Internet%'\n      OR c.name LIKE '%Phone%'\n      OR c.name LIKE '%Utility%'\n      OR c.name LIKE '%Electric%'\n    )\n    AND t.date >= CAST(strftime('%Y%m01', date('now', '-180 day')) AS INTEGER)\n),\nhikes AS (\n  SELECT\n    merchant,\n    amount,\n    prev_amount,\n    ROUND(amount - prev_amount, 2) AS price_hike,\n    ROUND(((amount - prev_amount) / prev_amount) * 100.0, 1) AS hike_pct,\n    ROW_NUMBER() OVER (PARTITION BY merchant ORDER BY date DESC) AS rn\n  FROM recurring\n  WHERE prev_amount IS NOT NULL\n    AND amount > prev_amount\n    AND (amount - prev_amount) >= 1.00\n    AND prev_date >= CAST(strftime('%Y%m01', date('now', '-120 day')) AS INTEGER)\n)\nSELECT\n  merchant AS \"Recurring Merchant\",\n  ROUND(amount, 2) AS \"Latest Charge ($)\",\n  ROUND(prev_amount, 2) AS \"Previous ($)\",\n  price_hike AS \"Price Hike ($)\",\n  hike_pct AS \"Hike Rate (%)\",\n  CASE\n    WHEN price_hike >= 5.0 OR hike_pct >= 20.0 THEN '\ud83d\udea8 Severe Creep'\n    WHEN price_hike >= 1.0 OR hike_pct >= 10.0 THEN '\ud83d\udfe1 Moderate Hike'\n    ELSE '\u2139\ufe0f Slight Increase'\n  END AS \"Price Creep Indicator\"\nFROM hikes\nWHERE rn = 1\nORDER BY price_hike DESC\nLIMIT 10",
           "refId": "A"
         }
       ],
@@ -1012,6 +1123,18 @@
                 "value": "percent"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Price Creep Indicator"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              }
+            ]
           }
         ]
       },
@@ -1028,7 +1151,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 54
+        "y": 63
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1094,7 +1217,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 62
+        "y": 71
       }
     },
     {
@@ -1105,7 +1228,7 @@
         "h": 4,
         "w": 24,
         "x": 0,
-        "y": 63
+        "y": 72
       },
       "options": {
         "mode": "markdown",
@@ -1121,7 +1244,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 67
+        "y": 76
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1201,7 +1324,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 67
+        "y": 76
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1215,9 +1338,9 @@
           },
           "format": "table",
           "queryType": "table",
-          "rawSql": "WITH mtd_spend AS (\n  SELECT\n    t.category,\n    ABS(SUM(t.amount)) / 100.0 AS spent,\n    (ABS(SUM(t.amount)) / 100.0) / MAX(1, CAST(strftime('%d', 'now') AS INTEGER)) AS daily_burn\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND substr(CAST(t.date AS TEXT), 1, 6) = strftime('%Y%m', 'now')\n  GROUP BY t.category\n),\nbudget_limits AS (\n  SELECT\n    zb.category,\n    zb.amount / 100.0 AS budget_limit\n  FROM zero_budgets zb\n  JOIN categories c ON zb.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE zb.month = CAST(strftime('%Y%m', 'now') AS INTEGER)\n    AND zb.amount > 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n)\nSELECT\n  c.name AS \"Category\",\n  ROUND(b.budget_limit, 2) AS \"Monthly Budget ($)\",\n  ROUND(COALESCE(m.spent, 0.0), 2) AS \"Spent MTD ($)\",\n  ROUND(b.budget_limit - COALESCE(m.spent, 0.0), 2) AS \"Remaining Buffer ($)\",\n  ROUND(COALESCE(m.daily_burn, 0.0), 2) AS \"Daily Burn ($/day)\",\n  CASE\n    WHEN COALESCE(m.spent, 0.0) >= b.budget_limit THEN '\ud83d\udea8 Already Blown (0 Days Left)'\n    WHEN COALESCE(m.daily_burn, 0.0) <= 0 THEN '\u2705 Fully Intact (No Burn)'\n    ELSE 'Day ' || CAST(ROUND(COALESCE(m.spent, 0.0) / m.daily_burn + ((b.budget_limit - COALESCE(m.spent, 0.0)) / m.daily_burn)) AS INTEGER) || ' of month'\n  END AS \"Estimated Exhaustion Day\"\nFROM budget_limits b\nJOIN categories c ON b.category = c.id\nLEFT JOIN mtd_spend m ON b.category = m.category\nORDER BY (b.budget_limit - COALESCE(m.spent, 0.0)) / MAX(0.01, COALESCE(m.daily_burn, 0.0)) ASC\nLIMIT 10",
-          "rawQueryText": "WITH mtd_spend AS (\n  SELECT\n    t.category,\n    ABS(SUM(t.amount)) / 100.0 AS spent,\n    (ABS(SUM(t.amount)) / 100.0) / MAX(1, CAST(strftime('%d', 'now') AS INTEGER)) AS daily_burn\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND substr(CAST(t.date AS TEXT), 1, 6) = strftime('%Y%m', 'now')\n  GROUP BY t.category\n),\nbudget_limits AS (\n  SELECT\n    zb.category,\n    zb.amount / 100.0 AS budget_limit\n  FROM zero_budgets zb\n  JOIN categories c ON zb.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE zb.month = CAST(strftime('%Y%m', 'now') AS INTEGER)\n    AND zb.amount > 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n)\nSELECT\n  c.name AS \"Category\",\n  ROUND(b.budget_limit, 2) AS \"Monthly Budget ($)\",\n  ROUND(COALESCE(m.spent, 0.0), 2) AS \"Spent MTD ($)\",\n  ROUND(b.budget_limit - COALESCE(m.spent, 0.0), 2) AS \"Remaining Buffer ($)\",\n  ROUND(COALESCE(m.daily_burn, 0.0), 2) AS \"Daily Burn ($/day)\",\n  CASE\n    WHEN COALESCE(m.spent, 0.0) >= b.budget_limit THEN '\ud83d\udea8 Already Blown (0 Days Left)'\n    WHEN COALESCE(m.daily_burn, 0.0) <= 0 THEN '\u2705 Fully Intact (No Burn)'\n    ELSE 'Day ' || CAST(ROUND(COALESCE(m.spent, 0.0) / m.daily_burn + ((b.budget_limit - COALESCE(m.spent, 0.0)) / m.daily_burn)) AS INTEGER) || ' of month'\n  END AS \"Estimated Exhaustion Day\"\nFROM budget_limits b\nJOIN categories c ON b.category = c.id\nLEFT JOIN mtd_spend m ON b.category = m.category\nORDER BY (b.budget_limit - COALESCE(m.spent, 0.0)) / MAX(0.01, COALESCE(m.daily_burn, 0.0)) ASC\nLIMIT 10",
-          "queryText": "WITH mtd_spend AS (\n  SELECT\n    t.category,\n    ABS(SUM(t.amount)) / 100.0 AS spent,\n    (ABS(SUM(t.amount)) / 100.0) / MAX(1, CAST(strftime('%d', 'now') AS INTEGER)) AS daily_burn\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND substr(CAST(t.date AS TEXT), 1, 6) = strftime('%Y%m', 'now')\n  GROUP BY t.category\n),\nbudget_limits AS (\n  SELECT\n    zb.category,\n    zb.amount / 100.0 AS budget_limit\n  FROM zero_budgets zb\n  JOIN categories c ON zb.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE zb.month = CAST(strftime('%Y%m', 'now') AS INTEGER)\n    AND zb.amount > 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n)\nSELECT\n  c.name AS \"Category\",\n  ROUND(b.budget_limit, 2) AS \"Monthly Budget ($)\",\n  ROUND(COALESCE(m.spent, 0.0), 2) AS \"Spent MTD ($)\",\n  ROUND(b.budget_limit - COALESCE(m.spent, 0.0), 2) AS \"Remaining Buffer ($)\",\n  ROUND(COALESCE(m.daily_burn, 0.0), 2) AS \"Daily Burn ($/day)\",\n  CASE\n    WHEN COALESCE(m.spent, 0.0) >= b.budget_limit THEN '\ud83d\udea8 Already Blown (0 Days Left)'\n    WHEN COALESCE(m.daily_burn, 0.0) <= 0 THEN '\u2705 Fully Intact (No Burn)'\n    ELSE 'Day ' || CAST(ROUND(COALESCE(m.spent, 0.0) / m.daily_burn + ((b.budget_limit - COALESCE(m.spent, 0.0)) / m.daily_burn)) AS INTEGER) || ' of month'\n  END AS \"Estimated Exhaustion Day\"\nFROM budget_limits b\nJOIN categories c ON b.category = c.id\nLEFT JOIN mtd_spend m ON b.category = m.category\nORDER BY (b.budget_limit - COALESCE(m.spent, 0.0)) / MAX(0.01, COALESCE(m.daily_burn, 0.0)) ASC\nLIMIT 10",
+          "rawSql": "WITH mtd_spend AS (\n  SELECT\n    t.category,\n    ABS(SUM(t.amount)) / 100.0 AS spent,\n    (ABS(SUM(t.amount)) / 100.0) / MAX(1, CAST(strftime('%d', 'now') AS INTEGER)) AS daily_burn\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND substr(CAST(t.date AS TEXT), 1, 6) = strftime('%Y%m', 'now')\n  GROUP BY t.category\n),\nbudget_limits AS (\n  SELECT\n    zb.category,\n    zb.amount / 100.0 AS budget_limit\n  FROM zero_budgets zb\n  JOIN categories c ON zb.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE zb.month = CAST(strftime('%Y%m', 'now') AS INTEGER)\n    AND zb.amount > 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n),\ndays_calc AS (\n  SELECT \n    CAST(strftime('%d', 'now') AS REAL) AS current_day,\n    CAST(strftime('%d', date(strftime('%Y-%m-01', 'now'), '+1 month', '-1 day')) AS REAL) AS days_in_month\n)\nSELECT\n  c.name AS \"Category\",\n  ROUND(b.budget_limit, 2) AS \"Monthly Budget ($)\",\n  ROUND(COALESCE(m.spent, 0.0), 2) AS \"Spent MTD ($)\",\n  ROUND(b.budget_limit - COALESCE(m.spent, 0.0), 2) AS \"Remaining Buffer ($)\",\n  ROUND(COALESCE(m.daily_burn, 0.0), 2) AS \"Daily Burn ($/day)\",\n  CASE\n    WHEN COALESCE(m.spent, 0.0) >= b.budget_limit THEN '\ud83d\udea8 Over Budget'\n    WHEN (COALESCE(m.daily_burn, 0.0) * d.days_in_month) > b.budget_limit THEN '\ud83d\udfe1 Accelerating (Runs out Day ' || CAST(ROUND(b.budget_limit / MAX(0.01, m.daily_burn)) AS INT) || ')'\n    ELSE '\ud83d\udfe2 On Track (Pacing Well)'\n  END AS \"Burn Status Indicator\"\nFROM budget_limits b\nJOIN categories c ON b.category = c.id\nCROSS JOIN days_calc d\nLEFT JOIN mtd_spend m ON b.category = m.category\nORDER BY (b.budget_limit - COALESCE(m.spent, 0.0)) ASC\nLIMIT 10",
+          "rawQueryText": "WITH mtd_spend AS (\n  SELECT\n    t.category,\n    ABS(SUM(t.amount)) / 100.0 AS spent,\n    (ABS(SUM(t.amount)) / 100.0) / MAX(1, CAST(strftime('%d', 'now') AS INTEGER)) AS daily_burn\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND substr(CAST(t.date AS TEXT), 1, 6) = strftime('%Y%m', 'now')\n  GROUP BY t.category\n),\nbudget_limits AS (\n  SELECT\n    zb.category,\n    zb.amount / 100.0 AS budget_limit\n  FROM zero_budgets zb\n  JOIN categories c ON zb.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE zb.month = CAST(strftime('%Y%m', 'now') AS INTEGER)\n    AND zb.amount > 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n),\ndays_calc AS (\n  SELECT \n    CAST(strftime('%d', 'now') AS REAL) AS current_day,\n    CAST(strftime('%d', date(strftime('%Y-%m-01', 'now'), '+1 month', '-1 day')) AS REAL) AS days_in_month\n)\nSELECT\n  c.name AS \"Category\",\n  ROUND(b.budget_limit, 2) AS \"Monthly Budget ($)\",\n  ROUND(COALESCE(m.spent, 0.0), 2) AS \"Spent MTD ($)\",\n  ROUND(b.budget_limit - COALESCE(m.spent, 0.0), 2) AS \"Remaining Buffer ($)\",\n  ROUND(COALESCE(m.daily_burn, 0.0), 2) AS \"Daily Burn ($/day)\",\n  CASE\n    WHEN COALESCE(m.spent, 0.0) >= b.budget_limit THEN '\ud83d\udea8 Over Budget'\n    WHEN (COALESCE(m.daily_burn, 0.0) * d.days_in_month) > b.budget_limit THEN '\ud83d\udfe1 Accelerating (Runs out Day ' || CAST(ROUND(b.budget_limit / MAX(0.01, m.daily_burn)) AS INT) || ')'\n    ELSE '\ud83d\udfe2 On Track (Pacing Well)'\n  END AS \"Burn Status Indicator\"\nFROM budget_limits b\nJOIN categories c ON b.category = c.id\nCROSS JOIN days_calc d\nLEFT JOIN mtd_spend m ON b.category = m.category\nORDER BY (b.budget_limit - COALESCE(m.spent, 0.0)) ASC\nLIMIT 10",
+          "queryText": "WITH mtd_spend AS (\n  SELECT\n    t.category,\n    ABS(SUM(t.amount)) / 100.0 AS spent,\n    (ABS(SUM(t.amount)) / 100.0) / MAX(1, CAST(strftime('%d', 'now') AS INTEGER)) AS daily_burn\n  FROM transactions t\n  JOIN categories c ON t.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  LEFT JOIN payees p ON t.description = p.id\n  WHERE t.tombstone = 0\n    AND (t.isParent IS NULL OR t.isParent = 0)\n    AND t.transferred_id IS NULL\n    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')\n    AND c.is_income = 0\n    AND t.amount < 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n    AND substr(CAST(t.date AS TEXT), 1, 6) = strftime('%Y%m', 'now')\n  GROUP BY t.category\n),\nbudget_limits AS (\n  SELECT\n    zb.category,\n    zb.amount / 100.0 AS budget_limit\n  FROM zero_budgets zb\n  JOIN categories c ON zb.category = c.id\n  JOIN category_groups g ON c.cat_group = g.id\n  WHERE zb.month = CAST(strftime('%Y%m', 'now') AS INTEGER)\n    AND zb.amount > 0\n    AND g.name NOT IN ('Investments and Savings', 'One-Time')\n),\ndays_calc AS (\n  SELECT \n    CAST(strftime('%d', 'now') AS REAL) AS current_day,\n    CAST(strftime('%d', date(strftime('%Y-%m-01', 'now'), '+1 month', '-1 day')) AS REAL) AS days_in_month\n)\nSELECT\n  c.name AS \"Category\",\n  ROUND(b.budget_limit, 2) AS \"Monthly Budget ($)\",\n  ROUND(COALESCE(m.spent, 0.0), 2) AS \"Spent MTD ($)\",\n  ROUND(b.budget_limit - COALESCE(m.spent, 0.0), 2) AS \"Remaining Buffer ($)\",\n  ROUND(COALESCE(m.daily_burn, 0.0), 2) AS \"Daily Burn ($/day)\",\n  CASE\n    WHEN COALESCE(m.spent, 0.0) >= b.budget_limit THEN '\ud83d\udea8 Over Budget'\n    WHEN (COALESCE(m.daily_burn, 0.0) * d.days_in_month) > b.budget_limit THEN '\ud83d\udfe1 Accelerating (Runs out Day ' || CAST(ROUND(b.budget_limit / MAX(0.01, m.daily_burn)) AS INT) || ')'\n    ELSE '\ud83d\udfe2 On Track (Pacing Well)'\n  END AS \"Burn Status Indicator\"\nFROM budget_limits b\nJOIN categories c ON b.category = c.id\nCROSS JOIN days_calc d\nLEFT JOIN mtd_spend m ON b.category = m.category\nORDER BY (b.budget_limit - COALESCE(m.spent, 0.0)) ASC\nLIMIT 10",
           "refId": "A"
         }
       ],
@@ -1301,6 +1424,18 @@
                 "value": "currencyUSD"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Burn Status Indicator"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              }
+            ]
           }
         ]
       },
@@ -1317,7 +1452,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 74
+        "y": 83
       }
     },
     {
@@ -1328,7 +1463,7 @@
         "h": 4,
         "w": 24,
         "x": 0,
-        "y": 75
+        "y": 84
       },
       "options": {
         "mode": "markdown",
@@ -1344,7 +1479,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 79
+        "y": 88
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1385,7 +1520,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 79
+        "y": 88
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1541,5 +1676,5 @@
   "timezone": "browser",
   "title": "Actual Budget Analytics & Advanced Financial Intelligence",
   "uid": "actual-budget-analytics",
-  "version": 11
+  "version": 12
 }
