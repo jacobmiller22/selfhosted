@@ -14,6 +14,8 @@ For the exhaustive architectural specification, benchmark comparison, storage re
   Docker container resource attribution via Linux cgroups v2. Configured with a 15-second housekeeping interval and stripped non-essential metrics for **< 80MB RAM**.
 - **Node Exporter** (`quay.io/prometheus/node-exporter:v1.8.1`):
   Linux host hardware and OS telemetry exporter (CPU, RAM, disk capacity on `/` and `/var/lib/docker`, network interfaces) consuming **< 30MB RAM**.
+- **Blackbox Exporter** (`prom/blackbox-exporter:latest`):
+  Continuous outside-in HTTP/TLS probe prober testing public ingress endpoints and SSL certificate expiration consuming **< 64MB RAM**.
 - **Grafana** (`grafana/grafana:11.2.0`):
   Observability dashboard UI with automated file-based datasource and dashboard provisioning consuming **< 120MB RAM**.
 
@@ -25,8 +27,10 @@ For the exhaustive architectural specification, benchmark comparison, storage re
 monitoring/
 ├── compose.yml                               # Docker Compose definition with hard resource bounds
 ├── README.md                                 # Operational runbook and deployment documentation
+├── blackbox/
+│   └── blackbox.yml                          # Blackbox Exporter probe modules (http_2xx)
 ├── victoriametrics/
-│   └── prometheus.yml                        # Scrape configuration for Node Exporter, cAdvisor, VM
+│   └── prometheus.yml                        # Scrape configuration for Node Exporter, cAdvisor, VM, Blackbox
 └── grafana/
     ├── provisioning/
     │   ├── datasources/
@@ -68,8 +72,9 @@ Every container enforces strict hard resource limits in `compose.yml`:
 | `victoria-metrics` | 128MB | 64MB | 0.25 CPU | ~35MB |
 | `cadvisor` | 80MB | 40MB | 0.20 CPU | ~35MB |
 | `node-exporter` | 30MB | 15MB | 0.10 CPU | ~15MB |
+| `blackbox-exporter` | 64MB | 32MB | 0.10 CPU | ~15MB |
 | `grafana` | 120MB | 60MB | 0.25 CPU | ~50MB |
-| **Total Stack** | **358MB Hard Ceiling** | **179MB** | **0.80 CPU** | **~135MB** |
+| **Total Stack** | **422MB Hard Ceiling** | **211MB** | **0.90 CPU** | **~150MB** |
 
 ---
 
@@ -156,6 +161,8 @@ The monitoring stack implements declarative, GitOps-provisioned threshold alerti
 | `alert-memory-starvation` | Host Memory Starvation | Available host RAM < 10% | 10m | `critical` | Host (`bjorn`) | Risk of Linux OOM killer terminating core services. Inspect memory hogs (`docker stats`) and restart leaky sidecars. |
 | `alert-container-down` | Container Down or Crash Looping | Core container metrics missing > 60s | 2m | `critical` | Core containers (`actual_server`, `vaultwarden`, `nginx-proxy-manager`, `homeassistant`) | Core workload crashed or restarting in a loop. Inspect container logs (`docker logs --tail 100 <container>`). |
 | `alert-cpu-saturation` | Sustained Host CPU Saturation | Continuous non-idle CPU > 95% | 20m | `warning` | Host (`bjorn`) | Host under persistent compute stress. Check for stuck processes or unbounded ffmpeg/ML transcoding jobs. |
+| `alert-blackbox-service-down` | ServiceDown | Outside-in HTTP probe failure (`probe_success == 0`) | 2m | `critical` | Public endpoints (`budget`, `vw`, `ha`, `coolify`, `monitoring`) | Public service endpoint unreachable from outside. Inspect reverse proxy routes and backend container health. |
+| `alert-blackbox-ssl-cert-expiring` | SSLCertExpiringSoon | SSL certificate expires in < 15 days | 1h | `warning` | Public SSL certs | Automated Let's Encrypt / Certbot renewal has stalled. Verify NPM SSL certificate renewal pipeline. |
 
 ### 7.2 Discord Contact Point & Notification Routing
 
