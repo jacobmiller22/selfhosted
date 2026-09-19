@@ -53,6 +53,13 @@ class TestMonitoringVictoriaMetrics(unittest.TestCase):
         else:
             self.assertIn("monitoring", networks, "victoria-metrics must be attached to 'monitoring' network")
 
+    def test_victoria_metrics_extra_hosts(self):
+        """Verify extra_hosts maps node-exporter to host-gateway for host network scraping."""
+        services = self.compose_data.get("services", {})
+        vm = services.get("victoria-metrics", {})
+        extra_hosts = vm.get("extra_hosts", [])
+        self.assertIn("node-exporter:host-gateway", extra_hosts)
+
     def test_victoria_metrics_volume_mounts_and_declarations(self):
         """Verify volume mounts for TSDB persistence and read-only prometheus config."""
         services = self.compose_data.get("services", {})
@@ -90,9 +97,11 @@ class TestMonitoringVictoriaMetrics(unittest.TestCase):
         cmd_str = " ".join(commands)
 
         self.assertIn("-promscrape.config=/etc/prometheus/prometheus.yml", cmd_str)
+        self.assertIn("-promscrape.config.strictParse=false", cmd_str)
         self.assertIn("-storageDataPath=/victoria-metrics-data", cmd_str)
         self.assertIn("-retentionPeriod=90d", cmd_str)
         self.assertIn("-search.maxQueryDuration=30s", cmd_str)
+        self.assertIn("-maxLabelsPerTimeseries=64", cmd_str)
 
     def test_victoria_metrics_ports(self):
         """Verify port 8428 is exposed."""
@@ -121,6 +130,11 @@ class TestMonitoringVictoriaMetrics(unittest.TestCase):
         self.assertIsInstance(self.prom_data, dict, "prometheus.yml must parse as a dictionary")
         global_cfg = self.prom_data.get("global", {})
         self.assertIn(global_cfg.get("scrape_interval"), ["15s", "30s"])
+        self.assertNotIn(
+            "evaluation_interval",
+            global_cfg,
+            "VictoriaMetrics promscrape strictly rejects evaluation_interval in Prometheus global config"
+        )
 
         scrape_configs = self.prom_data.get("scrape_configs", [])
         job_map = {job.get("job_name"): job for job in scrape_configs}
