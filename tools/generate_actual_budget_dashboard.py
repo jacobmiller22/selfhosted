@@ -319,6 +319,7 @@ ORDER BY 2 DESC
             }
         },
         "options": {
+            "displayLabels": ["percent"],
             "legend": {"displayMode": "table", "placement": "right", "showLegend": true, "values": ["value", "percent"]},
             "pieType": "donut",
             "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": true}
@@ -327,8 +328,8 @@ ORDER BY 2 DESC
 
     panels.append({
         "id": 105,
-        "title": "Needs vs Wants Split (Operating Living Expenses)",
-        "description": "Plain English: The 'Needs vs Wants' test for core living expenses. Non-discretionary is survival bills you cannot escape (rent/mortgage, electric, groceries, insurance). Discretionary is lifestyle choices (dining, entertainment, shopping).\n\nFormula: SUM(Operating Expenses) grouped by Essential/Fixed vs Discretionary\n\nAction: Keep fixed overhead below 60% of living outlays to maintain financial agility.",
+        "title": "Needs vs. Wants: 30-Day Living Expense Split",
+        "description": "Plain English: 3-way breakdown of your trailing 30-day operating spend across:\n1. 🛡️ Core Living Needs: Essential survival overhead (housing, utilities/bills, groceries, dog care, transportation)\n2. 🎯 Discretionary (Wants): Lifestyle & fun choices (dining, entertainment, shopping, subscriptions)\n3. 🏛️ Taxes & Statutory: Non-controllable obligations (personal property taxes, tax prep/settlements)\n\nNote: Cleanly excludes internal account transfers, brokerage/equity investments, and one-off capital purchases.",
         "type": "piechart",
         "gridPos": {"h": 6, "w": 12, "x": 12, "y": 10},
         "datasource": DS,
@@ -336,8 +337,11 @@ ORDER BY 2 DESC
             sql_target("A", """
 SELECT
   CASE
-    WHEN g.name IN ('Expected', 'Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed') THEN 'Non-Discretionary (Needs)'
-    ELSE 'Discretionary (Wants)'
+    WHEN c.name LIKE '%Tax%' OR g.name LIKE '%Tax%' THEN '🏛️ Taxes & Statutory'
+    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+         OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed')
+         THEN '🛡️ Core Living Needs'
+    ELSE '🎯 Discretionary (Wants)'
   END AS "Expense Type",
   ROUND(ABS(SUM(t.amount)) / 100.0, 2) AS "Amount ($)"
 FROM transactions t
@@ -351,8 +355,9 @@ WHERE t.tombstone = 0
   AND c.is_income = 0
   AND t.amount < 0
   AND g.name NOT IN ('Investments and Savings', 'One-Time')
-  AND t.date >= CAST(strftime('%Y%m01', date('now', '-30 day')) AS INTEGER)
+  AND t.date >= CAST(strftime('%Y%m%d', date('now', '-30 day')) AS INTEGER)
 GROUP BY 1
+ORDER BY 2 DESC
 """)
         ],
         "fieldConfig": {
@@ -361,7 +366,13 @@ GROUP BY 1
             }
         },
         "options": {
-            "legend": {"displayMode": "list", "placement": "right", "showLegend": true},
+            "displayLabels": ["percent"],
+            "legend": {
+                "displayMode": "table",
+                "placement": "right",
+                "showLegend": true,
+                "values": ["percent", "value"]
+            },
             "pieType": "donut",
             "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": true}
         }
@@ -1423,7 +1434,7 @@ ORDER BY "Net Variance ($)" ASC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 10
+        "version": 11
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
