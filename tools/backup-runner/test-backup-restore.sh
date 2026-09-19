@@ -11,6 +11,7 @@
 # 6. Fallback variable support (BACKUP_ENCRYPTION_KEY)
 # 7. Actual Budget & Vaultwarden topology integration
 # 8. Disaster Recovery (DR): Automated pull & decrypt engine integration
+# 9. Automated Retention Policy, Remote Pruning & Safety Latch
 # ==============================================================================
 
 set -euo pipefail
@@ -28,7 +29,7 @@ echo "==========================================================================
 # Test 1: Generic OpenSSL AES-256-CBC PBKDF2 Roundtrip
 # ==============================================================================
 echo ""
-echo "[Test 1/8] Testing Generic OpenSSL AES-256-CBC PBKDF2 Roundtrip..."
+echo "[Test 1/9] Testing Generic OpenSSL AES-256-CBC PBKDF2 Roundtrip..."
 T1_SRC="${TEST_DIR}/t1_src"
 T1_EXTRACT="${TEST_DIR}/t1_extract"
 mkdir -p "${T1_SRC}" "${T1_EXTRACT}"
@@ -71,7 +72,7 @@ echo "[+] Test 1 Passed: Generic roundtrip and OpenSSL header validated."
 # Test 2: Declarative Engine: sqlite-auto Strategy
 # ==============================================================================
 echo ""
-echo "[Test 2/8] Testing Declarative Engine: sqlite-auto Strategy..."
+echo "[Test 2/9] Testing Declarative Engine: sqlite-auto Strategy..."
 T2_SRC="${TEST_DIR}/t2_src"
 T2_EXTRACT="${TEST_DIR}/t2_extract"
 T2_OUTPUT="${TEST_DIR}/t2_output"
@@ -159,7 +160,7 @@ echo "[+] Test 2 Passed: Declarative sqlite-auto mode validated cleanly."
 # Test 3: Declarative Engine: filesystem Strategy
 # ==============================================================================
 echo ""
-echo "[Test 3/8] Testing Declarative Engine: filesystem Strategy..."
+echo "[Test 3/9] Testing Declarative Engine: filesystem Strategy..."
 T3_SRC="${TEST_DIR}/t3_src"
 T3_EXTRACT="${TEST_DIR}/t3_extract"
 T3_OUTPUT="${TEST_DIR}/t3_output"
@@ -201,7 +202,7 @@ echo "[+] Test 3 Passed: Declarative filesystem mode validated cleanly."
 # Test 4: Declarative Engine: hook Strategy
 # ==============================================================================
 echo ""
-echo "[Test 4/8] Testing Declarative Engine: hook Strategy..."
+echo "[Test 4/9] Testing Declarative Engine: hook Strategy..."
 T4_HOOK="${TEST_DIR}/mock_pg_dump_hook.sh"
 T4_EXTRACT="${TEST_DIR}/t4_extract"
 T4_OUTPUT="${TEST_DIR}/t4_output"
@@ -246,7 +247,7 @@ echo "[+] Test 4 Passed: Declarative hook mode validated cleanly."
 # Test 5: Safe Staging Directory Lifecycle (Cleanup on Success and Error)
 # ==============================================================================
 echo ""
-echo "[Test 5/8] Testing Staging Directory Lifecycle (Cleanup on Success and Error)..."
+echo "[Test 5/9] Testing Staging Directory Lifecycle (Cleanup on Success and Error)..."
 # Part A: Cleanup on success
 T5A_STAGING="${TEST_DIR}/t5a_staging"
 T5A_SRC="${TEST_DIR}/t5a_src"
@@ -307,7 +308,7 @@ echo "[+] Test 5 Passed: Guaranteed staging lifecycle verified on success and er
 # Test 6: Fallback Variable Support (BACKUP_ENCRYPTION_KEY)
 # ==============================================================================
 echo ""
-echo "[Test 6/8] Testing Fallback Variable Support (BACKUP_ENCRYPTION_KEY)..."
+echo "[Test 6/9] Testing Fallback Variable Support (BACKUP_ENCRYPTION_KEY)..."
 T6_SRC="${TEST_DIR}/t6_src"
 T6_EXTRACT="${TEST_DIR}/t6_extract"
 T6_OUTPUT="${TEST_DIR}/t6_output"
@@ -335,7 +336,7 @@ echo "[+] Test 6 Passed: BACKUP_ENCRYPTION_KEY fallback supported cleanly."
 # Test 7: Actual Budget & Vaultwarden Integration Topology
 # ==============================================================================
 echo ""
-echo "[Test 7/8] Testing Actual Budget & Vaultwarden Topology Integration..."
+echo "[Test 7/9] Testing Actual Budget & Vaultwarden Topology Integration..."
 
 # Actual Budget Topology
 ACTUAL_DATA="${TEST_DIR}/actual-data"
@@ -406,7 +407,7 @@ echo "[+] Test 7 Passed: Actual Budget and Vaultwarden topologies backed up and 
 # Test 8: Disaster Recovery (DR) Automated Pull & Decrypt Engine Integration
 # ==============================================================================
 echo ""
-echo "[Test 8/8] Testing Disaster Recovery (DR) Pull & Decrypt Engine..."
+echo "[Test 8/9] Testing Disaster Recovery (DR) Pull & Decrypt Engine..."
 DR_SCRIPT="${ROOT_DIR}/tools/backup-dr/pull-and-decrypt.sh"
 DR_TEST_SUITE="${ROOT_DIR}/tools/backup-dr/test-dr-pull-decrypt.sh"
 
@@ -437,6 +438,160 @@ mkdir -p "${DR_ACTUAL_EXTRACT}"
 "${DR_TEST_SUITE}"
 
 echo "[+] Test 8 Passed: Disaster Recovery pull & decrypt engine validated end-to-end."
+
+# ==============================================================================
+# Test 9: Automated Retention Policy, Remote Pruning & Safety Latch
+# ==============================================================================
+echo ""
+echo "[Test 9/9] Testing Automated Retention Policy, Remote Pruning & Safety Latch..."
+
+# Part A: CLI Help & Option Validation
+HELP_OUT=$("${ENGINE_SCRIPT}" --help)
+if [[ "${HELP_OUT}" != *"--retention-days"* || "${HELP_OUT}" != *"--dry-run"* || "${HELP_OUT}" != *"--b2-dest-path"* ]]; then
+  echo "[-] Test 9 Failed: --help output missing retention or dry-run options" >&2
+  exit 1
+fi
+
+# Part B: Invalid BACKUP_RETENTION_DAYS rejection
+set +e
+INV_RES=$(BACKUP_RETENTION_DAYS=0 "${ENGINE_SCRIPT}" 2>&1)
+INV_EXIT=$?
+set -e
+if [[ "${INV_EXIT}" -eq 0 || "${INV_RES}" != *"Invalid BACKUP_RETENTION_DAYS"* ]]; then
+  echo "[-] Test 9 Failed: Invalid BACKUP_RETENTION_DAYS=0 was not rejected cleanly" >&2
+  exit 1
+fi
+
+# Part C: Safety Latch Abort (when upload is unverified)
+set +e
+LATCH_RES=$("${ENGINE_SCRIPT}" --prune-only 2>&1)
+LATCH_EXIT=$?
+set -e
+if [[ "${LATCH_EXIT}" -eq 0 || "${LATCH_RES}" != *"SAFETY ABORT"* ]]; then
+  echo "[-] Test 9 Failed: Safety latch did not abort unverified pruning" >&2
+  exit 1
+fi
+echo "[+] Safety latch successfully prevented pruning without verified upload."
+
+# Part D: Mock rclone Pruning & Dry-Run Verification
+T9_BIN="${TEST_DIR}/t9_bin"
+mkdir -p "${T9_BIN}"
+RCLONE_MOCK_LOG="${TEST_DIR}/rclone_mock.log"
+
+cat <<'EOF' > "${T9_BIN}/rclone"
+#!/usr/bin/env bash
+echo "$*" >> "${RCLONE_LOG_FILE}"
+cmd="$1"
+case "${cmd}" in
+  lsl)
+    echo "  10240 2026-08-01 12:00:00.000000000 test-backup-2026-08-01_12-00-00.tar.gz.enc"
+    echo "  20480 2026-08-10 12:00:00.000000000 test-backup-2026-08-10_12-00-00.tar.gz.enc"
+    ;;
+  lsf|copyto|delete|cleanup)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+chmod +x "${T9_BIN}/rclone"
+
+# Test Dry-Run simulation with 45-day retention
+export RCLONE_LOG_FILE="${RCLONE_MOCK_LOG}"
+: > "${RCLONE_MOCK_LOG}"
+
+PATH="${T9_BIN}:${PATH}" \
+BACKUP_UPLOAD_VERIFIED=true \
+SERVICE_NAME="retention-dryrun" \
+B2_DEST_PATH="b2:mybucket/backups/retention-dryrun" \
+BACKUP_RETENTION_DAYS=45 \
+DRY_RUN=true \
+"${ENGINE_SCRIPT}" --prune-only >/dev/null
+
+if ! grep -q "delete b2:mybucket/backups/retention-dryrun.*--min-age 45d.*--dry-run" "${RCLONE_MOCK_LOG}"; then
+  echo "[-] Test 9 Failed: rclone delete was not called with --min-age 45d and --dry-run" >&2
+  exit 1
+fi
+if ! grep -q "cleanup b2:mybucket/backups/retention-dryrun.*--dry-run" "${RCLONE_MOCK_LOG}"; then
+  echo "[-] Test 9 Failed: rclone cleanup was not called with --dry-run" >&2
+  exit 1
+fi
+echo "[+] Dry-run simulation with custom retention verified."
+
+# Test Live Pruning execution with 30-day retention
+: > "${RCLONE_MOCK_LOG}"
+
+PATH="${T9_BIN}:${PATH}" \
+BACKUP_UPLOAD_VERIFIED=true \
+SERVICE_NAME="retention-live" \
+B2_DEST_PATH="b2:mybucket/backups/retention-live" \
+BACKUP_RETENTION_DAYS=30 \
+DRY_RUN=false \
+"${ENGINE_SCRIPT}" --prune-only >/dev/null
+
+if ! grep -q "delete b2:mybucket/backups/retention-live.*--min-age 30d" "${RCLONE_MOCK_LOG}"; then
+  echo "[-] Test 9 Failed: rclone delete was not called with --min-age 30d" >&2
+  exit 1
+fi
+if grep -q "delete.*--dry-run" "${RCLONE_MOCK_LOG}"; then
+  echo "[-] Test 9 Failed: rclone delete unexpectedly received --dry-run in live mode" >&2
+  exit 1
+fi
+if ! grep -q "cleanup b2:mybucket/backups/retention-live" "${RCLONE_MOCK_LOG}"; then
+  echo "[-] Test 9 Failed: rclone cleanup was not called on target remote" >&2
+  exit 1
+fi
+echo "[+] Live pruning execution and rclone cleanup verified."
+
+# Part E: End-to-End Safety Ordering (Upload failure aborts before pruning)
+: > "${RCLONE_MOCK_LOG}"
+T9_FAIL_BIN="${TEST_DIR}/t9_fail_bin"
+mkdir -p "${T9_FAIL_BIN}"
+cat <<'EOF' > "${T9_FAIL_BIN}/rclone"
+#!/usr/bin/env bash
+echo "$*" >> "${RCLONE_LOG_FILE}"
+cmd="$1"
+case "${cmd}" in
+  copyto)
+    echo "Simulated network failure on cloud upload" >&2
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+EOF
+chmod +x "${T9_FAIL_BIN}/rclone"
+
+T9_SRC="${TEST_DIR}/t9_src"
+mkdir -p "${T9_SRC}"
+echo "sample_data" > "${T9_SRC}/data.txt"
+
+set +e
+PATH="${T9_FAIL_BIN}:${PATH}" \
+SERVICE_NAME="safety-ordering" \
+BACKUP_MODE="filesystem" \
+BACKUP_SOURCE_DIR="${T9_SRC}" \
+BACKUP_PASSPHRASE="TestKey" \
+B2_DEST_PATH="b2:mybucket/backups/safety-ordering" \
+OUTPUT_DIR="${TEST_DIR}/t9_out" \
+"${ENGINE_SCRIPT}" >/dev/null 2>&1
+T9_FAIL_EXIT=$?
+set -e
+
+if [[ "${T9_FAIL_EXIT}" -eq 0 ]]; then
+  echo "[-] Test 9 Failed: Backup engine should have failed when upload failed" >&2
+  exit 1
+fi
+
+if grep -q "delete" "${RCLONE_MOCK_LOG}"; then
+  echo "[-] Test 9 Failed: rclone delete was called despite failed upload! Safety latch violated." >&2
+  exit 1
+fi
+echo "[+] End-to-end safety ordering verified: upload failure prevented pruning."
+
+echo "[+] Test 9 Passed: Automated retention, remote pruning, and safety latch verified end-to-end."
 
 echo ""
 echo "================================================================================"
