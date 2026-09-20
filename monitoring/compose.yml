@@ -1,5 +1,12 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   victoria-metrics:
+    logging: *default-logging
     image: victoriametrics/victoria-metrics:v1.99.0
     container_name: victoria-metrics
     restart: unless-stopped
@@ -35,6 +42,7 @@ services:
       retries: 3
 
   cadvisor:
+    logging: *default-logging
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
     restart: unless-stopped
@@ -64,6 +72,7 @@ services:
     cpus: 0.20
 
   node-exporter:
+    logging: *default-logging
     image: quay.io/prometheus/node-exporter:v1.8.1
     container_name: node-exporter
     restart: unless-stopped
@@ -87,6 +96,7 @@ services:
     cpus: 0.10
 
   blackbox-exporter:
+    logging: *default-logging
     image: prom/blackbox-exporter:latest
     container_name: blackbox-exporter
     restart: unless-stopped
@@ -107,6 +117,7 @@ services:
     cpus: 0.10
 
   grafana:
+    logging: *default-logging
     image: grafana/grafana:11.2.0
     container_name: grafana
     restart: unless-stopped

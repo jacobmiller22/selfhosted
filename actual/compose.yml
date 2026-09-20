@@ -1,5 +1,12 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   actual_server:
+    logging: *default-logging
     image: docker.io/actualbudget/actual-server:26.9.0
     # See all options and more details at https://actualbudget.github.io/docs/Installing/Configuration
     volumes:
@@ -11,6 +18,7 @@ services:
       - nginx-proxy-manager
 
   actual-server-staging:
+    logging: *default-logging
     image: docker.io/actualbudget/actual-server:26.9.0
     container_name: actual-server-staging
     profiles: ["staging"]
@@ -27,6 +35,7 @@ services:
     cpus: 0.50
 
   actual-backup:
+    logging: *default-logging
     build:
       context: ../tools/backup-runner
     container_name: actual-backup
@@ -49,6 +58,7 @@ services:
       - actual-data:/tmp/actual-data:ro
 
   actual-auto-categorizer:
+    logging: *default-logging
     build:
       context: ./tools/auto-categorizer
       dockerfile: Dockerfile

@@ -45,6 +45,26 @@ All production containers and workloads managed in this repository reside on rem
 - **Encryption**: AES-256-CBC PBKDF2 (100,000 iterations) via POSIX OpenSSL before transport.
 - **Retention**: 30-day lifecycle rule with automated non-destructive timestamp rotation.
 
+### 2.5 Standard Host Docker Daemon Configuration (`/etc/docker/daemon.json`)
+To safeguard disk space and prevent unbounded container log growth on production host `bjorn`, the host Docker daemon standardizes log rotation policies:
+
+- **Configuration File**: `/etc/docker/daemon.json`
+- **Standard Daemon Settings**:
+  ```json
+  {
+    "log-driver": "json-file",
+    "log-opts": {
+      "max-size": "10m",
+      "max-file": "3"
+    }
+  }
+  ```
+- **Operational Verification**:
+  ```bash
+  ssh bjorn "docker info --format '{{.LoggingDriver}}'"
+  ```
+- **Defense in Depth**: In addition to host daemon defaults, all repository Compose files declare explicit `json-file` rotation limits (`max-size: 10m`, `max-file: 3`) across all container services.
+
 ---
 
 ## 3. Hosted Service Map (Target Host: `bjorn`)
