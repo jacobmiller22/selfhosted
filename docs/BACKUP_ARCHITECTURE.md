@@ -281,3 +281,55 @@ Enrolling a new service requires zero code development—simply add a sidecar se
 ### Volume Mounting Rules:
 - **Strict Read-Only Enforcement (`:ro`)**: Application data must always be mounted with `:ro` to prevent the backup runner from ever modifying or locking production storage.
 - **Resource Limits**: In production, sidecars specify `mem_limit: 256m` and `cpus: 0.50` to guarantee backups never starve host or application workloads.
+
+---
+
+## 10. Disaster Recovery Verification Cycle & Alerting Topology
+
+Backups that are not routinely restored and tested cannot guarantee business continuity. The backup infrastructure includes an automated, scheduled disaster recovery engine (`tools/backup-dr/dr-drill.sh`) that routinely validates cold-storage archives through ephemeral staging restores.
+
+```mermaid
+flowchart TD
+    subgraph RoutineBackups ["Daily Automated Backups (bjorn)"]
+        B1["tools/backup-runner sidecars\n(Actual, Vaultwarden, NPM, HA, Obsidian)"] --> B2["OpenSSL AES-256-CBC PBKDF2"]
+        B2 --> B3["Upload to Backblaze B2\ns3://jacobmiller22-secure-backup"]
+        B3 --> B4["Ping HEALTHCHECK_PING_URL\n(Daily Backup Heartbeat)"]
+    end
+
+    subgraph WeeklyDrill ["Weekly Automated DR Drill (bjorn - Sun 03:00 UTC)"]
+        D1["tools/backup-dr/dr-drill.sh"] --> D2["1. Pull & Decrypt Latest Archive\n(Assert OpenSSL 'Salted__' header)"]
+        D2 --> D3["2. Multi-DB Integrity Suite\n(PRAGMA integrity_check, foreign keys, counts)"]
+        D3 --> D4["3. Ephemeral Staging Smoke Tests\n(Isolated bridge net, probe :5006 & :7278)"]
+        D4 --> D5["4. Compute Telemetry\n(RTO in seconds, RPO age in hours)"]
+        D5 --> D6{"Drill Result?"}
+        D6 -- "Clean Pass" --> D7["Ping HEALTHCHECK_DR_PING_URL\n(Dead Man's Snitch)"]
+        D6 -- "Any Failure" --> D8["Dispatch Red Discord Embed\n(Failing step, line, and log tail)"]
+    end
+
+    B3 -.-> D2
+```
+
+### 10.1 Dual-Heartbeat & Alerting Topology
+
+1. **Backup Run Heartbeat (`HEALTHCHECK_PING_URL`)**:
+   - Dispatched daily by individual service sidecars upon successful archive creation and upload to Backblaze B2.
+2. **Disaster Recovery Heartbeat (`HEALTHCHECK_DR_PING_URL`)**:
+   - Dispatched weekly by `dr-drill.sh` strictly after 100% clean decryption, database integrity assertion, and staging container smoke probes.
+   - If a drill fails, hangs, or server `bjorn` is offline, Healthchecks.io alerts on-call operators when the weekly grace period expires.
+3. **Active Failure Webhook (`DISCORD_WEBHOOK_URL`)**:
+   - Trapped on bash `ERR`, `EXIT`, `INT`, and `TERM` in both the backup runner and the DR drill orchestrator.
+   - Delivers rich red Discord embeds detailing the failing step, exit code, line number, and error log snippet.
+
+### 10.2 Recovery SLAs & Documentation Pointers
+
+- **Recovery Point Objective (RPO)**: Target **< 24 hours**; alert threshold **26 hours** (`--fail-on-rpo`).
+- **Recovery Time Objective (RTO)**:
+  - **Automated Container Recovery / Staging Drill**: **< 5 minutes** (< 300s).
+  - **Single-Service Cold Restore**: **< 10 minutes** (< 600s).
+  - **Bare-Metal Disaster Recovery**: **< 30 minutes** (< 1800s).
+
+For step-by-step procedures, manual failover exercises, and log triage runbooks, consult:
+- [`docs/DISASTER_RECOVERY_EXERCISES.md`](DISASTER_RECOVERY_EXERCISES.md): Comprehensive disaster recovery drill playbooks, staging procedures, and triage guides.
+- [`docs/RESTORE.md`](RESTORE.md): Service-by-service cold-storage restoration runbooks.
+- [`tools/backup-dr/README.md`](../tools/backup-dr/README.md): DR drill CLI options, exit codes, and automated test commands.
+

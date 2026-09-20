@@ -31,6 +31,7 @@ Authoritative architectural specifications, network diagrams, disaster recovery 
 | [`docs/CI_CD_COOLIFY_PIPELINE.md`](docs/CI_CD_COOLIFY_PIPELINE.md) | CI/CD & Deployments | Automated PR & webhook deployment pipeline, NPM vs. Traefik ingress, service onboarding, and secret rotation |
 | [`docs/BACKUP_ARCHITECTURE.md`](docs/BACKUP_ARCHITECTURE.md) | Backup Architecture | Standardized OpenSSL AES-256-CBC PBKDF2 backup engine, B2 cloud retention, and alerting |
 | [`docs/RESTORE.md`](docs/RESTORE.md) | Disaster Recovery & Restoration | Step-by-step restoration runbooks for Actual, Vaultwarden, Home Assistant, and NPM |
+| [`docs/DISASTER_RECOVERY_EXERCISES.md`](docs/DISASTER_RECOVERY_EXERCISES.md) | Disaster Recovery & Failover Drills | Operational runbooks, manual & automated failover drills, staging verification, and RTO/RPO SLAs |
 | [`docs/MONITORING_ARCHITECTURE.md`](docs/MONITORING_ARCHITECTURE.md) | Telemetry & Observability | Low-footprint monitoring stack (VictoriaMetrics, cAdvisor, Node Exporter, Grafana) |
 | [`docs/PM_ARCHITECT.md`](docs/PM_ARCHITECT.md) | Autonomous TPM Engine | Architectural Council, Benevolent Dictator homelab axioms, and reality fact-checking engine |
 
