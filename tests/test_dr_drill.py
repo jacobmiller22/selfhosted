@@ -318,7 +318,6 @@ class TestDRDrillExitTrapAndAlerting(unittest.TestCase):
         mock_curl.write_text(
             f"""#!/usr/bin/env bash
 echo "$@" >> "{mock_curl_log}"
-cat >> "{mock_curl_log}"
 exit 0
 """
         )
