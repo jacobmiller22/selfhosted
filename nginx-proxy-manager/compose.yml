@@ -25,6 +25,29 @@ services:
     networks:
       - nginx-proxy-manager
       - coolify
+
+  npm-backup:
+    build:
+      context: ../tools/backup-runner
+    container_name: npm-backup
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.50
+    environment:
+      - SERVICE_NAME=npm
+      - BACKUP_MODE=sqlite-auto
+      - BACKUP_SOURCE_DIR=/data
+      - CRON_SCHEDULE=0 19 * * *
+      - BACKUP_PASSPHRASE=${BACKUP_PASSPHRASE}
+      - B2_APPLICATION_KEY_ID=${B2_APPLICATION_KEY_ID}
+      - B2_APPLICATION_KEY=${B2_APPLICATION_KEY}
+      - B2_BUCKET_NAME=${B2_BUCKET_NAME}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+    volumes:
+      - ./data:/data:ro
+      - ./letsencrypt:/letsencrypt:ro
+    networks:
+      - nginx-proxy-manager
 networks:
   nginx-proxy-manager:
     # Specify driver options

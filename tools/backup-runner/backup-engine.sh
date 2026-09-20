@@ -127,9 +127,9 @@ DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
 HEALTHCHECK_PING_URL="${HEALTHCHECK_PING_URL:-}"
 
 BACKUP_DEST_ENDPOINT="${BACKUP_DEST_ENDPOINT:-}"
-BACKUP_DEST_BUCKET="${BACKUP_DEST_BUCKET:-}"
-BACKUP_DEST_ACCESS_KEY_ID="${BACKUP_DEST_ACCESS_KEY_ID:-}"
-BACKUP_DEST_SECRET_ACCESS_KEY="${BACKUP_DEST_SECRET_ACCESS_KEY:-}"
+BACKUP_DEST_BUCKET="${BACKUP_DEST_BUCKET:-${B2_BUCKET_NAME:-${B2_BUCKET:-}}}"
+BACKUP_DEST_ACCESS_KEY_ID="${BACKUP_DEST_ACCESS_KEY_ID:-${B2_APPLICATION_KEY_ID:-${B2_KEY_ID:-}}}"
+BACKUP_DEST_SECRET_ACCESS_KEY="${BACKUP_DEST_SECRET_ACCESS_KEY:-${B2_APPLICATION_KEY:-}}}"
 BACKUP_DEST_PREFIX="${BACKUP_DEST_PREFIX:-backups/${SERVICE_NAME}}"
 B2_DEST_PATH="${B2_DEST_PATH:-}"
 
@@ -245,6 +245,13 @@ case "${BACKUP_MODE}" in
     done < <(cd "${BACKUP_SOURCE_DIR}" && find . \( -type f -o -type l \) -print0)
 
     echo "[+] sqlite-auto scan completed: ${local_db_count} database(s) snapshotted, ${local_asset_count} asset(s) copied, ${local_skip_count} journal file(s) ignored."
+
+    # Stage additional /letsencrypt directory if present (e.g. for Nginx Proxy Manager SSL certs)
+    if [[ -d "/letsencrypt" && "${BACKUP_SOURCE_DIR}" != "/letsencrypt" ]]; then
+      echo "[+] Staging /letsencrypt directory..."
+      mkdir -p "${STAGING_DIR}/letsencrypt"
+      cp -a /letsencrypt/. "${STAGING_DIR}/letsencrypt/" 2>/dev/null || true
+    fi
     ;;
 
   filesystem)
