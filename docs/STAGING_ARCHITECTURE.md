@@ -327,4 +327,52 @@ flowchart TD
 ./tools/staging/test-actual-staging.sh --timeout 45 --skip-hydrate
 ```
 
+---
+
+## 10. Interactive One-Command Browser Previewing (`tools/preview.sh`)
+
+The `tools/preview.sh` CLI provides a frictionless one-command interactive preview workflow that allows developers to test feature branches, UI changes, and migration behavior in their browser against live production snapshots on host `bjorn`.
+
+### 10.1 Architecture & Workflow
+
+```mermaid
+flowchart TD
+    D["Developer runs ./tools/preview.sh <service>"] --> P1["1. RHVP Host Connectivity Check\n(ssh bjorn 'echo ok')"]
+    P1 --> P2["2. Snapshot Hydration & Staging Launch\n(hydrate.sh <service> --start)"]
+    P2 --> P3["3. Staging Port Health Probing\n(HTTP 200/302 on bjorn:<port>)"]
+    P3 --> P4["4. Background SSH Port-Forward Tunnel\n(localhost:<port> -> bjorn:<port>)"]
+    P4 --> P5["5. Remote Safety Watchdog Armed\n(Auto-stops container after 60m if unattended)"]
+    P5 --> P6["6. Browser Auto-Launch\n(open http://localhost:<port>)"]
+    P6 --> P7["7. User Interactive Testing Session\n(Full live data snapshot in browser)"]
+    P7 --> P8["8. Interactive Teardown on Ctrl+C / EXIT\n(Closes tunnel, stops staging container, reclaims resources)"]
+```
+
+### 10.2 Architectural Advantages Over Automated PR Webhooks
+
+1. **Pre-Hydrated Real Data**: Instead of spinning up empty containers with unconfigured database wizards, `tools/preview.sh` automatically hydrates from the latest production SQLite databases with zero lock contention.
+2. **Zero Ingress Exposure**: Services are bound strictly to `staging-net` on `bjorn` and reached through an ephemeral SSH tunnel. No public wildcard DNS records, Let's Encrypt rate limits, or WAN scanners.
+3. **Dual-Layer Resource Reclamation**:
+   - **Local Trap**: Exiting or pressing `Ctrl+C` kills the SSH tunnel and immediately stops the remote staging container.
+   - **Remote Watchdog**: A background timer runs on `bjorn` (default: 60 minutes) to terminate the staging container automatically if the developer's laptop disconnects, sleeps, or loses network connectivity.
+
+### 10.3 CLI Syntax & Operational Patterns
+
+```bash
+# Preview Actual Budget in browser with live snapshot data:
+./tools/preview.sh actual
+
+# Preview Vaultwarden with custom 30-minute watchdog:
+./tools/preview.sh vaultwarden --timeout 30
+
+# Re-hydrate fresh snapshot and suppress automatic browser launch:
+./tools/preview.sh actual --reset --no-open
+
+# Forward to custom local port:
+./tools/preview.sh actual --port 5099
+
+# Deterministic simulation without touching containers:
+./tools/preview.sh actual --dry-run
+```
+
+
 
