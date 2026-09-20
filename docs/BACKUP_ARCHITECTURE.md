@@ -1,47 +1,79 @@
 # Self-Hosted Backup Architecture & Disaster Recovery Specification
 
-This document details the architectural design, security model, alerting protocols, and service inventories for all self-hosted infrastructure running on host server **`bjorn`**.
+This document details the architectural design, declarative strategy engine, security model, alerting protocols, and service inventories for all self-hosted infrastructure running on host server **`bjorn`**.
 
 ---
 
 ## 1. Executive Summary & Problem Statement
 
-The self-hosted infrastructure hosts critical services including financial management (**Actual Budget**), credentials and passwords (**Vaultwarden**), home automation (**Home Assistant**), and reverse proxy routing with SSL termination (**Nginx Proxy Manager**), all coordinated through **Coolify**.
+The self-hosted infrastructure hosts critical services including financial management (**Actual Budget**), credentials and passwords (**Vaultwarden**), home automation (**Home Assistant**), reverse proxy routing with SSL termination (**Nginx Proxy Manager**), and note replication (**Obsidian CouchDB LiveSync**), all coordinated through **Coolify**.
 
 ### Legacy Shortcomings (`volback`):
 1. **Single-Point Overwrite**: Backups wrote to a fixed, static object key (`backups/actual/data-backup.zip.enc` and `backups/vw/vw-db-backup.sqlite3.enc`), destroying previous recovery points daily.
 2. **Proprietary Encryption Format**: Backups relied on `volback` (a custom Go tool using Argon2id with custom binary framing + AES-128-CTR). Recovery in an emergency required compiling custom Go binaries.
 3. **Silent Failures**: Shell scripts lacked `set -euo pipefail` and error traps. If backups failed, the container exited 0 and no alerts were triggered.
-4. **Live SQLite Inconsistency**: Backups of Actual Budget copied live SQLite databases via raw `cp -r` during active writes.
-5. **Coverage Gaps**: Home Assistant, Nginx Proxy Manager, and Coolify's PostgreSQL database had no automated backups.
+4. **Live SQLite Inconsistency**: Backups copied live SQLite databases via raw `cp -r` during active writes, risking corrupt pages and invalid headers.
+5. **Coverage Gaps**: Home Assistant, Nginx Proxy Manager, Obsidian LiveSync, and Coolify's PostgreSQL database had no automated backups.
 
 ---
 
 ## 2. Target Architecture Overview
 
+The system architecture standardizes on a single canonical, reusable backup runner engine (`tools/backup-runner`), built upon an Alpine 3.21 base image (~45MB). Each service deploys an isolated sidecar instance of this runner configured entirely through declarative environment variables and read-only volume mounts (`:ro`).
+
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│ Host Server: bjorn (Docker & Coolify Engine)                           │
-│                                                                        │
-│  ┌───────────────────────┐         ┌────────────────────────────────┐  │
-│  │ Application Volumes   │         │ Universal Backup Runner        │  │
-│  │  - Actual Budget      │────────▶│  (Alpine, ~45MB)               │  │
-│  │  - Vaultwarden        │         │  1. Safe SQLite .backup / VACUUM│  │
-│  │  - Home Assistant     │         │  2. Tar + OpenSSL AES-256-CBC  │  │
-│  │  - Nginx Proxy Manager│         │  3. Timestamped B2/S3 Upload   │  │
-│  │  - Obsidian CouchDB   │         │  4. Trap ERR ──▶ Discord Alert │  │
-│  │  - Coolify DB         │         │  5. On Success ──▶ Snitch Ping │  │
-│  └───────────────────────┘         │                                │  │
-│                                    └────────────────────────────────┘  │
-└────────────────────────────────────────────────────┬───────────────────┘
-                                                     │ TLS / S3 API
-                                                     ▼
-                                    ┌────────────────────────────────┐
-                                    │ Backblaze B2 (Cloud Storage)   │
-                                    │  - Bucket: secure-backup       │
-                                    │  - Non-destructive timestamps  │
-                                    │  - 30-day lifecycle retention  │
-                                    └────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│ Host Server: bjorn (Docker & Coolify Engine)                                           │
+│                                                                                        │
+│  ┌─────────────────────────┐          ┌─────────────────────────────────────────────┐  │
+│  │ Application Volumes     │          │ Canonical Universal Backup Runner Engine     │  │
+│  │ (Read-Only :ro Mounts)  │          │ (tools/backup-runner - Alpine 3.21, ~45MB)   │  │
+│  ├─────────────────────────┤          ├─────────────────────────────────────────────┤  │
+│  │ - Actual Budget Data    │─────────▶│ 1. Declarative Discovery & Snapshot Engine: │  │
+│  │ - Vaultwarden Data      │          │    • sqlite-auto: online .backup + assets   │  │
+│  │ - Home Assistant Config │─────────▶│    • filesystem: recursive file trees       │  │
+│  │ - NPM Data & Certs      │          │    • hook: custom dump scripts (Postgres/DB)│  │
+│  │ - Obsidian CouchDB Data │─────────▶│ 2. Guaranteed Cleanup Lifecycle (EXIT trap)│  │
+│  │ - Coolify Postgres DB   │          │ 3. POSIX OpenSSL AES-256-CBC PBKDF2 Encrypt │  │
+│  └─────────────────────────┘          │ 4. Direct Upload & Verification via rclone  │  │
+│                                       │ 5. Active Failure Alert (ERR trap ──▶ Discord│  │
+│                                       │ 6. Passive Silence Ping ──▶ Healthchecks.io │  │
+│                                       └─────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────┬─────────────────────────────────┘
+                                                       │ TLS / HTTPS S3 API (rclone)
+                                                       ▼
+                                      ┌──────────────────────────────────────────────────┐
+                                      │ Backblaze B2 (Cloud Storage Bucket)              │
+                                      │  - Bucket: jacobmiller22-secure-backup           │
+                                      │  - Prefix: backups/<service>/<archive>.tar.gz.enc│
+                                      │  - Non-destructive ISO timestamp naming          │
+                                      │  - 30-Day Server-Side Lifecycle Rules (Auto-Prune│
+                                      │  - Least Privilege: Containers lack deleteFiles  │
+                                      └──────────────────────────────────────────────────┘
+```
+
+### 2.1 Process Execution Lifecycle
+
+```
+[Cron Trigger (crond)] ──▶ [/app/backup-engine.sh]
+                                  │
+                                  ├─▶ [1. Trap Setup] (EXIT: rm -rf staging, ERR: Discord Webhook)
+                                  │
+                                  ├─▶ [2. Strategy Execution]
+                                  │       ├─ sqlite-auto: sqlite3 .backup + copy non-db assets
+                                  │       ├─ filesystem:  cp -a tree to staging
+                                  │       └─ hook:        run pre-backup hook script
+                                  │
+                                  ├─▶ [3. Archive & Encrypt]
+                                  │       tar -cz | openssl enc -aes-256-cbc -pbkdf2 -iter 100000
+                                  │
+                                  ├─▶ [4. Cloud Upload & Verification]
+                                  │       rclone copyto --s3-no-check-bucket ──▶ Verify existence
+                                  │
+                                  ├─▶ [5. Telemetry & Success Ping]
+                                  │       curl -fsS -m 10 --retry 3 "${HEALTHCHECK_PING_URL}"
+                                  │
+                                  └─▶ [6. Guaranteed Cleanup] (rm -rf staging & scratchpad)
 ```
 
 ---
@@ -122,7 +154,6 @@ If the entire server crashes, Docker hangs, or cron fails to trigger, active err
 | **Obsidian LiveSync** | Bind mount `./db/data` (`/opt/couchdb/data`):<br>- `*.couch`<br>- `.shards/`<br>- View indexes | Enrolled (`obsidian-backup` sidecar): `filesystem` mode copy of `/data` via read-only bind mount (`:ro`). | Read-only mount prevents write lock contention during live sync. Ownership must be restored as `5984:5984`. |
 | **Coolify State** | Docker container `coolify-db` (Postgres 15) | Enrolled (`pre-backup-coolify.sh` hook): `hook` mode via `tools/backup-runner`. Runs `docker exec coolify-db pg_dump -U coolify -d coolify > /staging/coolify.sql`. | Backs up all service configurations, deployment environments, and secrets. |
 
-
 ---
 
 ## 7. Storage Lifecycle & Backblaze B2 Server-Side Retention Policy
@@ -175,3 +206,78 @@ aws s3api put-bucket-lifecycle-configuration \
   --bucket jacobmiller22-secure-backup \
   --lifecycle-configuration file://b2-lifecycle.json
 ```
+
+---
+
+## 8. Universal Backup Runner Declarative Strategy Engine
+
+The canonical runner image (`tools/backup-runner`) executes one of three declarative strategies controlled via `BACKUP_MODE`:
+
+### 8.1 Strategy Definitions
+
+#### 1. `sqlite-auto` (Default)
+Automated non-blocking SQLite database backup for applications that persist data across one or more `.sqlite`, `.sqlite3`, or `.db` files:
+- **Recursive DB Discovery**: Scans `${BACKUP_SOURCE_DIR}` for database files.
+- **Transactional Online Snapshot**: Calls `sqlite3 <db> ".backup <dest>"` to create clean, checkpointed copies.
+- **Companion Asset Staging**: Recursively copies non-database files (`*.blob`, `*.pem`, `*.json`, YAML, configurations) preserving directory structure.
+- **Journal File Exclusion**: Automatically ignores SQLite transient write-ahead log and lock files (`*-wal`, `*-shm`, `*-journal`).
+
+#### 2. `filesystem`
+Direct directory tree preservation for services storing flat files or append-only document stores:
+- **Recursive Tree Copy**: Uses `cp -a` to copy `${BACKUP_SOURCE_DIR}` into staging.
+- **Integrity & Attributes**: Preserves POSIX file modes, timestamps, symlinks, and ownership.
+
+#### 3. `hook`
+Extensible pre-backup script execution for relational databases and engines requiring dedicated CLI utilities:
+- **Hook Contract**: Invokes `${PRE_BACKUP_SCRIPT}` passing the ephemeral staging directory as `$1`.
+- **Target Export**: The script places database dumps (e.g. `pg_dump`, `mongodump`, CouchDB exports) directly into `$1`.
+- **Automatic Packaging**: Upon exit code `0`, the runner packages, encrypts, and uploads all artifacts produced by the hook.
+
+### 8.2 Environment Variable Specification & Defaults
+
+All backup sidecar parameters are configured declaratively through container environment variables:
+
+| Variable | Canonical / Aliases | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `BACKUP_MODE` | — | `sqlite-auto` | Declarative strategy: `sqlite-auto`, `filesystem`, or `hook`. |
+| `BACKUP_SOURCE_DIR` | — | `/data` | Source directory inside container to snapshot. |
+| `SERVICE_NAME` | `BACKUP_TARGET_NAME` | `unknown-service` | Service identifier used in log output, archive naming, and remote prefixes. |
+| `BACKUP_PASSPHRASE` | `BACKUP_ENCRYPTION_KEY` | *(Required)* | Master encryption passphrase for OpenSSL PBKDF2 AES-256-CBC. |
+| `CRON_SCHEDULE` | `BACKUP_CRON` | `0 16 * * *` | Cron schedule string evaluated in UTC by container crond daemon. |
+| `BACKUP_ON_STARTUP` | — | `false` | When `true`, executes an immediate backup run before entering crond loop. |
+| `BACKUP_DEST_BUCKET` | `B2_BUCKET_NAME`, `B2_BUCKET`, `RCLONE_B2_BUCKET` | *(Optional)* | Destination Backblaze B2 or S3 bucket name. |
+| `BACKUP_DEST_ACCESS_KEY_ID` | `B2_APPLICATION_KEY_ID`, `B2_KEY_ID` | *(Optional)* | Cloud storage Access Key ID / B2 Key ID. |
+| `BACKUP_DEST_SECRET_ACCESS_KEY` | `B2_APPLICATION_KEY` | *(Optional)* | Cloud storage Secret Access Key / B2 Application Key. |
+| `BACKUP_DEST_ENDPOINT` | — | *(Optional)* | S3 endpoint URL (e.g. `https://s3.us-east-005.backblazeb2.com`). |
+| `BACKUP_DEST_PREFIX` | — | `backups/${SERVICE_NAME}` | Prefix path within destination bucket. |
+| `B2_DEST_PATH` | — | *(Optional)* | Explicit remote destination path (e.g. `b2:my-bucket/backups/actual`). |
+| `PRE_BACKUP_SCRIPT` | `BACKUP_PRE_HOOK`, `HOOK_SCRIPT` | `/hooks/pre-backup.sh` | Hook script path executed when `BACKUP_MODE=hook`. |
+| `DISCORD_WEBHOOK_URL` | — | *(Optional)* | Discord webhook URL for failure alert embeds. |
+| `HEALTHCHECK_PING_URL` | `HEALTHCHECKS_URL` | *(Optional)* | Healthchecks.io / Dead Man's Snitch ping URL on verified upload success. |
+
+---
+
+## 9. Frictionless Service Enrollment Workflow
+
+Enrolling a new service requires zero code development—simply add a sidecar service definition to the stack's `compose.yml` in **under 15 lines of YAML**:
+
+```yaml
+  my-service-backup:
+    build: ../tools/backup-runner
+    container_name: my-service-backup
+    restart: unless-stopped
+    environment:
+      - SERVICE_NAME=my-service
+      - BACKUP_MODE=sqlite-auto
+      - BACKUP_PASSPHRASE=${BACKUP_PASSPHRASE}
+      - B2_APPLICATION_KEY_ID=${B2_APPLICATION_KEY_ID}
+      - B2_APPLICATION_KEY=${B2_APPLICATION_KEY}
+      - B2_BUCKET_NAME=${B2_BUCKET_NAME}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+    volumes:
+      - service-data:/data:ro
+```
+
+### Volume Mounting Rules:
+- **Strict Read-Only Enforcement (`:ro`)**: Application data must always be mounted with `:ro` to prevent the backup runner from ever modifying or locking production storage.
+- **Resource Limits**: In production, sidecars specify `mem_limit: 256m` and `cpus: 0.50` to guarantee backups never starve host or application workloads.
