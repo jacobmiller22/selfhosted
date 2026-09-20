@@ -6,6 +6,20 @@ This runbook defines the authoritative architectural specification, webhook even
 
 ## 1. Executive Summary & Core Principles
 
+> [!NOTE]
+> **Architectural Re-Scoping & Homelab Governance Ruling (Story #42)**:
+> In accordance with **Axiom 1 (Maximum Server Uptime)**, **Axiom 3 (Radical Simplicity)**, and **Axiom 4 (Single-Server Blast Radius)**, automated webhook-driven ephemeral PR deployments via Coolify and public wildcard DNS (`*.preview.cloud...`) have been **de-scoped in favor of the Ephemeral Staging Architecture** ([`docs/STAGING_ARCHITECTURE.md`](file:///Users/jacobmiller22/projects/selfhosted/docs/STAGING_ARCHITECTURE.md)).
+>
+> Automated PR previews introduced significant operational drag:
+> 1. Ephemeral PR containers launched with **empty databases**, failing to provide high confidence without complex seed hydration.
+> 2. Parallel PR builds caused severe CPU and memory thrashing on single host `bjorn`.
+> 3. Stateful hardware-locked services (`homeassistant`, `nginx-proxy-manager`) cannot be previewed in parallel.
+>
+> **Current Operating Model**:
+> - **Pre-Deployment Gatekeeper**: Automated syntax validation, ShellCheck, unit tests, and secret leak scans run in GitHub Actions on every PR (`.github/workflows/ci.yml`).
+> - **High-Confidence Live Verification**: Live container execution against real database snapshots runs via [`tools/staging/hydrate.sh`](file:///Users/jacobmiller22/projects/selfhosted/tools/staging/hydrate.sh) and [`tools/staging/test-actual-staging.sh`](file:///Users/jacobmiller22/projects/selfhosted/tools/staging/test-actual-staging.sh).
+> - **Interactive Browser Previews**: Developers launch on-demand, private browser sessions with zero WAN exposure via [`tools/preview.sh`](file:///Users/jacobmiller22/projects/selfhosted/tools/preview.sh).
+
 All production workloads and dynamic staging/preview instances managed in this repository run on remote host **`bjorn`**. The continuous deployment system automates deployments upon code changes while guaranteeing strict security boundaries, isolation between ephemeral environments, and zero manual proxy reconfiguration for temporary branches.
 
 ### Core Architectural Axioms
