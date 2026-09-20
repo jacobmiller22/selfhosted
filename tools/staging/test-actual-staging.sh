@@ -280,7 +280,7 @@ fi
 collect_checksums() {
   local data_dir="$1"
   local out_file="$2"
-  > "${out_file}"
+  true > "${out_file}"
 
   if is_remote; then
     # shellcheck disable=SC2029
