@@ -202,14 +202,18 @@ class TestGrafanaDashboards(unittest.TestCase):
     def setUpClass(cls):
         host_file = DASHBOARDS_JSON_DIR / "host-metrics.json"
         container_file = DASHBOARDS_JSON_DIR / "container-metrics.json"
+        dr_file = DASHBOARDS_JSON_DIR / "dr-and-backups.json"
 
         cls.assertTrue(host_file.exists(), f"{host_file} must exist")
         cls.assertTrue(container_file.exists(), f"{container_file} must exist")
+        cls.assertTrue(dr_file.exists(), f"{dr_file} must exist")
 
         with open(host_file, "r", encoding="utf-8") as f:
             cls.host_data = json.load(f)
         with open(container_file, "r", encoding="utf-8") as f:
             cls.container_data = json.load(f)
+        with open(dr_file, "r", encoding="utf-8") as f:
+            cls.dr_data = json.load(f)
 
     def test_host_metrics_dashboard(self):
         self.assertEqual(self.host_data.get("uid"), "host-overview")
@@ -280,6 +284,34 @@ class TestGrafanaDashboards(unittest.TestCase):
         # Disk I/O
         self.assertIn('sum(rate(container_fs_reads_bytes_total{name!="",image!=""}[5m])) by (name)', expr_blob)
         self.assertIn('sum(rate(container_fs_writes_bytes_total{name!="",image!=""}[5m])) by (name)', expr_blob)
+
+    def test_dr_and_backups_dashboard(self):
+        self.assertEqual(self.dr_data.get("uid"), "dr-and-backups")
+        self.assertIn("Disaster Recovery", self.dr_data.get("title", ""))
+
+        # Collect query expressions
+        exprs = []
+        for panel in self.dr_data.get("panels", []):
+            for target in panel.get("targets", []):
+                if "expr" in target:
+                    exprs.append(target["expr"])
+        expr_blob = " ".join(exprs)
+
+        # DR & backup metrics
+        self.assertIn("selfhosted_backup_last_timestamp_seconds", expr_blob)
+        self.assertIn("selfhosted_backup_size_bytes", expr_blob)
+        self.assertIn("selfhosted_backup_status", expr_blob)
+        self.assertIn("selfhosted_dr_drill_rto_seconds", expr_blob)
+        self.assertIn("selfhosted_dr_drill_rpo_seconds", expr_blob)
+        self.assertIn("selfhosted_dr_drill_status", expr_blob)
+
+        # Validate ELI5 descriptions on visual panels
+        visual_panels = [p for p in self.dr_data.get("panels", []) if p.get("type") not in ("row", "text")]
+        for p in visual_panels:
+            desc = p.get("description", "")
+            self.assertIn("What is RTO?", desc)
+            self.assertIn("What is RPO?", desc)
+            self.assertIn("What should I do if this is red?", desc)
 
 
 class TestActualBudgetAnalyticsDashboard(unittest.TestCase):

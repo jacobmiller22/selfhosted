@@ -44,7 +44,8 @@ monitoring/
         ├── README.md                         # Dashboard templates, JSON definitions, and IDs
         ├── host-metrics.json                 # Host overview & capacity dashboard (UID: host-overview)
         ├── container-metrics.json            # Container telemetry leaderboard (UID: container-telemetry)
-        └── actual-budget-analytics.json      # Advanced Actual Budget SQLite Analytics (UID: actual-budget-analytics)
+        ├── actual-budget-analytics.json      # Advanced Actual Budget SQLite Analytics (UID: actual-budget-analytics)
+        └── dr-and-backups.json               # Disaster Recovery & Backup Health (UID: dr-and-backups)
 ```
 
 ---
@@ -145,6 +146,40 @@ Grafana automatically loads declarative dashboards from `monitoring/grafana/dash
    - **Top 10 Memory Consumers**: Ranked RAM working set bytes per container.
    - **Top Network Consumers**: Ingress (RX) and Egress (TX) bandwidth per container.
    - **Top Disk I/O Consumers**: Read and write throughput per container.
+
+3. **Disaster Recovery & Backup Health (bjorn)** (`dr-and-backups.json`):
+   - **UID**: `dr-and-backups`
+   - **Service Backup Freshness Gauge**: Visual SLA gauge tracking archive age per service (< 24h Green, 24-26h Yellow, > 26h Red SLA breach).
+   - **RTO & RPO Historical Trends**: Time-series graphs tracking Recovery Time Objective duration (seconds) and Recovery Point Objective age (seconds).
+   - **Archive Size Over Time**: Capacity tracking per service archive over time with bar gauge ranking.
+   - **DR Drill Status Stat Card**: Clean/Failed indicator for automated cold-storage recovery drills.
+   - **ELI5 Tooltips**: Every panel provides plain-English answers to:
+     - *What is RTO?* (Recovery Time Objective: time required to recover services from backup).
+     - *What is RPO?* (Recovery Point Objective: maximum data loss age).
+     - *What should I do if this is red?* (Actionable runbook triage steps).
+
+### 6.3 DR & Backup Metrics Pipeline
+Disaster recovery and backup telemetry is generated via `tools/backup-dr/export-dr-metrics.sh` in Prometheus textfile format and collected by Node Exporter:
+
+- **Metrics Path**: `/var/lib/node_exporter/textfile_collector/backups.prom`
+- **Scrape Frequency**: 15s (via VictoriaMetrics `node` job)
+- **Metric Definitions**:
+  - `selfhosted_backup_last_timestamp_seconds{service="..."}`: Epoch timestamp of last successful backup.
+  - `selfhosted_backup_size_bytes{service="..."}`: Size in bytes of latest backup archive.
+  - `selfhosted_backup_status{service="..."}`: Status of last backup operation (1 = success, 0 = fail).
+  - `selfhosted_dr_drill_rto_seconds{service="..."}`: Measured RTO recovery duration in seconds.
+  - `selfhosted_dr_drill_rpo_seconds{service="..."}`: Measured RPO data gap in seconds.
+  - `selfhosted_dr_drill_status`: Overall drill status (1 = clean, 0 = failed).
+
+#### Operator Triage Guide (When Panels Turn Red)
+- **Backup Freshness > 26h (RED)**:
+  - Check backup runner container: `ssh bjorn "docker logs --tail 100 backup-runner"`
+  - Verify B2 credentials and endpoint reachability: `ssh bjorn "docker exec backup-runner rclone lsd b2:"`
+  - Trigger manual backup: `ssh bjorn "./tools/backup-runner/backup-engine.sh --service <service>"`
+- **DR Drill Status = FAILED (RED)**:
+  - Inspect failover drill logs: `ssh bjorn "cat /tmp/dr-drill.log"`
+  - Run drill manually: `ssh bjorn "./tools/backup-dr/dr-drill.sh --service <service>"`
+  - Verify SQLite database integrity and staging container network bindings.
 
 ---
 

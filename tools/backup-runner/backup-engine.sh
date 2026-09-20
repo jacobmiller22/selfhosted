@@ -396,4 +396,16 @@ if [[ -n "${HEALTHCHECK_PING_URL:-}" ]]; then
   curl -fsS -m 10 --retry 3 "${HEALTHCHECK_PING_URL}" >/dev/null || true
 fi
 
+# ------------------------------------------------------------------------------
+# Prometheus Textfile Telemetry Export
+# ------------------------------------------------------------------------------
+ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -x "${ENGINE_DIR}/../backup-dr/export-dr-metrics.sh" ]]; then
+  "${ENGINE_DIR}/../backup-dr/export-dr-metrics.sh" \
+    --service "${SERVICE_NAME}" \
+    --backup-status 1 \
+    --backup-size "${ARCHIVE_SIZE:-0}" \
+    --backup-timestamp "$(date +%s)" >/dev/null 2>&1 || true
+fi
+
 echo "[+] Backup completed successfully for ${SERVICE_NAME}!"

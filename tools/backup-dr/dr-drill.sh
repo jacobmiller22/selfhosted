@@ -982,6 +982,24 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# Phase 7: Prometheus Textfile Telemetry Export
+# ------------------------------------------------------------------------------
+if [[ -x "${SCRIPT_DIR}/export-dr-metrics.sh" ]]; then
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    log_info "[dry-run] Prometheus Textfile Export: would export DR metrics"
+  else
+    for drill_svc in "${TARGET_SERVICES[@]}"; do
+      "${SCRIPT_DIR}/export-dr-metrics.sh" \
+        --service "${drill_svc}" \
+        --rto "${RTO_SECONDS}" \
+        --rpo "${RPO_SECONDS}" \
+        --drill-status 1 >/dev/null 2>&1 || true
+    done
+    log_info "Disaster recovery telemetry exported to Prometheus textfile collector."
+  fi
+fi
+
+# ------------------------------------------------------------------------------
 # Drill Completion
 # ------------------------------------------------------------------------------
 SUCCESS=true
