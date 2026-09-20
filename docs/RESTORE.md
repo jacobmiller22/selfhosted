@@ -258,25 +258,48 @@ The decrypted archive contains:
 
 ---
 
-## 4. Disaster Recovery Testing & Automated Drills
+## 4. Disaster Recovery Testing, Automated Drills & SLAs
 
-### 4.1 Automated Master DR Drill (`dr-drill.sh`)
-Automated disaster recovery drills execute routinely (e.g. weekly via cron / Coolify) using the unified orchestrator:
+Disaster recovery readiness is maintained through routine automated failover drills and quarterly manual bare-metal restoration exercises.
+
+> [!TIP]
+> For comprehensive disaster recovery drill playbooks, staging procedures, log triage guides, and formal SLA definitions, see [`docs/DISASTER_RECOVERY_EXERCISES.md`](DISASTER_RECOVERY_EXERCISES.md).
+
+### 4.1 Service-Level Agreements (SLAs)
+
+All recovery operations are governed by two formal SLAs:
+- **Recovery Point Objective (RPO)**: **< 24 Hours** (Warning alert raised if newest archive exceeds **26 hours**).
+- **Recovery Time Objective (RTO)**:
+  - **Automated Container Recovery & Staging Drill**: **< 5 Minutes** (< 300 seconds).
+  - **Single-Service Cold Restore**: **< 10 Minutes** (< 600 seconds).
+  - **Bare-Metal Disaster Recovery**: **< 30 Minutes** (< 1800 seconds).
+
+### 4.2 Automated Master DR Drill (`dr-drill.sh`)
+Automated disaster recovery drills execute routinely (weekly on Sunday at 03:00 UTC via cron / Coolify) using the unified orchestrator:
 
 ```bash
 # Run automated DR drill (pulls latest B2 backup, verifies integrity, runs staging smoke tests):
 ./tools/backup-dr/dr-drill.sh --service all
 
-# Or run safe pre-flight simulation:
+# Run with strict RPO SLA enforcement (exits code 5 if archive > 26h):
+./tools/backup-dr/dr-drill.sh --service all --fail-on-rpo
+
+# Or run safe pre-flight simulation (no containers launched):
 ./tools/backup-dr/dr-drill.sh --dry-run
 ```
-See [`tools/backup-dr/README.md`](../tools/backup-dr/README.md) for complete documentation on RTO/RPO calculation, Discord alerts, and Dead Man's Snitch integration.
 
-### 4.2 Manual Verification Checklist
+- **Active Alerts**: On any failure, rich red embeds detailing failing step, line, and log tail are sent to `DISCORD_WEBHOOK_URL`.
+- **Passive Monitoring**: Upon 100% clean drill completion, the runner pings `HEALTHCHECK_DR_PING_URL` on Healthchecks.io.
+- Full CLI documentation is located in [`tools/backup-dr/README.md`](../tools/backup-dr/README.md).
 
-Quarterly, perform an independent manual dry-run restoration on a non-production machine:
+### 4.3 Manual Verification Checklist
+
+Quarterly, perform an independent manual dry-run restoration on a non-production workstation following [Procedure B in `docs/DISASTER_RECOVERY_EXERCISES.md`](DISASTER_RECOVERY_EXERCISES.md#42-procedure-b-manual-failover-drill-macos-development-workstation--local-machine):
+- [ ] Retrieve passphrase from offline fireproof safe.
 - [ ] Download latest archive from B2 bucket.
-- [ ] Decrypt using offline passphrase from fireproof safe.
-- [ ] Inspect SQLite integrity: `sqlite3 <extracted_db> "PRAGMA integrity_check;"` -> Output must be `ok`.
-- [ ] Verify tar extract contains no 0-byte corrupted files.
+- [ ] Decrypt using standard OpenSSL PBKDF2 command (`head -c 8` checks `Salted__`).
+- [ ] Inspect SQLite integrity: `./tools/backup-dr/verify-db-integrity.sh --dir ./extracted --verbose` (asserts `PRAGMA integrity_check: ok`).
+- [ ] Run ephemeral staging smoke test: `./tools/backup-dr/staging-smoke-test.sh --service actual --port 5006`.
+- [ ] Assert tar extract contains no 0-byte corrupted files.
+- [ ] Record results in the [DR Drill Retrospective Log](DISASTER_RECOVERY_EXERCISES.md#6-disaster-recovery-drill-retrospective--audit-matrix).
 
