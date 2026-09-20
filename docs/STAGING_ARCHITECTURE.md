@@ -99,6 +99,24 @@ volumes:
 - **Vaultwarden**: `SIGNUPS_ALLOWED: "false"` prevents unauthorized registration during staging tests. `DOMAIN` is bound to `http://localhost:7278`.
 - **Actual Budget**: Default authentication protects staging data access; no ingress SSL certificates are provisioned for staging ports.
 
+### 4.4 Actual Budget Client & Sync Segregation Safeguards
+To safeguard personal financial records during automated batch categorization, machine learning model validation, and vision-assisted statement ingestion, Actual Budget staging enforces multi-layer segregation:
+
+1. **Ingress Route Isolation**:
+   - **Production Endpoint**: Public desktop and mobile clients (iOS, Android, macOS Electron) strictly resolve `https://budget.cloud.jacobmiller22.com`. Nginx Proxy Manager routes this domain exclusively to the production container (`actual_server`) on port 5006 via the internal `nginx-proxy-manager` network.
+   - **Staging Containment**: The staging instance (`actual-server-staging`) is bound strictly to `localhost:5006` (`127.0.0.1:5006`) and the private `staging-net` Docker network (with internal alias `actual-staging`). No public DNS records, reverse proxy routes, or Cloudflare tunnels expose `actual-server-staging`. Public clients cannot reach or discover the staging server.
+
+2. **Sync ID & Blob Segregation**:
+   - Production synchronization operates via CRDT messages stored in `actual-data/user-files/*.blob` and SQLite databases.
+   - When staging is hydrated from a live snapshot, budget files and sync metadata are cloned into `actual-stage-data`. Any subsequent transactions, category updates, or rule additions created during testing are written exclusively to `actual-stage-data`.
+   - Client sync requests sent to `http://localhost:5006` or `http://actual-staging:5006` mutate only staging SQLite files and blobs. Because production clients connect solely to `https://budget.cloud.jacobmiller22.com`, test mutations never synchronize back to production clients.
+
+3. **Guidelines for Test Sync IDs**:
+   - **Redirection via Environment**: Both the ONNX ML auto-categorizer sidecar and the vision transaction importer support redirection via `ACTUAL_SERVER_URL=http://localhost:5006` (or `http://actual-staging:5006`).
+   - **Standard Hydrated Test**: For quick categorization and import testing against existing accounts and payee rules, services can point to `ACTUAL_SERVER_URL=http://localhost:5006` using the existing `ACTUAL_SYNC_ID`. Mutations are isolated within `actual-stage-data`.
+   - **Isolated Sandbox Budget**: For extended destructive testing or schema changes, create a dedicated test budget on staging with a separate sync ID (`ACTUAL_SYNC_ID=staging-test-sync-id`).
+   - **Cryptographic Immutability Assertion**: Automation test runs enforce bit-for-bit zero side-effects by computing pre-test and post-test SHA256 checksums on all production database files (`account.sqlite`, `user-files/*.sqlite`).
+
 ---
 
 ## 5. Operational Procedures & Remote Runbook
@@ -263,4 +281,50 @@ The `tools/backup-dr/staging-smoke-test.sh` utility automates end-to-end failove
 # Deterministic pre-flight simulation (no Docker daemon required)
 ./tools/backup-dr/staging-smoke-test.sh --dry-run
 ```
+
+---
+
+## 9. Actual Budget Staging Target Automation Verification (`tools/staging/test-actual-staging.sh`)
+
+The `tools/staging/test-actual-staging.sh` harness validates the Actual Budget staging environment as an isolated test target for high-side-effect automation features—specifically the ONNX ML auto-categorizer and the mobile vision transaction importer—allowing batch categorization and statement ingestion testing against real financial data with zero risk of corrupting production.
+
+### 9.1 Verification Pipeline
+
+```mermaid
+flowchart TD
+    S1["1. Pre-Flight Reachability & Binary Checks\n(RHVP, docker, sqlite3, curl)"] --> S2["2. Production Snapshot Hydration\n(hydrate.sh actual)"]
+    S2 --> S3["3. Record Pre-Test Checksums\n(SHA256 of production *.sqlite DBs)"]
+    S3 --> S4["4. Staging Container Launch & Health Probe\n(actual-server-staging on port 5006)"]
+    S4 --> S5["5. Staging Query & Modification Validation\n(query/modify categories & transactions in staging)"]
+    S5 --> S6["6. Zero-Side-Effect Assertion\n(assert production SHA256 100% unchanged)"]
+    S6 --> S7["7. Ephemeral Teardown via Trap\n(clean stop & remove unless --keep)"]
+```
+
+1. **Pre-flight Reachability Checks**: Asserts target host connectivity via SSH (RHVP if remote), checks binary availability (`docker`, `sqlite3`, `curl`), and verifies Compose specifications.
+2. **Snapshot Hydration**: Executes `tools/staging/hydrate.sh actual` to clone live production databases (`account.sqlite`, `user-files/*.sqlite`, blobs) into `actual-stage-data`.
+3. **Pre-Test SHA256 Checksum Recording**: Computes cryptographic SHA256 hashes for all production SQLite databases in `PROD_DATA_DIR` (`actual-data`).
+4. **Staging Container Launch & Health Probe**: Boots `actual-server-staging` on port `5006` under Compose profile `staging` and polls `http://<host>:5006/` until HTTP 200/302 is confirmed.
+5. **Staging Query & Modification Verification**: Inspects the staging database in `actual-stage-data`, validates `PRAGMA integrity_check == ok`, queries transactions and categories, executes a test insertion, and verifies the update in staging.
+6. **Zero-Side-Effect Assertion**: Re-computes SHA256 checksums of all production database files and asserts 100% bit-for-bit identical matching between pre-test and post-test states.
+7. **Guaranteed Ephemeral Teardown**: Automatically stops and removes the staging container on `EXIT`, `ERR`, `INT`, or `TERM` via a bash trap, unless `--keep` is explicitly requested.
+
+### 9.2 CLI Syntax & Invocations
+
+```bash
+# Deterministic dry-run preflight inspection:
+./tools/staging/test-actual-staging.sh --dry-run
+
+# Run full staging target verification locally:
+./tools/staging/test-actual-staging.sh
+
+# Run staging target verification remotely on production host bjorn:
+./tools/staging/test-actual-staging.sh --host bjorn --timeout 30
+
+# Verify staging and keep container running for interactive importer testing:
+./tools/staging/test-actual-staging.sh --keep
+
+# Run verification with custom timeout and skip re-hydration:
+./tools/staging/test-actual-staging.sh --timeout 45 --skip-hydrate
+```
+
 
