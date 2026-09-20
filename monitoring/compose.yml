@@ -74,6 +74,7 @@ services:
     command:
       - --path.rootfs=/host
       - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/containers/.+)($$|/)
+      - --collector.textfile.directory=/host/var/lib/node_exporter/textfile_collector
       - --web.listen-address=:9100
     deploy:
       resources:
