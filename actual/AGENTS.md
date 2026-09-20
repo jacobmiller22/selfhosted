@@ -104,3 +104,25 @@ ssh bjorn "docker restart actual-auto-categorizer"
   ```
 - **File Ownership**: Actual Budget runs as UID/GID `1000:1000`. Restored files must retain `chown -R 1000:1000 /data`.
 - **Passphrase Protection**: Backups are encrypted with OpenSSL AES-256-CBC PBKDF2 using `BACKUP_PASSPHRASE` injected via Coolify environment variables.
+
+---
+
+## 5. Ephemeral Staging Redirection & Zero-Risk Testing
+
+For high-side-effect automation features (ONNX ML auto-categorizer, vision transaction importer), test against the ephemeral staging container (`actual-server-staging` on port `5006`):
+
+1. **Hydrate Staging Snapshot**:
+   ```bash
+   ./tools/staging/hydrate.sh actual --start
+   ```
+2. **Redirect Services to Staging**:
+   - Host / local scripts: `ACTUAL_SERVER_URL=http://localhost:5006`
+   - Internal Docker network: `ACTUAL_SERVER_URL=http://actual-staging:5006`
+   - Test sync IDs: Use staging budget sync IDs or configure `ACTUAL_SYNC_ID`.
+3. **Automated Verification Harness**:
+   ```bash
+   ./tools/staging/test-actual-staging.sh --dry-run
+   ./tools/staging/test-actual-staging.sh --host bjorn
+   ```
+4. **Client Segregation Safeguard**:
+   Mobile and desktop clients pointing to `https://budget.cloud.jacobmiller22.com` authenticate exclusively through NPM to production `actual_server`. They cannot discover or sync with `actual-server-staging`. Production database files are verified bit-for-bit unchanged before and after testing via SHA256 checksums.

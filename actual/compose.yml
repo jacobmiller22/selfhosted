@@ -20,7 +20,9 @@ services:
     volumes:
       - actual-stage-data:/data
     networks:
-      - staging-net
+      staging-net:
+        aliases:
+          - actual-staging
     mem_limit: 256m
     cpus: 0.50
 
@@ -68,6 +70,7 @@ services:
     restart: "no"
     networks:
       - nginx-proxy-manager
+      - staging-net
 
 networks:
   nginx-proxy-manager:
