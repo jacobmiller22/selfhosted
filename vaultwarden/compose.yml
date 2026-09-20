@@ -1,5 +1,12 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   vaultwarden:
+    logging: *default-logging
     image: vaultwarden/server:1.35.4
     container_name: vaultwarden
     restart: unless-stopped
@@ -14,6 +21,7 @@ services:
       - nginx-proxy-manager
 
   vaultwarden-staging:
+    logging: *default-logging
     image: ${VAULTWARDEN_IMAGE:-vaultwarden/server:${IMAGE_TAG:-1.35.4}}
     container_name: vaultwarden-staging
     profiles: ["staging"]
@@ -31,6 +39,7 @@ services:
     cpus: 0.50
 
   vw-backup:
+    logging: *default-logging
     build:
       context: ../tools/backup-runner
     container_name: vw-backup

@@ -1,6 +1,14 @@
 name: obsidian
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   couchdb:
+    logging: *default-logging
     container_name: livesync-db
     image: couchdb:3.3.3
     environment:
@@ -16,6 +24,7 @@ services:
       - nginx-proxy-manager
 
   obsidian-backup:
+    logging: *default-logging
     build:
       context: ../tools/backup-runner
     container_name: obsidian-backup
