@@ -140,6 +140,7 @@ if (fs.existsSync(REANNOTATION_REPORT_FILE_PATH)) {
 export function appendRecommendationNote(existingNotes: string | undefined | null, newRecommendation: string): string {
   const cleaned = (existingNotes || "")
     .replace(/\[ML (?:Recommended|Suggested|Transfer)[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]/g, "")
+    .replace(/(?:\s*\(\d+%\)\])+/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
   return cleaned ? `${cleaned} ${newRecommendation}` : newRecommendation;

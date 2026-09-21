@@ -40,6 +40,14 @@ const note3c = appendRecommendationNote(
 assert(note3c === "User manual note [ML Recommended Category: Common Fun (85%)]", `Note 3c failed: "${note3c}"`);
 console.log("✓ Old ML tags with nested [P]/[J] brackets replaced without leaving trailing fragments");
 
+// Test 3d: Scrubbing legacy orphaned percentage tags
+const note3d = appendRecommendationNote(
+  "7708: TN GA INST TECH PAYPAT  (92%)]  (92%)]  (92%)] [ML Recommended Category: Buffer Budget [J] (92%)]",
+  "[ML Suggested Category: Buffer Budget [J] (37%)]"
+);
+assert(note3d === "7708: TN GA INST TECH PAYPAT [ML Suggested Category: Buffer Budget [J] (37%)]", `Note 3d failed: "${note3d}"`);
+console.log("✓ Legacy orphaned percentage fragments scrubbed cleanly");
+
 // Test 4: Existing transfer ML tag replaced
 const note4 = appendRecommendationNote(
   "[ML Recommended Transfer: Matched with Checking $50.00 on 2026-09-01]",
