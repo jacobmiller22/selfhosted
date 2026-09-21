@@ -93,9 +93,55 @@ if (fs.existsSync(REPORT_FILE_PATH)) {
   } catch (_) {}
 }
 
-function appendRecommendationNote(existingNotes: string | undefined | null, newRecommendation: string): string {
+export interface ReannotationOptions {
+  dryRun?: boolean;
+  sinceDate?: string;
+  limit?: number;
+  account?: string;
+  includeClosedOrOffbudget?: boolean;
+}
+
+export interface ReannotationSample {
+  txId: string;
+  date: string;
+  account: string;
+  payee: string;
+  existingCategory?: string;
+  predictedCategory: string;
+  confidence: number;
+  oldNotes: string;
+  newNotes: string;
+}
+
+export interface ReannotationReport {
+  timestamp: string;
+  dryRun: boolean;
+  totalTransactionsScanned: number;
+  eligibleTransactions: number;
+  notesUpdated: number;
+  notesUnchanged: number;
+  skippedTransfers: number;
+  skippedNoPayee: number;
+  durationMs: number;
+  samples: ReannotationSample[];
+}
+
+let isReannotating = false;
+let lastReannotationTime: string | null = null;
+let latestReannotationReport: ReannotationReport | null = null;
+
+const REANNOTATION_REPORT_FILE_PATH = path.resolve(process.cwd(), ".latest-reannotation-report.json");
+if (fs.existsSync(REANNOTATION_REPORT_FILE_PATH)) {
+  try {
+    latestReannotationReport = JSON.parse(fs.readFileSync(REANNOTATION_REPORT_FILE_PATH, "utf-8"));
+  } catch (_) {}
+}
+
+export function appendRecommendationNote(existingNotes: string | undefined | null, newRecommendation: string): string {
   const cleaned = (existingNotes || "")
-    .replace(/\[ML (Recommended|Suggested|Transfer).*?\]/g, "")
+    .replace(/\[ML (?:Recommended|Suggested|Transfer)[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]/g, "")
+    .replace(/(?:\s*\(\d+%\)\])+/g, "")
+    .replace(/\s{2,}/g, " ")
     .trim();
   return cleaned ? `${cleaned} ${newRecommendation}` : newRecommendation;
 }
@@ -297,8 +343,8 @@ export function resolveCategoryId(
 export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<DryRunReport> {
   const dryRun = overrideDryRun !== undefined ? overrideDryRun : DEFAULT_DRY_RUN;
 
-  if (isSyncing) {
-    console.log("⚠️ Auto-categorization sync already in progress. Skipping cycle.");
+  if (isSyncing || isReannotating) {
+    console.log("⚠️ Auto-categorization sync or re-annotation already in progress. Skipping cycle.");
     return latestReport || {
       timestamp: new Date().toISOString(),
       dryRun,
@@ -523,6 +569,173 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
   };
 }
 
+export async function runReannotation(options?: ReannotationOptions): Promise<ReannotationReport> {
+  const dryRun = options?.dryRun !== undefined ? options.dryRun : true;
+  const startTime = Date.now();
+
+  if (isSyncing || isReannotating) {
+    console.log("⚠️ Another sync or re-annotation is already in progress. Skipping.");
+    throw new Error("Another sync or re-annotation is already in progress.");
+  }
+
+  if (!SERVER_URL || !PASSWORD || !SYNC_ID) {
+    console.error("❌ Actual server credentials missing (ACTUAL_SERVER_URL, ACTUAL_PASSWORD, ACTUAL_SYNC_ID).");
+    throw new Error("Missing Actual server credentials");
+  }
+
+  isReannotating = true;
+  console.log(`\n==================================================`);
+  console.log(`🔄 Starting ML Note Re-Annotation at ${new Date().toISOString()}`);
+  console.log(`🔒 Mode: ${dryRun ? "🧪 DRY-RUN (SIMULATION ONLY - NO MUTATIONS)" : "⚡ LIVE (NOTE OVERWRITES ENABLED)"}`);
+  if (options?.limit) console.log(`🔢 Limit: ${options.limit} transactions`);
+  if (options?.sinceDate) console.log(`📅 Since: ${options.sinceDate}`);
+  if (options?.account) console.log(`🏦 Account: ${options.account}`);
+  console.log(`==================================================`);
+
+  let totalScanned = 0;
+  let notesUpdated = 0;
+  let notesUnchanged = 0;
+  let skippedTransfers = 0;
+  let skippedNoPayee = 0;
+  const samples: ReannotationSample[] = [];
+
+  try {
+    await connectActual(SERVER_URL, PASSWORD, SYNC_ID);
+    const transactions = await fetchAllTransactions(options?.sinceDate);
+    const accounts = await fetchAccounts();
+    const acctMap = new Map(accounts.map((a) => [a.id, a]));
+    const categories = await fetchCategories();
+    const catNameMap = new Map(categories.map((c) => [c.id, c.name]));
+    const manifestMap = predictor.getManifest()?.hidden_to_active_map;
+    const hiddenToActiveMap = buildHiddenToActiveMap(transactions, categories, manifestMap);
+
+    totalScanned = transactions.length;
+    console.log(`📊 Fetched ${totalScanned} transactions from Actual Budget.`);
+
+    try {
+      await predictor.init();
+    } catch (err) {
+      console.warn(`⚠️ Warning initializing predictor sessions: ${(err as Error).message}`);
+    }
+
+    const eligibleTxs: typeof transactions = [];
+    for (const tx of transactions) {
+      if (tx.is_parent || tx.is_child) {
+        continue;
+      }
+      if (tx.transfer_id) {
+        skippedTransfers++;
+        continue;
+      }
+      if (options?.account && tx.account !== options.account) {
+        continue;
+      }
+      const acct = acctMap.get(tx.account);
+      if (!options?.includeClosedOrOffbudget && (!acct || acct.closed || acct.offbudget)) {
+        continue;
+      }
+      eligibleTxs.push(tx);
+    }
+
+    const txsToProcess = options?.limit && options.limit > 0
+      ? eligibleTxs.slice(0, options.limit)
+      : eligibleTxs;
+
+    console.log(`🎯 Processing ${txsToProcess.length} eligible transactions (out of ${eligibleTxs.length} candidates, ${skippedTransfers} transfers skipped)...`);
+
+    for (let i = 0; i < txsToProcess.length; i++) {
+      const tx = txsToProcess[i];
+      const rawPayee = (tx.imported_payee || tx.payee || "").trim();
+      if (!rawPayee) {
+        skippedNoPayee++;
+        continue;
+      }
+
+      const acctName = acctMap.get(tx.account)?.name || tx.account;
+      const persona = getAccountPersona(acctName);
+
+      const catPred = await predictor.predictCategory(rawPayee, tx.account, tx.amount, tx.date, persona);
+      const resolvedCatId = resolveCategoryId(catPred, categories, hiddenToActiveMap, persona);
+      const catName = (resolvedCatId ? catNameMap.get(resolvedCatId) : undefined)
+        || catNameMap.get(catPred.label)
+        || catPred.label;
+
+      const confPercent = (catPred.confidence * 100).toFixed(0);
+      const isHighConf = catPred.confidence >= CONFIDENCE_THRESHOLD && !!resolvedCatId;
+      const noteTag = isHighConf
+        ? `[ML Recommended Category: ${catName} (${confPercent}%)]`
+        : `[ML Suggested Category: ${catName} (${confPercent}%)]`;
+
+      const oldNotes = tx.notes || "";
+      const newNotes = appendRecommendationNote(oldNotes, noteTag);
+
+      if (newNotes !== oldNotes) {
+        notesUpdated++;
+        if (samples.length < 100) {
+          samples.push({
+            txId: tx.id,
+            date: tx.date,
+            account: acctName,
+            payee: rawPayee,
+            existingCategory: tx.category ? (catNameMap.get(tx.category) || tx.category) : undefined,
+            predictedCategory: catName,
+            confidence: parseFloat((catPred.confidence * 100).toFixed(1)),
+            oldNotes,
+            newNotes
+          });
+        }
+
+        if (!dryRun) {
+          // Strictly update ONLY notes and account (account is required by Actual API).
+          // category is deliberately omitted from updates to preserve user categorization.
+          await updateTransaction(tx.id, { notes: newNotes, account: tx.account });
+        }
+      } else {
+        notesUnchanged++;
+      }
+
+      if ((i + 1) % 250 === 0 || i + 1 === txsToProcess.length) {
+        console.log(`  [Re-annotate] ${i + 1}/${txsToProcess.length} processed (${notesUpdated} updated, ${notesUnchanged} unchanged)...`);
+      }
+    }
+
+    lastReannotationTime = new Date().toISOString();
+    const durationMs = Date.now() - startTime;
+    latestReannotationReport = {
+      timestamp: lastReannotationTime,
+      dryRun,
+      totalTransactionsScanned: totalScanned,
+      eligibleTransactions: txsToProcess.length,
+      notesUpdated,
+      notesUnchanged,
+      skippedTransfers,
+      skippedNoPayee,
+      durationMs,
+      samples
+    };
+
+    fs.writeFileSync(REANNOTATION_REPORT_FILE_PATH, JSON.stringify(latestReannotationReport, null, 2), "utf-8");
+
+    console.log(`\n🎉 Re-annotation complete in ${(durationMs / 1000).toFixed(1)}s! ${dryRun ? "[DRY-RUN SIMULATION]" : "[LIVE APPLIED]"}`);
+    console.log(`   Notes Updated: ${notesUpdated}`);
+    console.log(`   Notes Unchanged: ${notesUnchanged}`);
+    console.log(`   Transfers Skipped: ${skippedTransfers}`);
+    console.log(`   No Payee Skipped: ${skippedNoPayee}`);
+
+    return latestReannotationReport;
+  } finally {
+    try {
+      await disconnectActual();
+    } catch (_) {}
+    try {
+      exportDatabaseSnapshot(ANALYTICS_EXPORT_PATH);
+    } catch (err) {
+      console.warn(`[Snapshot] Post-reannotation snapshot export failed: ${(err as Error).message}`);
+    }
+    isReannotating = false;
+  }
+}
+
 // --- EXPRESS HTTP SERVER (Health & Model Upload Endpoint) ---
 const app = express();
 app.use(express.json());
@@ -536,7 +749,9 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     isSyncing,
+    isReannotating,
     lastSyncTime,
+    lastReannotationTime,
     dryRunModeDefault: DEFAULT_DRY_RUN,
     modelsDir: MODELS_DIR,
     analyticsExport: {
@@ -554,6 +769,15 @@ app.get("/health", (req, res) => {
           highConfidenceAssigned: latestReport.highConfidenceAssigned,
           lowConfidenceSuggested: latestReport.lowConfidenceSuggested
         }
+      : null,
+    lastReannotationSummary: latestReannotationReport
+      ? {
+          timestamp: latestReannotationReport.timestamp,
+          dryRun: latestReannotationReport.dryRun,
+          eligibleTransactions: latestReannotationReport.eligibleTransactions,
+          notesUpdated: latestReannotationReport.notesUpdated,
+          notesUnchanged: latestReannotationReport.notesUnchanged
+        }
       : null
   });
 });
@@ -563,6 +787,13 @@ app.get("/api/reports/latest", (req, res) => {
     return res.status(404).json({ error: "No dry-run report available yet. Run /api/sync first." });
   }
   res.json(latestReport);
+});
+
+app.get("/api/reports/reannotate/latest", (req, res) => {
+  if (!latestReannotationReport) {
+    return res.status(404).json({ error: "No re-annotation report available yet. Run POST /api/reannotate first." });
+  }
+  res.json(latestReannotationReport);
 });
 
 app.get("/api/export", (req, res) => {
@@ -595,6 +826,28 @@ app.post("/api/sync", async (req, res) => {
   const overrideDryRun = req.body && typeof req.body.dryRun === "boolean" ? req.body.dryRun : undefined;
   const report = await runAutoCategorizerSync(overrideDryRun);
   res.json({ status: "sync_completed", report });
+});
+
+app.post("/api/reannotate", async (req, res) => {
+  if (isSyncing || isReannotating) {
+    return res.status(409).json({ error: "Another sync or re-annotation process is currently running." });
+  }
+
+  const options: ReannotationOptions = {
+    dryRun: req.body?.dryRun === false ? false : true,
+    sinceDate: typeof req.body?.sinceDate === "string" ? req.body.sinceDate : undefined,
+    limit: typeof req.body?.limit === "number" ? req.body.limit : undefined,
+    account: typeof req.body?.account === "string" ? req.body.account : undefined,
+    includeClosedOrOffbudget: req.body?.includeClosedOrOffbudget === true
+  };
+
+  try {
+    const report = await runReannotation(options);
+    res.json({ status: "completed", report });
+  } catch (err: any) {
+    console.error("❌ Error during re-annotation:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post(
@@ -651,6 +904,7 @@ async function startDaemon() {
     console.log(`   Health Check:   GET http://localhost:${PORT}/health`);
     console.log(`   Latest Report:  GET http://localhost:${PORT}/api/reports/latest`);
     console.log(`   Manual Sync:    POST http://localhost:${PORT}/api/sync (body: {"dryRun": true})`);
+    console.log(`   Re-annotate:    POST http://localhost:${PORT}/api/reannotate (body: {"dryRun": true})`);
     console.log(`   Export Status:  GET http://localhost:${PORT}/api/export`);
   });
 
@@ -672,6 +926,7 @@ async function startDaemon() {
   }
 }
 
-if (process.env.AUTO_START !== "false") {
+const isMainModule = process.argv[1]?.endsWith("index.ts") || process.argv[1]?.endsWith("index.js");
+if (process.env.AUTO_START !== "false" && isMainModule) {
   startDaemon();
 }

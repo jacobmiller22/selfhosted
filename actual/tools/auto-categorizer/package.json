@@ -7,8 +7,10 @@
   "scripts": {
     "build": "tsc",
     "start": "tsx src/index.ts",
+    "reannotate": "tsx src/reannotate.ts",
+    "test-reannotate": "tsx src/test-reannotate.ts",
     "test-predictor": "tsx src/test-predictor.ts",
-    "test": "tsx src/test-predictor.ts"
+    "test": "tsx src/test-reannotate.ts && tsx src/test-predictor.ts"
   },
   "dependencies": {
     "@actual-app/api": "^26.9.0",
