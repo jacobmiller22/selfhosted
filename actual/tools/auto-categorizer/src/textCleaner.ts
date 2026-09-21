@@ -10,13 +10,18 @@ const PREFIX_PATTERNS = [
   /^recurring\s*payment\s*/i,
   /^ach\s*withdrawal\s*/i,
   /^direct\s*deposit\s*/i,
+  /^withdrawal\s*from\s*/i,
+  /^deposit\s*from\s*/i,
 ];
 
-const SUFFIX_PATTERNS = [
+const CLEAN_PATTERNS = [
+  /\bt\s*-\s*\d+\b/gi,
+  /\bt\s*\d+\b/gi,
   /#\s*\d+/gi,
+  /\b\d{4,}\b/gi,
   /\b\d{3}-\d{3}-\d{4}\b/gi,
   /\b[A-Z]{2}\s+\d{5}\b/gi,
-  /\b(ca|ny|tx|fl|wa|or|il|ma|nc|ga)\b/gi,
+  /\b(ca|ny|tx|fl|wa|or|il|ma|nc|ga|va)\b/gi,
   /\b\d{2}\/\d{2}\b/gi,
 ];
 
@@ -31,8 +36,8 @@ export function cleanPayeeText(text: string | null | undefined): string {
     cleaned = cleaned.replace(pat, "");
   }
 
-  for (const pat of SUFFIX_PATTERNS) {
-    cleaned = cleaned.replace(pat, "");
+  for (const pat of CLEAN_PATTERNS) {
+    cleaned = cleaned.replace(pat, " ");
   }
 
   // Replace non-alphanumeric with spaces

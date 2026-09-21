@@ -189,10 +189,28 @@ export function buildHiddenToActiveMap(
   return hiddenToActive;
 }
 
+export function getAccountPersona(accountName: string): "P" | "J" | "Joint" {
+  if (accountName.includes("[P]") || accountName.toLowerCase().includes("priyanka") || accountName.toLowerCase().includes("personal")) {
+    return "P";
+  }
+  if (accountName.includes("[J]") || accountName.toLowerCase().includes("jacob")) {
+    return "J";
+  }
+  return "Joint";
+}
+
+export function isCategoryPersonaCompatible(categoryName: string, persona?: "P" | "J" | "Joint"): boolean {
+  if (!persona || persona === "Joint") return true;
+  if (persona === "P" && categoryName.includes("[J]")) return false;
+  if (persona === "J" && categoryName.includes("[P]")) return false;
+  return true;
+}
+
 export function resolveCategoryId(
   prediction: string | PredictionInput,
   categories: CategoryInput[],
-  hiddenToActiveMap?: Map<string, string>
+  hiddenToActiveMap?: Map<string, string>,
+  persona?: "P" | "J" | "Joint"
 ): string | null {
   const predLabel = typeof prediction === "string" ? prediction : prediction.label;
   const probabilities = typeof prediction === "object" ? prediction.probabilities : undefined;
@@ -200,32 +218,36 @@ export function resolveCategoryId(
   const activeCategories = categories.filter((c) => !c.hidden && !c.tombstone);
   const activeCatMap = new Map(activeCategories.map((c) => [c.id, c]));
 
-  // Strategy 1 (Probability Filtering): Scan probabilities descending and pick the highest-ranked ACTIVE category
+  // Strategy 1 (Probability Filtering): Scan probabilities descending and pick the highest-ranked ACTIVE category compatible with persona
   if (probabilities) {
     const sortedClasses = Object.entries(probabilities)
       .sort((a, b) => b[1] - a[1])
       .map(([cls]) => cls);
 
     for (const cls of sortedClasses) {
-      if (activeCatMap.has(cls)) {
+      const directCat = activeCatMap.get(cls);
+      if (directCat && isCategoryPersonaCompatible(directCat.name, persona)) {
         return cls;
       }
       if (hiddenToActiveMap && hiddenToActiveMap.has(cls)) {
         const mappedId = hiddenToActiveMap.get(cls)!;
-        if (activeCatMap.has(mappedId)) {
+        const mappedCat = activeCatMap.get(mappedId);
+        if (mappedCat && isCategoryPersonaCompatible(mappedCat.name, persona)) {
           return mappedId;
         }
       }
     }
   }
 
-  if (activeCatMap.has(predLabel)) {
+  const directMatch = activeCatMap.get(predLabel);
+  if (directMatch && isCategoryPersonaCompatible(directMatch.name, persona)) {
     return predLabel;
   }
 
   if (hiddenToActiveMap && hiddenToActiveMap.has(predLabel)) {
     const mappedId = hiddenToActiveMap.get(predLabel)!;
-    if (activeCatMap.has(mappedId)) {
+    const mappedMatch = activeCatMap.get(mappedId);
+    if (mappedMatch && isCategoryPersonaCompatible(mappedMatch.name, persona)) {
       return mappedId;
     }
   }
@@ -391,11 +413,12 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
 
       processedCount++;
       const acctName = acctMap.get(tx.account)?.name || tx.account;
+      const persona = getAccountPersona(acctName);
 
       // Predict Payee
-      const payeePred = await predictor.predictPayee(rawPayee, tx.account, tx.amount);
+      const payeePred = await predictor.predictPayee(rawPayee, tx.account, tx.amount, persona);
       // Predict Category
-      const catPred = await predictor.predictCategory(rawPayee, tx.account, tx.amount, tx.date);
+      const catPred = await predictor.predictCategory(rawPayee, tx.account, tx.amount, tx.date, persona);
 
       const updates: { payee?: string; category?: string; notes?: string; account?: string } = {};
 
@@ -403,7 +426,7 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
         updates.payee = payeePred.label;
       }
 
-      const resolvedCatId = resolveCategoryId(catPred, categories, hiddenToActiveMap);
+      const resolvedCatId = resolveCategoryId(catPred, categories, hiddenToActiveMap, persona);
       const catName = categories.find((c) => c.id === resolvedCatId)?.name || catPred.label;
 
       if (catPred.confidence >= CONFIDENCE_THRESHOLD && resolvedCatId) {

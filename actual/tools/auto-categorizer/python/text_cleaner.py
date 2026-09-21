@@ -13,14 +13,19 @@ PREFIX_PATTERNS = [
     r"^recurring\s*payment\s*",
     r"^ach\s*withdrawal\s*",
     r"^direct\s*deposit\s*",
+    r"^withdrawal\s*from\s*",
+    r"^deposit\s*from\s*",
 ]
 
-# Common bank noise suffixes (store numbers, phone numbers, state codes, dates)
-SUFFIX_PATTERNS = [
-    r"#\s*\d+",                 # #1234
+# Common bank noise suffixes and store identifiers
+CLEAN_PATTERNS = [
+    r"\bt\s*-\s*\d+\b",        # Target T-2337
+    r"\bt\s*\d+\b",            # Target T 2337
+    r"#\s*\d+",                # #1234
+    r"\b\d{4,}\b",             # 4+ digit numbers (store numbers, phone fragments, timestamps)
     r"\b\d{3}-\d{3}-\d{4}\b",  # 800-123-4567
-    r"\b[A-Z]{2}\s+\d{5}\b",    # CA 94102
-    r"\b(ca|ny|tx|fl|wa|or|il|ma|nc|ga)\b", # State abbreviations
+    r"\b[A-Z]{2}\s+\d{5}\b",   # CA 94102
+    r"\b(ca|ny|tx|fl|wa|or|il|ma|nc|ga|va)\b", # State abbreviations
     r"\b\d{2}/\d{2}\b",        # 09/08 dates
 ]
 
@@ -35,9 +40,9 @@ def clean_payee_text(text: str) -> str:
     for pat in PREFIX_PATTERNS:
         cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
 
-    # Remove suffixes / store IDs
-    for pat in SUFFIX_PATTERNS:
-        cleaned = re.sub(pat, "", cleaned, flags=re.IGNORECASE)
+    # Remove store IDs and suffixes
+    for pat in CLEAN_PATTERNS:
+        cleaned = re.sub(pat, " ", cleaned, flags=re.IGNORECASE)
 
     # Replace non-alphanumeric with spaces
     cleaned = re.sub(r"[^\w\s]", " ", cleaned)
@@ -53,7 +58,10 @@ if __name__ == "__main__":
         "TST* CHIPOTLE 1849 SAN FRANCISCO CA",
         "PAYPAL *NETFLIX.COM DIG 800-542-492",
         "DEBIT CARD PURCHASE - TRADER JOE'S #104 OAKLAND CA 09/02",
-        "AMAZON.COM*8B9149A AMZN"
+        "AMAZON.COM*8B9149A AMZN",
+        "TARGET T-2337",
+        "TARGET 00010181",
+        "WITHDRAWAL FROM ROCKET MORTGAGE LOAN"
     ]
     print("--- Text Cleaning Verification ---")
     for s in samples:

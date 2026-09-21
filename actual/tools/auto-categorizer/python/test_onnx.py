@@ -30,6 +30,7 @@ def test_onnx_models():
     inputs_payee = {
         "cleaned_payee": np.array([[clean_tj]], dtype=object),
         "account_id": np.array([["acct_credit_card"]], dtype=object),
+        "persona": np.array([["Joint"]], dtype=object),
         "amount_log": np.array([[tj_amount_log]], dtype=np.float32),
         "amount_sign": np.array([[-1.0]], dtype=np.float32)
     }
@@ -59,6 +60,7 @@ def test_onnx_models():
     inputs_cat = {
         "cleaned_payee": np.array([[clean_sb]], dtype=object),
         "account_id": np.array([["acct_credit_card"]], dtype=object),
+        "persona": np.array([["Joint"]], dtype=object),
         "amount_log": np.array([[sb_amount_log]], dtype=np.float32),
         "amount_sign": np.array([[-1.0]], dtype=np.float32),
         "day_of_week": np.array([[2.0]], dtype=np.float32),

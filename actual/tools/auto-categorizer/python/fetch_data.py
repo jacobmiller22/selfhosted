@@ -182,21 +182,81 @@ def generate_synthetic_transactions(num_records: int = 1500, seed: int = 42) -> 
     df = pd.DataFrame(records)
     return df
 
+def extract_from_sqlite(db_path: Path) -> pd.DataFrame:
+    """Extract transactions from decrypted Actual Budget SQLite database."""
+    import sqlite3
+    import numpy as np
+
+    conn = sqlite3.connect(db_path)
+    payees = dict(conn.execute("SELECT id, name FROM payees").fetchall())
+    accounts = dict(conn.execute("SELECT id, name FROM accounts").fetchall())
+
+    tx_df = pd.read_sql_query("""
+        SELECT t.id, t.date, t.amount, t.description as payee_id, t.imported_description,
+               t.acct as account_id, t.category as category_id, t.transferred_id
+        FROM transactions t
+        WHERE t.tombstone = 0
+    """, conn)
+
+    def fmt_date(d):
+        s = str(d)
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+        return s
+    tx_df["date"] = tx_df["date"].apply(fmt_date)
+
+    # Fall back to canonical payee name if imported_description is blank
+    tx_df["payee_name"] = tx_df["payee_id"].map(payees).fillna("")
+    tx_df["imported_payee"] = np.where(
+        tx_df["imported_description"].fillna("") != "",
+        tx_df["imported_description"],
+        tx_df["payee_name"]
+    )
+
+    # Account persona
+    def get_persona(acct_id):
+        name = accounts.get(acct_id, "")
+        if "[P]" in name:
+            return "P"
+        if "[J]" in name:
+            return "J"
+        return "Joint"
+    tx_df["persona"] = tx_df["account_id"].apply(get_persona)
+
+    tx_df["is_transfer"] = tx_df["transferred_id"].notna() & (tx_df["transferred_id"] != "") & (tx_df["transferred_id"] != "0")
+    tx_df["transfer_acct"] = None
+
+    cols = ["id", "date", "amount", "account_id", "persona", "imported_payee", "payee_id", "category_id", "is_transfer", "transfer_acct", "transferred_id"]
+    return tx_df[cols]
+
 def save_dataset(df: pd.DataFrame, filename: str = "dataset.json") -> Path:
     out_path = DATA_DIR / filename
     df.to_json(out_path, orient="records", indent=2)
     print(f"✓ Saved {len(df)} transactions to {out_path}")
     return out_path
 
-def load_dataset(filename: str = "dataset.json") -> pd.DataFrame:
+def load_dataset(filename: str = "dataset.json", db_filename: str = "latest_db.sqlite") -> pd.DataFrame:
     in_path = DATA_DIR / filename
-    if not in_path.exists():
-        print(f"Dataset {in_path} not found. Generating synthetic dataset...")
-        df = generate_synthetic_transactions()
+    db_path = DATA_DIR / db_filename
+    if in_path.exists():
+        return pd.read_json(in_path, orient="records")
+
+    if db_path.exists():
+        print(f"Loading live production transactions from {db_path}...")
+        df = extract_from_sqlite(db_path)
         save_dataset(df, filename)
         return df
-    return pd.read_json(in_path, orient="records")
+
+    print(f"Dataset {in_path} not found. Generating synthetic dataset...")
+    df = generate_synthetic_transactions()
+    save_dataset(df, filename)
+    return df
 
 if __name__ == "__main__":
-    df = generate_synthetic_transactions(1500)
+    db_path = DATA_DIR / "latest_db.sqlite"
+    if db_path.exists():
+        print(f"Extracting live production dataset from {db_path}...")
+        df = extract_from_sqlite(db_path)
+    else:
+        df = generate_synthetic_transactions(1500)
     save_dataset(df)
