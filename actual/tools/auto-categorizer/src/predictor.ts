@@ -60,7 +60,8 @@ export class OnnxPredictorEngine {
   public async predictPayee(
     rawPayee: string,
     accountId: string,
-    amountCents: number
+    amountCents: number,
+    persona: string = "Joint"
   ): Promise<PredictionResult> {
     if (!this.payeeSession || !this.manifest) {
       throw new Error("Payee ONNX session not initialized. Call init() first.");
@@ -73,6 +74,7 @@ export class OnnxPredictorEngine {
     const feeds: Record<string, ort.Tensor> = {
       cleaned_payee: new ort.Tensor("string", [cleanText], [1, 1]),
       account_id: new ort.Tensor("string", [accountId], [1, 1]),
+      persona: new ort.Tensor("string", [persona || "Joint"], [1, 1]),
       amount_log: new ort.Tensor("float32", new Float32Array([amountLog]), [1, 1]),
       amount_sign: new ort.Tensor("float32", new Float32Array([amountSign]), [1, 1])
     };
@@ -106,7 +108,8 @@ export class OnnxPredictorEngine {
     rawPayee: string,
     accountId: string,
     amountCents: number,
-    dateStr: string
+    dateStr: string,
+    persona: string = "Joint"
   ): Promise<PredictionResult> {
     if (!this.categorySession || !this.manifest) {
       throw new Error("Category ONNX session not initialized. Call init() first.");
@@ -124,6 +127,7 @@ export class OnnxPredictorEngine {
     const feeds: Record<string, ort.Tensor> = {
       cleaned_payee: new ort.Tensor("string", [cleanText], [1, 1]),
       account_id: new ort.Tensor("string", [accountId], [1, 1]),
+      persona: new ort.Tensor("string", [persona || "Joint"], [1, 1]),
       amount_log: new ort.Tensor("float32", new Float32Array([amountLog]), [1, 1]),
       amount_sign: new ort.Tensor("float32", new Float32Array([amountSign]), [1, 1]),
       day_of_week: new ort.Tensor("float32", new Float32Array([dayOfWeek]), [1, 1]),
