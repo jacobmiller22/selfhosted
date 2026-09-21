@@ -27,6 +27,19 @@ const note3 = appendRecommendationNote(
 assert(note3 === "Trip to Lake Tahoe [ML Recommended Category: Vacation (95%)]", `Note 3 failed: "${note3}"`);
 console.log("✓ Old ML suggestion tag replaced cleanly");
 
+// Test 3b: Existing ML tag with persona brackets [P] or [J] replaced cleanly
+const note3b = appendRecommendationNote(
+  "[ML Suggested Category: Income [P] (20%)]",
+  "[ML Recommended Category: Fun [P] (54%)]"
+);
+assert(note3b === "[ML Recommended Category: Fun [P] (54%)]", `Note 3b failed: "${note3b}"`);
+const note3c = appendRecommendationNote(
+  "User manual note [ML Suggested Category: Fun [J] (29%)]",
+  "[ML Recommended Category: Common Fun (85%)]"
+);
+assert(note3c === "User manual note [ML Recommended Category: Common Fun (85%)]", `Note 3c failed: "${note3c}"`);
+console.log("✓ Old ML tags with nested [P]/[J] brackets replaced without leaving trailing fragments");
+
 // Test 4: Existing transfer ML tag replaced
 const note4 = appendRecommendationNote(
   "[ML Recommended Transfer: Matched with Checking $50.00 on 2026-09-01]",
