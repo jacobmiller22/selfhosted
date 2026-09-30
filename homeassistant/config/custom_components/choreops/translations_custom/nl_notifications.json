@@ -1,0 +1,167 @@
+{
+  "_comment_assignee_section": "═════════════════════════════════════════════════════════════════",
+  "_comment_assignee_desc": "MELDINGEN AAN TOEGEWEZEN MEDEWERKER: Speels, in de tweede persoon, aanmoedigende toon met emoji's. GEEN 'ChoreOps:'-voorvoegsel.",
+  "_comment_assignee_footer": "═════════════════════════════════════════════════════════════════",
+  "chore_approved_assignee": {
+    "title": "🎉 Klusje goedgekeurd!",
+    "message": "{chore_name} goedgekeurd! Je hebt {points} {points_label} verdiend"
+  },
+  "chore_disapproved_assignee": {
+    "title": "↩️ Werkzaamheden teruggegeven",
+    "message": "{chore_name} heeft meer werk nodig."
+  },
+  "chore_overdue_assignee": {
+    "title": "⏰ Klus die al lang had moeten worden uitgevoerd",
+    "message": "{chore_name} is te laat! Voltooi het nu om {points} te verdienen {points_label}"
+  },
+  "chore_overdue_steal_available": {
+    "title": "⚡ Huishoudelijke taken-melding",
+    "message": "{chore_name} is te laat en kan gestolen worden! Voltooi het eerst om {points} te verdienen. {points_label}"
+  },
+  "chore_missed_assignee": {
+    "title": "😔 Taak verlopen",
+    "message": "{chore_name} is verlopen zonder te worden voltooid."
+  },
+  "chore_due_reminder_assignee": {
+    "title": "⏰ Herinnering aan huishoudelijke taken",
+    "message": "{chore_name} moet over {minutes} minuten betaald worden! Waarde {points} {points_label}"
+  },
+  "chore_due_window_assignee": {
+    "title": "🎯 Klus die nu af moet",
+    "message": "{chore_name} moet nu ingeleverd worden! Voltooi binnen {hours} uur om {points} te verdienen {points_label}"
+  },
+  "chore_approved_assignee_no_points": {
+    "message": "{chore_name} goedgekeurd!"
+  },
+  "chore_overdue_assignee_no_points": {
+    "message": "{chore_name} is te laat! Maak het nu af!"
+  },
+  "chore_overdue_steal_available_no_points": {
+    "message": "{chore_name} is te laat en kan gestolen worden! Voltooi het eerst!"
+  },
+  "chore_standby_needed_no_points": {
+    "message": "De taak van {primary_name} {chore_name} is al lang geleden voltooid! Claim hem nu!"
+  },
+  "chore_due_reminder_assignee_no_points": {
+    "message": "{chore_name} is over {minutes} minuten verschuldigd!"
+  },
+  "chore_due_window_assignee_no_points": {
+    "message": "{chore_name} moet nu ingeleverd worden! Voltooi binnen {hours} uur(en)"
+  },
+  "reward_approved_assignee": {
+    "title": "🎉 Beloning goedgekeurd!",
+    "message": "{reward_name} goedgekeurd!"
+  },
+  "reward_disapproved_assignee": {
+    "title": "💭 Beloningsverzoek ontvangen",
+    "message": "{reward_name} werd deze keer niet goedgekeurd."
+  },
+  "badge_earned_assignee": {
+    "title": "🥇 Badge verdiend!",
+    "message": "Je hebt de {badge_name} badge verdiend!"
+  },
+  "achievement_earned_assignee": {
+    "title": "🏆 Prestatie behaald!",
+    "message": "Je hebt {achievement_name}verdiend! Ga zo door!"
+  },
+  "challenge_completed_assignee": {
+    "title": "🏁 Uitdaging voltooid!",
+    "message": "Je hebt {challenge_name}voltooid! Ga zo door!"
+  },
+  "penalty_applied_assignee": {
+    "title": "⚠️ Straf opgelegd",
+    "message": "{penalty_name}: {points} {points_label} afgetrokken. Laten we weer verder gaan!"
+  },
+  "bonus_applied_assignee": {
+    "title": "⭐ Bonus toegepast!",
+    "message": "{bonus_name}: Je hebt {points} bonus {points_label}verdiend! Goed gedaan!"
+  },
+  "multiplier_changed_assignee": {
+    "title": "⚖️ Vermenigvuldiger bijgewerkt",
+    "message": "Je {points_label} -vermenigvuldiger is veranderd van {old_multiplier}x naar {new_multiplier}x"
+  },
+  "_comment_approver_section": "═════════════════════════════════════════════════════════════════",
+  "_comment_approver_desc": "MELDINGEN VAN GOEDKEURERS: Informatief, in de derde persoon, uitvoerbaar. Formaat: '{assignee_name}: Actie'. GEEN 'ChoreOps:'-voorvoegsel.",
+  "_comment_approver_footer": "═════════════════════════════════════════════════════════════════",
+  "chore_claimed_approver": {
+    "title": "✋ {assignee_name}: Taak opgeëist",
+    "message": "{assignee_name} beweerde {chore_name}"
+  },
+  "chore_reminder_approver": {
+    "title": "⏰ {assignee_name}: Goedkeuring vereist",
+    "message": "Herinnering: {chore_name} geclaimd door {assignee_name} wacht op jouw beoordeling"
+  },
+  "chore_overdue_approver": {
+    "title": "⚠️ {assignee_name}: Klus die al lang had moeten worden gedaan",
+    "message": "De klus van {assignee_name} {chore_name} is te laat (te doen: {due_date})"
+  },
+  "pending_chores_approver": {
+    "title": "📋 {assignee_name}: {count} In afwachting",
+    "message": "{count} taken die nog beoordeeld moeten worden. Laatste: {latest_chore} (+{points} {points_label})"
+  },
+  "pending_chores_approver_no_points": {
+    "message": "{count} taken die nog beoordeeld moeten worden. Laatste: {latest_chore}"
+  },
+  "reward_claimed_approver": {
+    "title": "🎁 {assignee_name}: Beloningsverzoek",
+    "message": "{assignee_name} heeft {reward_name} aangevraagd voor {points} {points_label}"
+  },
+  "reward_reminder_approver": {
+    "title": "⏰ {assignee_name}: Beloning in afwachting",
+    "message": "Herinnering: {reward_name} aangevraagd door {assignee_name} wacht op uw goedkeuring"
+  },
+  "badge_earned_approver": {
+    "title": "🥇 {assignee_name}: Badge verdiend",
+    "message": "{assignee_name} heeft de {badge_name} badge verdiend!"
+  },
+  "achievement_earned_approver": {
+    "title": "🏆 {assignee_name}: Prestatie",
+    "message": "{assignee_name} verdiende {achievement_name}"
+  },
+  "challenge_completed_approver": {
+    "title": "🏁 {assignee_name}: Uitdaging voltooid",
+    "message": "{assignee_name} voltooid {challenge_name}"
+  },
+  "multiplier_changed_approver": {
+    "title": "⚖️ {assignee_name}: Vermenigvuldiger bijgewerkt",
+    "message": "{assignee_name}'s {points_label} multiplier changed from {old_multiplier}x to {new_multiplier}x"
+  },
+  "_comment_system_section": "═════════════════════════════════════════════════════════════════",
+  "_comment_system_desc": "SYSTEEM-/BEHEERMELDINGEN: Gegevensbeheerbewerkingen",
+  "_comment_system_footer": "═════════════════════════════════════════════════════════════════",
+  "data_reset": {
+    "title": "🔄 ChoreOps: Gegevens resetten",
+    "message": "De systeemgegevens zijn gereset."
+  },
+  "data_reset_global": {
+    "title": "🔄 ChoreOps: Volledige reset",
+    "message": "Alle systeemgegevens zijn teruggezet naar de standaardinstellingen."
+  },
+  "data_reset_assignee": {
+    "title": "🔄 ChoreOps: Toegewezen persoon resetten",
+    "message": "Gegevens gereset voor {assignee_name}"
+  },
+  "data_reset_item_type": {
+    "title": "🔄 ChoreOps: {item_type} Reset",
+    "message": "Alle {item_type} -gegevens zijn gereset."
+  },
+  "data_reset_item": {
+    "title": "🔄 ChoreOps: Item resetten",
+    "message": "{item_type} '{item_name}' is gereset"
+  },
+  "_comment_actions_section": "═════════════════════════════════════════════════════════════════",
+  "_comment_actions_desc": "ACTIEKNOPPEN VOOR MELDINGEN: Zachtere, meer aanmoedigende taal",
+  "_comment_actions_footer": "═════════════════════════════════════════════════════════════════",
+  "actions": {
+    "approve": "✅ Goedkeuren",
+    "claim": "✋ Het is me gelukt!",
+    "complete": "✅ Compleet",
+    "disapprove": "↩️ Afkeuren",
+    "remind_30": "⏰ Herinnering over 30 minuten",
+    "skip": "⏭️ Overslaan"
+  },
+  "chore_standby_needed": {
+    "title": "🫲 Standby aangevraagd",
+    "message": "De taak van {primary_name} {chore_name} is al lang geleden voltooid! Claim hem nu om {points} {points_label} te verdienen!"
+  }
+}
