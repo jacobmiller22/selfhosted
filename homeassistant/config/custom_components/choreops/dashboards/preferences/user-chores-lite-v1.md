@@ -1,0 +1,165 @@
+# user-chores-lite-v1 preferences
+
+`user-chores-lite-v1` is a dynamic lightweight profile intended for older devices and lower-capability frontend environments. It keeps the ChoreOps dashboard-helper sorting and grouping intelligence while using native Home Assistant cards for the visible UI.
+
+## Scale note
+
+- This template supports both inline and shard-backed chore transport.
+- It remains lightweight in the frontend, so it may be a better fit than the richer templates when chore counts grow.
+- It is still intended as a compact profile rather than the most feature-rich dashboard, but it can be used beyond the `20-40` inline-only range when the integration switches to shard-backed chore helpers.
+
+## Quick overview
+
+- Dynamic by design: chores and rewards are still generated from the dashboard helper at runtime.
+- Native-card first: the rendered UI uses native `markdown` and `tile` cards.
+- Lower-risk interaction model: tap triggers one selected workflow button; hold opens more-info for the related status sensor.
+- Focused layout: exactly three top-level cards are rendered for the user view: header, chores, and rewards.
+
+## Dependency policy
+
+- Required custom dependency: `auto-entities`
+- Explicitly not used by this profile:
+  - `button-card`
+  - Mushroom cards
+  - `card-mod`
+
+## Header card behavior
+
+- Shows a welcome summary using translated labels.
+- Includes chore-oriented summary counts such as overdue and due today.
+- Shows points only when gamification is enabled.
+- Does **not** include reward status or reward summary counts.
+- Universal points precision
+  - This template now reads the resolved precision mode from the assignee dashboard helper contract instead of a local `pref_points_precision` variable.
+  - The source of truth is the ChoreOps General Options setting surfaced as `dashboard_config.points_precision`.
+  - `fixed_0` remains the fallback when the helper value is missing during transition.
+
+## Card: Chores
+
+### Time Buckets
+
+- `pref_use_overdue_grouping` (default: `true`)
+  - Shows a dedicated overdue group.
+
+- `pref_today_grouping_mode` (default: `today_morning`)
+  - Controls whether today chores are grouped into one or two buckets.
+  - Allowed: `off`, `today`, `today_morning`.
+
+- `pref_include_daily_recurring_in_today` (default: `true`)
+  - Keeps no-due-date recurring daily chores in today groups.
+  - Dated chores, overdue chores, and label-grouped chores are unaffected.
+
+- `pref_use_this_week_grouping` (default: `true`)
+  - Shows a due-this-week group.
+
+### Exclude Filters
+
+- `pref_exclude_completed` (default: `false`)
+  - Hides completed chores.
+
+- `pref_exclude_blocked` (default: `false`)
+  - Hides blocked-result chores.
+  - Adds `completed_by_other`, `not_my_turn`, `paused`, `missed`, and `standby` to the effective exclusion list.
+  - Claimable standbys (`can_claim`) are still shown; only standbys unavailable for claim are hidden.
+
+- `pref_exclude_states` (default: `[]`)
+  - Excludes chores by state.
+
+- `pref_exclude_nonrecurring_no_due_date` (default: `false`)
+  - Hides chores that are both non-recurring and missing a due date.
+  - Daily chores without a due date are not affected.
+  - Allowed: `true`, `false`.
+
+- `pref_max_due_date_days` (default: `0`)
+  - Hides chores whose due date is more than this many days ahead.
+  - Applies only to chores that have a due date.
+  - `0` disables the filter.
+  - Allowed: `0` or a positive integer.
+
+- `pref_exclude_group_list` (default: `[]`)
+  - Excludes one or more rendered chore groups from the card.
+  - Allowed values: `overdue`, `today_morning`, `today`, `this_week`, `later`.
+  - Exclusions apply after the dashboard resolves which groups exist.
+  - If a listed group does not exist in the current configuration, it is ignored.
+  - Example: `['later']` hides the Later bucket.
+  - Example: `['later', 'this_week']` hides the Later and Due This Week buckets.
+  - In `today_morning` mode, excluding `today` hides only the later-today bucket. Exclude both `today_morning` and `today` to hide all today chores.
+
+- `pref_exclude_label_list` (default: `[]`)
+  - Excludes chores containing any listed labels.
+
+### Include Filters
+
+Include filters run before all other filtering (Step 0 priority). When set, only chores matching the criteria are processed — all non-matching chores are skipped before exclude checks run.
+
+- `pref_include_label_list` (default: `[]`)
+  - Only includes chores that have at least one matching label. Higher priority than `pref_exclude_label_list`.
+  - Example: `['shared_chores', 'kitchen']` only shows chores tagged with either label.
+  - Allowed: array of label strings.
+
+- `pref_include_group_list` (default: `[]`)
+  - Only includes chores whose scheduled time bucket is in the list. Higher priority than `pref_exclude_group_list`.
+  - Allowed values: `today`, `this_week`, `other`.
+  - `today` includes due-today and overdue chores (both have `primary_group: today`).
+  - `this_week` includes chores due this week.
+  - `other` includes later-dated chores (maps to the Later bucket).
+  - Example: `['today', 'this_week']` only shows chores due today or this week.
+  - Example: `['other']` only shows later-dated chores.
+  - Use `pref_exclude_states: ['overdue']` alongside `today` to hide overdue chores.
+
+- `pref_include_state_list` (default: `[]`)
+  - Only includes chores whose current state is in the list. Higher priority than `pref_exclude_states`.
+  - Example: `['pending', 'due']` only shows pending and due chores.
+  - Allowed: array of lowercase state strings.
+
+### Labels & Sorting
+
+- `pref_use_label_grouping` (default: `false`)
+  - Groups chores by labels instead of time buckets.
+
+- `pref_label_display_order` (default: `[]`)
+  - Optional explicit label-group order.
+
+- `pref_sort_within_groups` (default: `by_state_and_date`)
+  - Sorting mode inside each rendered group.
+  - Allowed: `default`, `name_asc`, `name_desc`, `date_asc`, `date_desc`, `by_state_and_date`.
+
+## Chore action selection
+
+The lite profile uses one tap action per chore tile.
+
+- Default priority:
+  - `claim_button_eid`
+  - then `approve_button_eid`
+- Claimed/in-progress priority:
+  - `disapprove_button_eid`
+  - then `approve_button_eid`
+- Hold action opens more-info on the chore status sensor.
+
+## Rewards card behavior
+
+- Reward state is shown on the reward tile itself rather than repeated in the header.
+- Rewards are grouped into `Available`, `Requested`, `Approved`, and `Locked` sections.
+- Empty reward state uses the translated `no_rewards` copy.
+
+## Reward action selection
+
+The lite profile uses one tap action per reward tile.
+
+- Default priority:
+  - `claim_button_eid`
+  - then `approve_button_eid`
+- Requested priority:
+  - `disapprove_button_eid`
+  - then `approve_button_eid`
+- Hold action opens more-info on the reward status sensor.
+
+## Practical tuning examples
+
+- Keep the light default behavior: change nothing and let the helper-provided sorting do the work.
+- Hide completed chores: set `pref_exclude_completed: true`.
+- Hide blocked-result chores on shared/rotation heavy installs: set `pref_exclude_blocked: true`.
+- Hide unscheduled one-off chores: set `pref_exclude_nonrecurring_no_due_date: true`.
+- Hide long-range future chores: set `pref_max_due_date_days: 7`.
+- Hide the Later section: set `pref_exclude_group_list: ['later']`.
+- Prefer label buckets over time buckets: set `pref_use_label_grouping: true` and provide `pref_label_display_order`.

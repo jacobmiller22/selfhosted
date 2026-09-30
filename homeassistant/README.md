@@ -125,6 +125,8 @@ homeassistant/
     ├── scripts.yaml       # UI & manual scripts storage
     ├── scenes.yaml        # UI & manual scenes storage
     ├── secrets.yaml       # (Created on demand) Sensitive passwords/keys
+    ├── custom_components/ # Custom integrations
+    │   └── choreops/     # ChoreOps household operations platform
     └── .storage/          # Internal state managed by Home Assistant UI (git-ignored)
 ```
 
@@ -148,3 +150,18 @@ homeassistant/
   ```bash
   docker compose down
   ```
+
+---
+
+## 5. ChoreOps Integration Guide
+
+**ChoreOps** (`https://github.com/ccpk1/choreops`) is a household operations and gamification platform for Home Assistant.
+
+### Configuration Steps:
+1. Open Home Assistant at `https://ha.cloud.jacobmiller22.com`.
+2. Go to **Settings** -> **Devices & Services**.
+3. Click **Add Integration** in the bottom right corner.
+4. Search for **ChoreOps** and select it.
+5. Follow the configuration flow to define household profiles, chores, point systems, schedules, and dashboards.
+6. Dashboards and cards are created automatically by the ChoreOps integration without requiring manual YAML configuration.
+

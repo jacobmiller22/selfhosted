@@ -1,0 +1,167 @@
+{
+  "_comment_assignee_section": "══════════════════════════════════════════════════════════════════",
+  "_comment_assignee_desc": "ASSIGNEE NOTIFICATIONS: Gamified, second-person, encouraging tone with emojis. NO 'ChoreOps:' prefix.",
+  "_comment_assignee_footer": "══════════════════════════════════════════════════════════════════",
+  "chore_approved_assignee": {
+    "title": "🎉 Chore Approved!",
+    "message": "{chore_name} approved! You earned {points} {points_label}"
+  },
+  "chore_disapproved_assignee": {
+    "title": "↩️ Chore Returned",
+    "message": "{chore_name} needs more work."
+  },
+  "chore_overdue_assignee": {
+    "title": "⏰ Chore Overdue",
+    "message": "{chore_name} is overdue! Complete it now to earn {points} {points_label}"
+  },
+  "chore_overdue_steal_available": {
+    "title": "⚡ Chore Alert",
+    "message": "{chore_name} is overdue and available to steal! Complete it first to earn {points} {points_label}"
+  },
+  "chore_missed_assignee": {
+    "title": "😔 Chore Expired",
+    "message": "{chore_name} expired without completion."
+  },
+  "chore_due_reminder_assignee": {
+    "title": "⏰ Chore Reminder",
+    "message": "{chore_name} is due in {minutes} minutes! Worth {points} {points_label}"
+  },
+  "chore_due_window_assignee": {
+    "title": "🎯 Chore Now Due",
+    "message": "{chore_name} is now due! Complete within {hours} hour(s) to earn {points} {points_label}"
+  },
+  "chore_approved_assignee_no_points": {
+    "message": "{chore_name} approved!"
+  },
+  "chore_overdue_assignee_no_points": {
+    "message": "{chore_name} is overdue! Complete it now"
+  },
+  "chore_overdue_steal_available_no_points": {
+    "message": "{chore_name} is overdue and available to steal! Complete it first"
+  },
+  "chore_standby_needed_no_points": {
+    "message": "{primary_name}'s chore {chore_name} is overdue! Claim it now"
+  },
+  "chore_due_reminder_assignee_no_points": {
+    "message": "{chore_name} is due in {minutes} minutes!"
+  },
+  "chore_due_window_assignee_no_points": {
+    "message": "{chore_name} is now due! Complete within {hours} hour(s)"
+  },
+  "reward_approved_assignee": {
+    "title": "🎉 Reward Approved!",
+    "message": "{reward_name} approved!"
+  },
+  "reward_disapproved_assignee": {
+    "title": "💭 Reward Request Returned",
+    "message": "{reward_name} wasn't approved this time."
+  },
+  "badge_earned_assignee": {
+    "title": "🥇 Badge Earned!",
+    "message": "You earned the {badge_name} badge!"
+  },
+  "achievement_earned_assignee": {
+    "title": "🏆 Achievement Earned!",
+    "message": "You earned {achievement_name}! Keep up the great work"
+  },
+  "challenge_completed_assignee": {
+    "title": "🏁 Challenge Complete!",
+    "message": "You completed {challenge_name}! Keep up the great work"
+  },
+  "penalty_applied_assignee": {
+    "title": "⚠️ Penalty Applied",
+    "message": "{penalty_name}: {points} {points_label} deducted. Let's get back on track!"
+  },
+  "bonus_applied_assignee": {
+    "title": "⭐ Bonus Applied!",
+    "message": "{bonus_name}: You earned {points} bonus {points_label}! Great job"
+  },
+  "multiplier_changed_assignee": {
+    "title": "⚖️ Multiplier Updated",
+    "message": "Your {points_label} multiplier changed from {old_multiplier}x to {new_multiplier}x"
+  },
+  "_comment_approver_section": "══════════════════════════════════════════════════════════════════",
+  "_comment_approver_desc": "APPROVER NOTIFICATIONS: Informative, third-person, actionable. Format: '{assignee_name}: Action'. NO 'ChoreOps:' prefix.",
+  "_comment_approver_footer": "══════════════════════════════════════════════════════════════════",
+  "chore_claimed_approver": {
+    "title": "✋ {assignee_name}: Chore Claimed",
+    "message": "{assignee_name} claimed {chore_name}"
+  },
+  "chore_reminder_approver": {
+    "title": "⏰ {assignee_name}: Approval Needed",
+    "message": "Reminder: {chore_name} claimed by {assignee_name} is waiting for your review"
+  },
+  "chore_overdue_approver": {
+    "title": "⚠️ {assignee_name}: Chore Overdue",
+    "message": "{assignee_name}'s chore {chore_name} is overdue (due: {due_date})"
+  },
+  "pending_chores_approver": {
+    "title": "📋 {assignee_name}: {count} Pending",
+    "message": "{count} chores awaiting review. Latest: {latest_chore} (+{points} {points_label})"
+  },
+  "pending_chores_approver_no_points": {
+    "message": "{count} chores awaiting review. Latest: {latest_chore}"
+  },
+  "reward_claimed_approver": {
+    "title": "🎁 {assignee_name}: Reward Request",
+    "message": "{assignee_name} requested {reward_name} for {points} {points_label}"
+  },
+  "reward_reminder_approver": {
+    "title": "⏰ {assignee_name}: Reward Pending",
+    "message": "Reminder: {reward_name} requested by {assignee_name} is waiting for your approval"
+  },
+  "badge_earned_approver": {
+    "title": "🥇 {assignee_name}: Badge Earned",
+    "message": "{assignee_name} earned the {badge_name} badge!"
+  },
+  "achievement_earned_approver": {
+    "title": "🏆 {assignee_name}: Achievement",
+    "message": "{assignee_name} earned {achievement_name}"
+  },
+  "challenge_completed_approver": {
+    "title": "🏁 {assignee_name}: Challenge Done",
+    "message": "{assignee_name} completed {challenge_name}"
+  },
+  "multiplier_changed_approver": {
+    "title": "⚖️ {assignee_name}: Multiplier Updated",
+    "message": "{assignee_name}'s {points_label} multiplier changed from {old_multiplier}x to {new_multiplier}x"
+  },
+  "_comment_system_section": "══════════════════════════════════════════════════════════════════",
+  "_comment_system_desc": "SYSTEM/ADMIN NOTIFICATIONS: Data management operations",
+  "_comment_system_footer": "══════════════════════════════════════════════════════════════════",
+  "data_reset": {
+    "title": "🔄 ChoreOps: Data Reset",
+    "message": "System data has been reset"
+  },
+  "data_reset_global": {
+    "title": "🔄 ChoreOps: Full Reset",
+    "message": "All system data has been reset to defaults"
+  },
+  "data_reset_assignee": {
+    "title": "🔄 ChoreOps: Assignee Reset",
+    "message": "Data reset for {assignee_name}"
+  },
+  "data_reset_item_type": {
+    "title": "🔄 ChoreOps: {item_type} Reset",
+    "message": "All {item_type} data has been reset"
+  },
+  "data_reset_item": {
+    "title": "🔄 ChoreOps: Item Reset",
+    "message": "{item_type} '{item_name}' has been reset"
+  },
+  "_comment_actions_section": "══════════════════════════════════════════════════════════════════",
+  "_comment_actions_desc": "NOTIFICATION ACTION BUTTONS: Softer, more encouraging language",
+  "_comment_actions_footer": "══════════════════════════════════════════════════════════════════",
+  "actions": {
+    "approve": "✅ Approve",
+    "claim": "✋ I Did It!",
+    "complete": "✅ Complete",
+    "disapprove": "↩️ Disapprove",
+    "remind_30": "⏰ Remind in 30m",
+    "skip": "⏭️ Skip"
+  },
+  "chore_standby_needed": {
+    "title": "🫲 Standby Requested",
+    "message": "{primary_name}'s chore {chore_name} is overdue! Claim it now to earn {points} {points_label}"
+  }
+}

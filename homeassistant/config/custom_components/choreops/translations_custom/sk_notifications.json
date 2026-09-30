@@ -1,0 +1,167 @@
+{
+  "_comment_assignee_section": "══════════════════════════════════════════════════════════════════════════",
+  "_comment_assignee_desc": "OZNÁMENIA PRE PRIDELENÉHO PRÍJEMCU: Gamifikovaný, v druhej osobe, povzbudzujúci tón s emotikonmi. BEZ predpony „ChoreOps:“.",
+  "_comment_assignee_footer": "══════════════════════════════════════════════════════════════════════════",
+  "chore_approved_assignee": {
+    "title": "🎉 Domáca úloha schválená!",
+    "message": "{chore_name} schválené! Získali ste {points} {points_label}"
+  },
+  "chore_disapproved_assignee": {
+    "title": "↩️ Vrátená práca",
+    "message": "{chore_name} si vyžaduje viac práce."
+  },
+  "chore_overdue_assignee": {
+    "title": "⏰ Domáca práca po termíne",
+    "message": "{chore_name} je už naplánované! Dokončite ho teraz a získajte {points} {points_label}"
+  },
+  "chore_overdue_steal_available": {
+    "title": "⚡ Upozornenie na domáce práce",
+    "message": "{chore_name} je po termíne a je k dispozícii na ukradnutie! Najprv ho dokončite a získajte {points} {points_label}"
+  },
+  "chore_missed_assignee": {
+    "title": "😔 Platnosť úlohy vypršala",
+    "message": "{chore_name} platnosť vypršala bez dokončenia."
+  },
+  "chore_due_reminder_assignee": {
+    "title": "⏰ Pripomienka domácich prác",
+    "message": "{chore_name} je splatné o {minutes} minút! Hodnota {points} {points_label}"
+  },
+  "chore_due_window_assignee": {
+    "title": "🎯 Domáca úloha teraz na splatenie",
+    "message": "{chore_name} je teraz splatné! Dokončite do {hours} hodiny a získajte {points} {points_label}"
+  },
+  "chore_approved_assignee_no_points": {
+    "message": "{chore_name} schválené!"
+  },
+  "chore_overdue_assignee_no_points": {
+    "message": "{chore_name} je oneskorený! Dokončite ho teraz"
+  },
+  "chore_overdue_steal_available_no_points": {
+    "message": "{chore_name} je po termíne a je k dispozícii na krádež! Dokončite ho ako prvý"
+  },
+  "chore_standby_needed_no_points": {
+    "message": "Úloha od {primary_name} {chore_name} je oneskorená! Vyzdvihnite si ju teraz"
+  },
+  "chore_due_reminder_assignee_no_points": {
+    "message": "{chore_name} je splatné o {minutes} minút!"
+  },
+  "chore_due_window_assignee_no_points": {
+    "message": "{chore_name} je teraz splatné! Dokončite do {hours} hodiny"
+  },
+  "reward_approved_assignee": {
+    "title": "🎉 Odmena schválená!",
+    "message": "{reward_name} schválené!"
+  },
+  "reward_disapproved_assignee": {
+    "title": "💭 Žiadosť o odmenu vrátená",
+    "message": "{reward_name} tentoraz nebol schválený."
+  },
+  "badge_earned_assignee": {
+    "title": "🥇 Odznak získaný!",
+    "message": "Získali ste odznak {badge_name}!"
+  },
+  "achievement_earned_assignee": {
+    "title": "🏆 Získaný úspech!",
+    "message": "Získali ste {achievement_name}! Len tak ďalej!"
+  },
+  "challenge_completed_assignee": {
+    "title": "🏁 Výzva splnená!",
+    "message": "Dokončili ste {challenge_name}! Len tak ďalej!"
+  },
+  "penalty_applied_assignee": {
+    "title": "⚠️ Uplatnená pokuta",
+    "message": "{penalty_name}: {points} {points_label} odpočítané. Vráťme sa na správnu cestu!"
+  },
+  "bonus_applied_assignee": {
+    "title": "⭐ Bonus bol uplatnený!",
+    "message": "{bonus_name}: Získali ste bonus {points} {points_label}! Skvelá práca"
+  },
+  "multiplier_changed_assignee": {
+    "title": "⚖️ Aktualizovaný multiplikátor",
+    "message": "Váš multiplikátor {points_label} sa zmenil z {old_multiplier}x na {new_multiplier}x"
+  },
+  "_comment_approver_section": "══════════════════════════════════════════════════════════════════════════",
+  "_comment_approver_desc": "OZNÁMENIA SCHVÁĽOVATEĽA: Informatívne, v tretej osobe, akčné. Formát: '{assignee_name}: Akcia'. BEZ predpony 'ChoreOps:'.",
+  "_comment_approver_footer": "══════════════════════════════════════════════════════════════════════════",
+  "chore_claimed_approver": {
+    "title": "✋ {assignee_name}: Domáca práca nárokovaná",
+    "message": "{assignee_name} nárokované {chore_name}"
+  },
+  "chore_reminder_approver": {
+    "title": "⏰ {assignee_name}: Vyžaduje sa schválenie",
+    "message": "Pripomienka: {chore_name} nárokovaný používateľom {assignee_name} čaká na vašu recenziu"
+  },
+  "chore_overdue_approver": {
+    "title": "⚠️ {assignee_name}: Domáca úloha oneskorená",
+    "message": "Úloha používateľa {assignee_name} {chore_name} je oneskorená (termín: {due_date})"
+  },
+  "pending_chores_approver": {
+    "title": "📋 {assignee_name}: {count} Čaká sa",
+    "message": "{count} domáce práce čakajúce na kontrolu. Najnovšie: {latest_chore} (+{points} {points_label})"
+  },
+  "pending_chores_approver_no_points": {
+    "message": "{count} domáce práce čakajúce na kontrolu. Najnovšie: {latest_chore}"
+  },
+  "reward_claimed_approver": {
+    "title": "🎁 {assignee_name}: Žiadosť o odmenu",
+    "message": "{assignee_name} požiadal o {reward_name} pre {points} {points_label}"
+  },
+  "reward_reminder_approver": {
+    "title": "⏰ {assignee_name}: Odmena čaká na vyplatenie",
+    "message": "Pripomienka: {reward_name} požadovaná používateľom {assignee_name} čaká na vaše schválenie"
+  },
+  "badge_earned_approver": {
+    "title": "🥇 {assignee_name}: Odznak získaný",
+    "message": "{assignee_name} získal odznak {badge_name}!"
+  },
+  "achievement_earned_approver": {
+    "title": "🏆 {assignee_name}: Úspech",
+    "message": "{assignee_name} zarobené {achievement_name}"
+  },
+  "challenge_completed_approver": {
+    "title": "🏁 {assignee_name}: Výzva splnená",
+    "message": "{assignee_name} dokončené {challenge_name}"
+  },
+  "multiplier_changed_approver": {
+    "title": "⚖️ {assignee_name}: Multiplikátor bol aktualizovaný",
+    "message": "{assignee_name}'s {points_label} multiplier changed from {old_multiplier}x to {new_multiplier}x"
+  },
+  "_comment_system_section": "══════════════════════════════════════════════════════════════════════════",
+  "_comment_system_desc": "SYSTÉMOVÉ/ADMINISTRÁTORSKÉ OZNÁMENIA: Operácie správy údajov",
+  "_comment_system_footer": "══════════════════════════════════════════════════════════════════════════",
+  "data_reset": {
+    "title": "🔄 ChoreOps: Obnovenie údajov",
+    "message": "Systémové údaje boli resetované"
+  },
+  "data_reset_global": {
+    "title": "🔄 Doprava: Úplný reset",
+    "message": "Všetky systémové údaje boli obnovené na predvolené hodnoty"
+  },
+  "data_reset_assignee": {
+    "title": "🔄 Údržba: Obnovenie poverenia",
+    "message": "Obnovenie údajov pre {assignee_name}"
+  },
+  "data_reset_item_type": {
+    "title": "🔄 Údržba: {item_type} Obnoviť",
+    "message": "Všetky údaje {item_type} boli resetované"
+  },
+  "data_reset_item": {
+    "title": "🔄 Domáce práce: Obnovenie položky",
+    "message": "{item_type} '{item_name}' bolo resetované"
+  },
+  "_comment_actions_section": "══════════════════════════════════════════════════════════════════════════",
+  "_comment_actions_desc": "TLAČIDLÁ AKCIÍ OZNÁMENÍ: Jemnejší a povzbudivejší jazyk",
+  "_comment_actions_footer": "══════════════════════════════════════════════════════════════════════════",
+  "actions": {
+    "approve": "✅ Schváliť",
+    "claim": "✋ Zvládol som to!",
+    "complete": "✅ Dokončené",
+    "disapprove": "↩️ Neschváliť",
+    "remind_30": "⏰ Pripomenúť o 30 minút",
+    "skip": "⏭️ Preskočiť"
+  },
+  "chore_standby_needed": {
+    "title": "🫲 Požadovaná pohotovosť",
+    "message": "Úloha {primary_name} {chore_name} je už načase! Vyzdvihnite si ju teraz a získajte {points} {points_label}"
+  }
+}

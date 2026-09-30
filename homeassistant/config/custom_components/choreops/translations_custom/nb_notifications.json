@@ -1,0 +1,167 @@
+{
+  "_comment_assignee_section": "═════════════════════════════════════════════════════════════════════════════════════",
+  "_comment_assignee_desc": "VARSLER TIL TILORDNERE: Spillbasert, andrepersons, oppmuntrende tone med emojier. INGEN «ChoreOps:»-prefiks.",
+  "_comment_assignee_footer": "═════════════════════════════════════════════════════════════════════════════════════",
+  "chore_approved_assignee": {
+    "title": "🎉 Godkjent gjøremål!",
+    "message": "{chore_name} godkjent! Du har oppnådd {points} {points_label}"
+  },
+  "chore_disapproved_assignee": {
+    "title": "↩️ Gjøremål er ikke godkjent",
+    "message": "{chore_name} trenger mer arbeid."
+  },
+  "chore_overdue_assignee": {
+    "title": "⏰ Forfalt gjøremål",
+    "message": "{chore_name} er for sent ute! Fullfør nå for å tjene {points} {points_label}"
+  },
+  "chore_overdue_steal_available": {
+    "title": "⚡ Varsel om husarbeid",
+    "message": "{chore_name} er for sent ute og tilgjengelig for å stjele! Fullfør den først for å tjene {points} {points_label}"
+  },
+  "chore_missed_assignee": {
+    "title": "😔 Gjøremål utløpt",
+    "message": "{chore_name} utløp uten fullføring."
+  },
+  "chore_due_reminder_assignee": {
+    "title": "⏰ Påminnelse om gjøremål",
+    "message": "{chore_name} forfaller om {minutes} minutter! Verdt {points} {points_label}"
+  },
+  "chore_due_window_assignee": {
+    "title": "🎯 Gjøremål forfaller nå",
+    "message": "{chore_name} forfaller nå! Fullfør innen {hours} time(r) for å tjene {points} {points_label}"
+  },
+  "chore_approved_assignee_no_points": {
+    "message": "{chore_name} godkjent!"
+  },
+  "chore_overdue_assignee_no_points": {
+    "message": "{chore_name} er for sent ute! Fullfør nå"
+  },
+  "chore_overdue_steal_available_no_points": {
+    "message": "{chore_name} er for sent ute og tilgjengelig for å stjeles! Fullfør den først"
+  },
+  "chore_standby_needed_no_points": {
+    "message": "{primary_name}s gjøremål {chore_name} er for sent! Hent det nå"
+  },
+  "chore_due_reminder_assignee_no_points": {
+    "message": "{chore_name} forfaller om {minutes} minutter!"
+  },
+  "chore_due_window_assignee_no_points": {
+    "message": "{chore_name} forfaller nå! Fullfør innen {hours} time(r)"
+  },
+  "reward_approved_assignee": {
+    "title": "🎉 Belønning godkjent!",
+    "message": "{reward_name} godkjent!"
+  },
+  "reward_disapproved_assignee": {
+    "title": "💭 Belønningsforespørsel returnert",
+    "message": "{reward_name} ble ikke godkjent denne gangen."
+  },
+  "badge_earned_assignee": {
+    "title": "🥇 Merke opptjent!",
+    "message": "Du har fortjent {badge_name} -merket!"
+  },
+  "achievement_earned_assignee": {
+    "title": "🏆 Prestasjon oppnådd!",
+    "message": "Du fortjente {achievement_name}! Fortsett det gode arbeidet"
+  },
+  "challenge_completed_assignee": {
+    "title": "🏁 Utfordring fullført!",
+    "message": "Du fullførte {challenge_name}! Fortsett det gode arbeidet."
+  },
+  "penalty_applied_assignee": {
+    "title": "⚠️ Straff ilagt",
+    "message": "{penalty_name}: {points} {points_label} trukket fra. La oss komme tilbake på sporet!"
+  },
+  "bonus_applied_assignee": {
+    "title": "⭐ Bonus benyttet!",
+    "message": "{bonus_name}: Du har tjent {points} bonus {points_label}! Bra jobbet"
+  },
+  "multiplier_changed_assignee": {
+    "title": "⚖️ Multiplikator oppdatert",
+    "message": "Multiplikatoren din {points_label} er endret fra {old_multiplier}x til {new_multiplier}x"
+  },
+  "_comment_approver_section": "═════════════════════════════════════════════════════════════════════════════════════",
+  "_comment_approver_desc": "GODKJENNERVARSLER: Informativ, tredjeperson, handlingsrettet. Format: '{assignee_name}: Handling'. INGEN 'ChoreOps:' prefiks.",
+  "_comment_approver_footer": "═════════════════════════════════════════════════════════════════════════════════════",
+  "chore_claimed_approver": {
+    "title": "✋ {assignee_name}: Gjøremål gjort krav på",
+    "message": "{assignee_name} gjorde krav på {chore_name}"
+  },
+  "chore_reminder_approver": {
+    "title": "⏰ {assignee_name}: Godkjenning kreves",
+    "message": "Påminnelse: {chore_name} gjort krav på av {assignee_name} venter på din anmeldelse"
+  },
+  "chore_overdue_approver": {
+    "title": "⚠️ {assignee_name}: Forfalt husarbeid",
+    "message": "{assignee_name}sitt gjøremål {chore_name} er forfalt (forfaller: {due_date})"
+  },
+  "pending_chores_approver": {
+    "title": "📋 {assignee_name}: {count} Venter",
+    "message": "{count} gjøremål venter på gjennomgang. Siste: {latest_chore} (+{points} {points_label})"
+  },
+  "pending_chores_approver_no_points": {
+    "message": "{count} gjøremål venter på gjennomgang. Siste: {latest_chore}"
+  },
+  "reward_claimed_approver": {
+    "title": "🎁 {assignee_name}: Belønningsforespørsel",
+    "message": "{assignee_name} ba om {reward_name} for {points} {points_label}"
+  },
+  "reward_reminder_approver": {
+    "title": "⏰ {assignee_name}: Belønning venter",
+    "message": "Påminnelse: {reward_name} forespurt av {assignee_name} venter på din godkjenning"
+  },
+  "badge_earned_approver": {
+    "title": "🥇 {assignee_name}: Merke opptjent",
+    "message": "{assignee_name} har fått {badge_name} -merket!"
+  },
+  "achievement_earned_approver": {
+    "title": "🏆 {assignee_name}: Prestasjon",
+    "message": "{assignee_name} opptjent {achievement_name}"
+  },
+  "challenge_completed_approver": {
+    "title": "🏁 {assignee_name}: Utfordring ferdig",
+    "message": "{assignee_name} fullført {challenge_name}"
+  },
+  "multiplier_changed_approver": {
+    "title": "⚖️ {assignee_name}: Multiplikator oppdatert",
+    "message": "{assignee_name}sin {points_label} multiplikator endret fra {old_multiplier}x til {new_multiplier}x"
+  },
+  "_comment_system_section": "═════════════════════════════════════════════════════════════════════════════════════",
+  "_comment_system_desc": "SYSTEM-/ADMIN-VARSLER: Databehandlingsoperasjoner",
+  "_comment_system_footer": "═════════════════════════════════════════════════════════════════════════════════════",
+  "data_reset": {
+    "title": "🔄 ChoreOps: Tilbakestilling av data",
+    "message": "Systemdataene er tilbakestilt"
+  },
+  "data_reset_global": {
+    "title": "🔄 ChoreOps: Full tilbakestilling",
+    "message": "Alle systemdata er tilbakestilt til standardinnstillinger"
+  },
+  "data_reset_assignee": {
+    "title": "🔄 ChoreOps: Tildelt tilbakestilling",
+    "message": "Datatilbakestilling for {assignee_name}"
+  },
+  "data_reset_item_type": {
+    "title": "🔄 ChoreOps: {item_type} Tilbakestill",
+    "message": "Alle {item_type} data er tilbakestilt"
+  },
+  "data_reset_item": {
+    "title": "🔄 ChoreOps: Tilbakestilling av gjenstander",
+    "message": "{item_type} '{item_name}' har blitt tilbakestilt"
+  },
+  "_comment_actions_section": "═════════════════════════════════════════════════════════════════════════════════════",
+  "_comment_actions_desc": "VARSELSKNAPPER: Mykere og mer oppmuntrende språk",
+  "_comment_actions_footer": "═════════════════════════════════════════════════════════════════════════════════════",
+  "actions": {
+    "approve": "✅ Godkjenn",
+    "claim": "✋ Jeg klarte det!",
+    "complete": "✅ Fullført",
+    "disapprove": "↩️ Avvis",
+    "remind_30": "⏰ Påminn om 30 minutter",
+    "skip": "⏭️ Hopp over"
+  },
+  "chore_standby_needed": {
+    "title": "🫲 Standby forespurt",
+    "message": "{primary_name}s gjøremål {chore_name} er for sent! Hent det nå for å tjene {points} {points_label}"
+  }
+}

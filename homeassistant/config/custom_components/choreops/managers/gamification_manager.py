@@ -1,0 +1,5933 @@
+"""Gamification Manager - Debounced badge/achievement/challenge evaluation.
+
+This manager handles gamification evaluation with debouncing:
+- Pending tracking: Which assignees need re-evaluation (persisted to storage)
+- Debounced evaluation: Batch evaluations to avoid redundant processing
+- Event listening: Responds to points_changed, chore_approved, etc.
+- Result application: Awards/revokes badges, achievements, challenges
+
+ARCHITECTURE (v0.5.0+):
+- GamificationManager = "The Judge" (STATEFUL orchestration)
+- GamificationEngine = Pure evaluation logic (STATELESS)
+- Coordinator provides context data and receives result notifications
+
+RELIABILITY (Phase 7.4):
+- Pending evaluations are persisted to storage meta
+- On restart, pending evaluations are recovered and processed
+- Assignee deletion removes assignee from pending queue
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING, Any, cast
+
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.start import async_at_started
+
+from .. import const, data_builders as db
+from ..engines.chore_engine import ChoreEngine
+from ..engines.gamification_engine import GamificationEngine
+from ..engines.schedule_engine import RecurrenceEngine
+from ..helpers import entity_helpers as eh
+from ..helpers.entity_helpers import get_item_id_by_name, remove_entities_by_item_id
+from ..utils.dt_utils import (
+    HELPER_RETURN_DATETIME_LOCAL,
+    as_local,
+    as_utc,
+    dt_add_interval,
+    dt_next_schedule,
+    dt_now_local,
+    dt_now_utc_iso,
+    dt_parse,
+    dt_parse_date,
+    dt_today_iso,
+    dt_today_local,
+    start_of_local_day,
+)
+from .base_manager import BaseManager
+
+if TYPE_CHECKING:
+    import asyncio
+
+    from homeassistant.core import HomeAssistant
+
+    from ..coordinator import ChoreOpsDataCoordinator
+    from ..type_defs import (
+        AchievementData,
+        AchievementProgress,
+        AssigneeBadgeProgress,
+        AssigneeCumulativeBadgeProgress,
+        BadgeData,
+        CanonicalTargetDefinition,
+        ChallengeData,
+        ChallengeProgress,
+        EvaluationContext,
+        EvaluationResult,
+        ScheduleConfig,
+        UserData,
+    )
+
+
+# Default debounce timing (seconds)
+_DEBOUNCE_SECONDS: float = 2.0
+
+
+class GamificationManager(BaseManager):
+    """Manager for gamification evaluation with debouncing.
+
+    Responsibilities:
+    - Track which assignees need gamification re-evaluation (dirty tracking)
+    - Debounce evaluation to batch rapid changes
+    - Build evaluation context from coordinator data
+    - Apply evaluation results (badge awards, achievements, challenges)
+    - Emit gamification events (badge_earned, achievement_earned, etc.)
+
+    NOT responsible for:
+    - Point calculations (handled by EconomyManager)
+    - Notifications (handled by NotificationManager via Coordinator)
+    - Storage persistence (handled by Coordinator)
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator: ChoreOpsDataCoordinator,
+    ) -> None:
+        """Initialize the GamificationManager.
+
+        Args:
+            hass: Home Assistant instance
+            coordinator: The main ChoreOps coordinator
+        """
+        super().__init__(hass, coordinator)
+
+        # Pending evaluations - assignees needing re-evaluation (persisted to storage)
+        self._pending_evaluations: set[str] = set()
+
+        # Debounce timer handle
+        self._eval_timer: asyncio.TimerHandle | None = None
+        self._schedule_eval_handle: asyncio.Handle | None = None
+        self._is_unloading = False
+
+        # Debounce configuration
+        self._debounce_seconds = _DEBOUNCE_SECONDS
+
+    async def async_setup(self) -> None:
+        """Set up the GamificationManager.
+
+        Subscribe to:
+        - STATS_READY: Startup cascade - initialize badge refs → emit GAMIFICATION_READY
+        - Domain events that can trigger gamification checks
+        - Lifecycle events for reactive cleanup
+
+        Recover any pending evaluations from storage (restart resilience).
+        """
+        # Startup cascade - wait for stats to be ready before initializing badges
+        self.listen(const.SIGNAL_SUFFIX_STATS_READY, self._on_stats_ready)
+        self.listen(const.SIGNAL_SUFFIX_STATS_UPDATED, self._on_stats_updated)
+
+        # Point changes affect point-based badges
+        self.listen(const.SIGNAL_SUFFIX_POINTS_CHANGED, self._on_points_changed)
+
+        # Chore events affect chore count, daily completion, streaks
+        self.listen(const.SIGNAL_SUFFIX_CHORE_APPROVED, self._on_chore_approved)
+        self.listen(const.SIGNAL_SUFFIX_CHORE_DISAPPROVED, self._on_chore_disapproved)
+        self.listen(const.SIGNAL_SUFFIX_CHORE_STATUS_RESET, self._on_chore_status_reset)
+        self.listen(const.SIGNAL_SUFFIX_CHORE_OVERDUE, self._on_chore_overdue)
+
+        # Reward events can affect specific badges
+        self.listen(const.SIGNAL_SUFFIX_REWARD_APPROVED, self._on_reward_approved)
+
+        # Bonus/penalty events affect points
+        self.listen(const.SIGNAL_SUFFIX_BONUS_APPLIED, self._on_bonus_applied)
+        self.listen(const.SIGNAL_SUFFIX_PENALTY_APPLIED, self._on_penalty_applied)
+
+        # Daily maintenance - cumulative badge cycle evaluation
+        self.listen(const.SIGNAL_SUFFIX_MIDNIGHT_ROLLOVER, self._on_midnight_rollover)
+
+        # Lifecycle events - reactive cleanup (Platinum Architecture)
+        self.listen(const.SIGNAL_SUFFIX_USER_DELETED, self._on_assignee_deleted)
+        self.listen(const.SIGNAL_SUFFIX_CHORE_DELETED, self._on_chore_deleted)
+        self.listen(const.SIGNAL_SUFFIX_CHORE_UPDATED, self._on_chore_updated)
+
+        # Recover pending evaluations from storage (restart resilience)
+        pending = self.coordinator._data.get(const.DATA_META, {}).get(
+            const.DATA_META_PENDING_EVALUATIONS, []
+        )
+        if pending:
+            const.LOGGER.info(
+                "GamificationManager: Recovering %d pending evaluations from storage",
+                len(pending),
+            )
+            self._pending_evaluations.update(pending)
+            self._schedule_evaluation()
+
+        self.coordinator.config_entry.async_on_unload(self._cancel_eval_timer)
+
+        # Streak correctness on startup: re-derive every streak from current
+        # chore data once HA has finished starting, so a streak broken while HA
+        # was down is reset without waiting for the next completion or midnight
+        # rollover. Fires immediately if HA is already started. Preferred over a
+        # hardcoded timer, which would race against data-load timing.
+        self.coordinator.config_entry.async_on_unload(
+            async_at_started(
+                self.hass,
+                lambda _hass: self.recalculate_all_badges(),
+            )
+        )
+
+        const.LOGGER.debug(
+            "GamificationManager initialized with %s second debounce",
+            self._debounce_seconds,
+        )
+
+    def _cancel_eval_timer(self) -> None:
+        """Cancel any pending debounce timer during config entry unload."""
+        self._is_unloading = True
+
+        if self._schedule_eval_handle is not None:
+            self._schedule_eval_handle.cancel()
+            self._schedule_eval_handle = None
+
+        if self._eval_timer is not None:
+            self._eval_timer.cancel()
+            self._eval_timer = None
+
+    def _on_stats_ready(self, payload: dict[str, Any]) -> None:
+        """Handle startup cascade - initialize badge references after stats ready.
+
+        Cascade Position: STATS_READY → GamificationManager → GAMIFICATION_READY
+
+        Updates chore badge references for all assignees, then signals completion
+        of the startup cascade. UIManager can listen for dashboard finalization.
+
+        Args:
+            payload: Event data (unused)
+        """
+        const.LOGGER.debug(
+            "GamificationManager: Processing STATS_READY - signaling ready"
+        )
+
+        # Signal cascade complete
+        self.emit(const.SIGNAL_SUFFIX_GAMIFICATION_READY)
+        const.LOGGER.info("ChoreOps initialization cascade complete")
+
+    def _on_stats_updated(self, payload: dict[str, Any]) -> None:
+        """Handle post-statistics updates.
+
+        Statistics writes can complete after earlier lifecycle signals such as
+        `chore_approved` or `points_changed` have already queued an evaluation.
+        Re-queueing on the post-stats signal ensures badge evaluation sees the
+        authoritative period buckets.
+
+        Args:
+            payload: Event data with assignee/user identifier.
+        """
+        assignee_id = payload.get("user_id")
+        if assignee_id:
+            self._mark_pending(assignee_id)
+
+    # =========================================================================
+    # EVENT HANDLERS
+    # =========================================================================
+
+    def _on_points_changed(self, payload: dict[str, Any]) -> None:
+        """Handle points_changed event.
+
+        Skip re-evaluation for points from gamification awards to prevent
+        infinite loops (badge awards points → triggers gamification check
+        → awards badge → awards points → ...).
+
+        Args:
+            payload: Event data with assignee_id, delta, source, etc.
+        """
+        assignee_id = payload.get("user_id")
+        source = payload.get("source", "")
+        gamification_originated = bool(payload.get("gamification_originated", False))
+
+        # Skip gamification-originated point changes to prevent loops
+        gamification_sources = {
+            const.POINTS_SOURCE_BADGES,
+            const.POINTS_SOURCE_ACHIEVEMENTS,
+            const.POINTS_SOURCE_CHALLENGES,
+        }
+        if source in gamification_sources:
+            const.LOGGER.debug(
+                "GamificationManager: Skipping points_changed from source %s "
+                "(gamification-originated)",
+                source,
+            )
+            return
+
+        if gamification_originated:
+            const.LOGGER.debug(
+                "GamificationManager: Skipping points_changed from source %s "
+                "(gamification-originated payload)",
+                source,
+            )
+            return
+
+        # Update cumulative badge progress (for positive deltas only)
+        delta = payload.get("delta", 0.0)
+        if delta > 0 and assignee_id:
+            assignee_info = self.coordinator.assignees_data.get(assignee_id)
+            if assignee_info:
+                progress = self._ensure_cumulative_progress_container(assignee_info)
+                cycle_points = progress.get(
+                    const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_CYCLE_POINTS, 0.0
+                )
+                cycle_points += delta
+                progress[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_CYCLE_POINTS] = (
+                    round(cycle_points, const.DATA_FLOAT_PRECISION)
+                )
+
+        if assignee_id:
+            self._mark_pending(assignee_id)
+
+    def _on_chore_updated(self, payload: dict[str, Any]) -> None:
+        """Handle chore_updated event (Platinum Architecture: event-driven).
+
+        When a chore is updated (assignments changed, config modified), we need
+        to recalculate badges for all assignees since badge criteria may reference
+        any chore and assignment changes affect which assignees can earn badges.
+
+        Args:
+            payload: Event data with chore_id, chore_name, etc.
+        """
+        const.LOGGER.debug(
+            "GamificationManager: Chore updated, recalculating all badges"
+        )
+        self.recalculate_all_badges()
+
+    def _on_chore_approved(self, payload: dict[str, Any]) -> None:
+        """Handle chore_approved event.
+
+        Args:
+            payload: Event data with assignee_id, chore_id, etc.
+        """
+        assignee_id = payload.get("user_id")
+        if assignee_id:
+            self._mark_pending(assignee_id)
+
+    def _on_chore_disapproved(self, payload: dict[str, Any]) -> None:
+        """Handle chore_disapproved event.
+
+        Args:
+            payload: Event data with assignee_id, chore_id, etc.
+        """
+        assignee_id = payload.get("user_id")
+        if assignee_id:
+            self._mark_pending(assignee_id)
+
+    def _on_chore_status_reset(self, payload: dict[str, Any]) -> None:
+        """Handle chore_status_reset event.
+
+        Args:
+            payload: Event data with assignee_id, chore_id, etc.
+        """
+        assignee_id = payload.get("user_id")
+        if assignee_id:
+            self._mark_pending(assignee_id)
+
+    def _on_chore_overdue(self, payload: dict[str, Any]) -> None:
+        """Handle chore_overdue event.
+
+        Overdue events can affect "perfect week" or streak-based badges.
+
+        Args:
+            payload: Event data with assignee_id, chore_id, etc.
+        """
+        assignee_id = payload.get("user_id")
+        if assignee_id:
+            self._mark_pending(assignee_id)
+
+    def _on_reward_approved(self, payload: dict[str, Any]) -> None:
+        """Handle reward_approved event.
+
+        Args:
+            payload: Event data with assignee_id, etc.
+        """
+        assignee_id = payload.get("user_id")
+        if assignee_id:
+            self._mark_pending(assignee_id)
+
+    def _on_bonus_applied(self, payload: dict[str, Any]) -> None:
+        """Handle bonus_applied event.
+
+        Args:
+            payload: Event data with assignee_id, etc.
+        """
+        assignee_id = payload.get("user_id")
+        if assignee_id:
+            self._mark_pending(assignee_id)
+
+    def _on_penalty_applied(self, payload: dict[str, Any]) -> None:
+        """Handle penalty_applied event.
+
+        Args:
+            payload: Event data with assignee_id, etc.
+        """
+        assignee_id = payload.get("user_id")
+        if assignee_id:
+            self._mark_pending(assignee_id)
+
+    async def _on_midnight_rollover(self, payload: dict[str, Any]) -> None:
+        """Handle midnight rollover event.
+
+        Triggers re-evaluation of all assignees' gamification criteria.
+        Cumulative badge maintenance is evaluated via the unified
+        date-aware state machine in _evaluate_cumulative_badge.
+
+        Args:
+            payload: Event data (unused)
+        """
+        const.LOGGER.debug(
+            "GamificationManager: Processing midnight rollover - "
+            "recalculating all badges"
+        )
+        self._mark_all_assignees_pending()
+        await self._drain_pending_evaluations_now()
+
+    # =========================================================================
+    # PUBLIC API
+    # =========================================================================
+
+    def recalculate_all_badges(self) -> None:
+        """Global re-check of all badges for all assignees.
+
+        Marks all assignees as dirty for re-evaluation. The debounced evaluation
+        logic will handle persistence when changes are actually made.
+        """
+        const.LOGGER.info("Recalculate All Badges - Starting recalculation")
+        self._mark_all_assignees_pending()
+        const.LOGGER.info(
+            "Recalculate All Badges - All assignees marked for evaluation"
+        )
+
+    def _mark_all_assignees_pending(self) -> None:
+        """Mark every assignee as pending using the normal persisted queue path."""
+        for assignee_id in self.coordinator.assignees_data:
+            self._mark_pending(assignee_id)
+
+    async def award_achievement(self, assignee_id: str, achievement_id: str) -> None:
+        """Award the achievement to the assignee.
+
+        Update the achievement progress to indicate it is earned,
+        and send notifications to both the assignee and their approvers.
+
+        Args:
+            assignee_id: The internal UUID of the assignee
+            achievement_id: The internal UUID of the achievement
+        """
+        achievement_info = self.coordinator.achievements_data.get(achievement_id)
+        if not achievement_info:
+            const.LOGGER.error(
+                "ERROR: Achievement Award - Achievement ID '%s' not found.",
+                achievement_id,
+            )
+            return
+
+        # Get or create the existing progress dictionary for this assignee
+        progress_for_assignee = achievement_info.setdefault(
+            const.DATA_ACHIEVEMENT_PROGRESS, {}
+        ).get(assignee_id)
+        if progress_for_assignee is None:
+            # If it doesn't exist, initialize it with baseline from the assignee's current total.
+            assignee_info: UserData | dict[str, Any] = (
+                self.coordinator.assignees_data.get(assignee_id, {})
+            )
+            # Read approved_all_time from chore_periods.all_time bucket (v43+)
+            # Cast to dict[str, Any] since chore_periods is a runtime-added bucket
+            chore_periods: dict[str, Any] = cast(
+                "dict[str, Any]",
+                assignee_info.get(const.DATA_USER_CHORE_PERIODS, {}),
+            )
+            all_time_container: dict[str, Any] = cast(
+                "dict[str, Any]",
+                chore_periods.get(const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME, {}),
+            )
+            # All-time uses nested structure: periods["all_time"]["all_time"] = {data}
+            all_time_data: dict[str, Any] = cast(
+                "dict[str, Any]", all_time_container.get(const.PERIOD_ALL_TIME, {})
+            )
+            progress_dict = {
+                const.DATA_ACHIEVEMENT_BASELINE: all_time_data.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_APPROVED, const.DEFAULT_ZERO
+                ),
+                const.DATA_ACHIEVEMENT_CURRENT_VALUE: const.DEFAULT_ZERO,
+                const.DATA_ACHIEVEMENT_AWARDED: False,
+            }
+            achievement_info[const.DATA_ACHIEVEMENT_PROGRESS][assignee_id] = cast(
+                "AchievementProgress", progress_dict
+            )
+            progress_for_assignee = cast("AchievementProgress", progress_dict)
+
+        # Type narrow: progress_for_assignee is now guaranteed to be AchievementProgress
+        progress_for_assignee_checked: AchievementProgress = progress_for_assignee
+
+        # Mark achievement as earned for the assignee
+        progress_for_assignee_checked[const.DATA_ACHIEVEMENT_AWARDED] = True
+        progress_for_assignee_checked[const.DATA_ACHIEVEMENT_CURRENT_VALUE] = (  # type: ignore[typeddict-unknown-key]
+            achievement_info.get(const.DATA_ACHIEVEMENT_TARGET_VALUE, 1)
+        )
+
+        # Award the extra reward points defined in the achievement
+        extra_points = achievement_info.get(
+            const.DATA_ACHIEVEMENT_REWARD_POINTS, const.DEFAULT_ZERO
+        )
+
+        const.LOGGER.debug(
+            "DEBUG: Achievement Award - Achievement ID '%s' to Assignee ID '%s'",
+            achievement_info.get(const.DATA_ACHIEVEMENT_NAME),
+            assignee_id,
+        )
+
+        # Persist → Emit (per DEVELOPMENT_STANDARDS.md § 5.3)
+        self.coordinator._persist_and_update()
+
+        # Emit event for NotificationManager to send notifications
+        # EconomyManager listens to this and handles point deposit
+        self.emit(
+            const.SIGNAL_SUFFIX_ACHIEVEMENT_EARNED,
+            user_id=assignee_id,
+            achievement_id=achievement_id,
+            user_name=eh.get_assignee_name_by_id(self.coordinator, assignee_id) or "",
+            achievement_name=achievement_info.get(const.DATA_ACHIEVEMENT_NAME, ""),
+            achievement_points=extra_points,
+        )
+
+    async def award_challenge(self, assignee_id: str, challenge_id: str) -> None:
+        """Award the challenge to the assignee.
+
+        Update progress and notify assignee/approvers.
+
+        Args:
+            assignee_id: The internal UUID of the assignee
+            challenge_id: The internal UUID of the challenge
+        """
+        challenge_info = self.coordinator.challenges_data.get(challenge_id)
+        if not challenge_info:
+            const.LOGGER.error(
+                "ERROR: Challenge Award - Challenge ID '%s' not found", challenge_id
+            )
+            return
+
+        # Get or create the existing progress dictionary for this assignee
+        progress_for_assignee = challenge_info.setdefault(
+            const.DATA_CHALLENGE_PROGRESS, {}
+        ).setdefault(
+            assignee_id,
+            {
+                const.DATA_CHALLENGE_COUNT: const.DEFAULT_ZERO,
+                const.DATA_CHALLENGE_AWARDED: False,
+            },
+        )
+
+        # Mark challenge as earned for the assignee by storing progress
+        progress_for_assignee[const.DATA_CHALLENGE_AWARDED] = True
+        progress_for_assignee[const.DATA_CHALLENGE_COUNT] = challenge_info.get(
+            const.DATA_CHALLENGE_TARGET_VALUE, 1
+        )
+
+        # Get extra reward points from the challenge
+        extra_points = challenge_info.get(
+            const.DATA_CHALLENGE_REWARD_POINTS, const.DEFAULT_ZERO
+        )
+
+        const.LOGGER.debug(
+            "DEBUG: Challenge Award - Challenge ID '%s' to Assignee ID '%s'",
+            challenge_info.get(const.DATA_CHALLENGE_NAME),
+            assignee_id,
+        )
+
+        # Persist → Emit (per DEVELOPMENT_STANDARDS.md § 5.3)
+        self.coordinator._persist_and_update()
+
+        # Emit event for NotificationManager to send notifications
+        # EconomyManager listens to this and handles point deposit
+        self.emit(
+            const.SIGNAL_SUFFIX_CHALLENGE_COMPLETED,
+            user_id=assignee_id,
+            challenge_id=challenge_id,
+            user_name=eh.get_assignee_name_by_id(self.coordinator, assignee_id) or "",
+            challenge_name=challenge_info.get(const.DATA_CHALLENGE_NAME, ""),
+            challenge_points=extra_points,
+        )
+
+    def update_streak_progress(
+        self, progress: AchievementProgress, today: date
+    ) -> None:
+        """Update a streak progress dict.
+
+        If the last approved date was yesterday, increment the streak.
+        Otherwise, reset to 1.
+
+        Args:
+            progress: Achievement progress dictionary to update
+            today: Current date for streak calculation
+        """
+        last_date = None
+        last_date_str = progress.get(const.DATA_USER_LAST_STREAK_DATE)
+        if last_date_str:
+            try:
+                last_date = date.fromisoformat(last_date_str)
+            except (ValueError, TypeError, KeyError):
+                last_date = None
+
+        # If already updated today, do nothing
+        if last_date == today:
+            return
+
+        # If yesterday was the last update, increment the streak
+        if last_date == today - timedelta(days=1):
+            current_streak = progress.get(const.DATA_USER_CURRENT_STREAK, 0)
+            progress[const.DATA_USER_CURRENT_STREAK] = current_streak + 1
+
+        # Reset to 1 if not done yesterday
+        else:
+            progress[const.DATA_USER_CURRENT_STREAK] = 1
+
+        progress[const.DATA_USER_LAST_STREAK_DATE] = today.isoformat()
+
+    # =========================================================================
+    # PENDING TRACKING AND DEBOUNCE (Phase 7.4: Persisted Queue)
+    # =========================================================================
+
+    def _persist_pending(self) -> None:
+        """Persist pending evaluation queue to storage meta.
+
+        This ensures restart resilience - if HA restarts during debounce window,
+        pending evaluations will be recovered on next startup.
+
+        Uses call_soon_threadsafe since this may be called from dispatcher
+        (SyncWorker thread) via signal handlers.
+        """
+        self.hass.loop.call_soon_threadsafe(self._persist_pending_impl)
+
+    def _persist_pending_impl(self) -> None:
+        """Internal implementation that runs on the event loop thread."""
+        meta = self.coordinator._data.setdefault(const.DATA_META, {})
+        meta[const.DATA_META_PENDING_EVALUATIONS] = list(self._pending_evaluations)
+        self.coordinator._persist()
+
+    def _mark_pending(self, assignee_id: str) -> None:
+        """Mark a assignee as needing re-evaluation (persisted).
+
+        Args:
+            assignee_id: The internal UUID of the assignee
+        """
+        was_already_pending = assignee_id in self._pending_evaluations
+        self._pending_evaluations.add(assignee_id)
+
+        # Only persist if this is a NEW addition (optimization for burst events)
+        if not was_already_pending:
+            self._persist_pending()
+
+        self._schedule_evaluation()
+        const.LOGGER.debug(
+            "Assignee %s marked pending for gamification evaluation, %d total pending",
+            assignee_id,
+            len(self._pending_evaluations),
+        )
+
+    def _on_assignee_deleted(self, payload: dict[str, Any]) -> None:
+        """Remove deleted assignee from pending evaluations and gamification data.
+
+        Follows Platinum Architecture (Choreography): GamificationManager reacts
+        to KID_DELETED signal and cleans its own domain data.
+
+        Handles cleanup of:
+        - Pending evaluation queue
+        - Achievement progress/assignments
+        - Challenge progress/assignments
+
+        Args:
+            payload: Event data containing assignee_id
+        """
+        if not payload.get(const.DATA_USER_CAN_BE_ASSIGNED, False):
+            return
+        if not payload.get(const.DATA_USER_ENABLE_GAMIFICATION, False):
+            return
+
+        assignee_id = payload.get(const.DATA_USER_ID, "")
+        if not assignee_id:
+            return
+
+        # 1. Clean up pending evaluation queue
+        if assignee_id in self._pending_evaluations:
+            self._pending_evaluations.discard(assignee_id)
+            self._persist_pending()
+            const.LOGGER.debug(
+                "GamificationManager: Removed deleted assignee %s from pending queue",
+                assignee_id,
+            )
+
+        # 2. Clean up achievement/challenge progress and assignments (inline)
+        cleaned = False
+        for entities_data, section_name in [
+            (self.coordinator._data.get(const.DATA_ACHIEVEMENTS, {}), "achievements"),
+            (self.coordinator._data.get(const.DATA_CHALLENGES, {}), "challenges"),
+        ]:
+            for entity in entities_data.values():
+                # Remove assignee from progress dict
+                progress = entity.get(const.DATA_PROGRESS, {})
+                if assignee_id in progress:
+                    del progress[assignee_id]
+                    const.LOGGER.debug(
+                        "Removed progress for deleted assignee '%s' in %s",
+                        assignee_id,
+                        section_name,
+                    )
+                    cleaned = True
+
+                # Remove assignee from assigned_assignees list
+                if const.DATA_ASSIGNED_USER_IDS in entity:
+                    original_assigned = entity[const.DATA_ASSIGNED_USER_IDS]
+                    if assignee_id in original_assigned:
+                        entity[const.DATA_ASSIGNED_USER_IDS] = [
+                            entry_id
+                            for entry_id in original_assigned
+                            if entry_id != assignee_id
+                        ]
+                        const.LOGGER.debug(
+                            "Removed deleted assignee from %s '%s' assigned_assignees",
+                            section_name,
+                            entity.get(const.DATA_NAME),
+                        )
+                        cleaned = True
+
+        if cleaned:
+            self.coordinator._persist()
+
+        const.LOGGER.debug(
+            "GamificationManager: Cleaned gamification refs for deleted assignee %s",
+            assignee_id,
+        )
+
+    def _on_chore_deleted(self, payload: dict[str, Any]) -> None:
+        """Clear selected_chore_id in achievements/challenges if deleted chore was selected.
+
+        Follows Platinum Architecture (Choreography): GamificationManager reacts
+        to CHORE_DELETED signal and cleans its own domain data.
+
+        Args:
+            payload: Event data containing chore_id, chore_name
+        """
+        chore_id = payload.get("chore_id", "")
+        chore_name = payload.get("chore_name", "")
+        if not chore_id:
+            return
+
+        valid_chore_ids = set(self.coordinator.chores_data.keys())
+        cleaned = False
+
+        # Clean achievements: clear selected_chore_id if chore no longer exists
+        for achievement_info in self.coordinator._data.get(
+            const.DATA_ACHIEVEMENTS, {}
+        ).values():
+            selected = achievement_info.get(const.DATA_ACHIEVEMENT_SELECTED_CHORE_ID)
+            if selected and selected not in valid_chore_ids:
+                achievement_info[const.DATA_ACHIEVEMENT_SELECTED_CHORE_ID] = ""
+                const.LOGGER.debug(
+                    "Cleared selected chore in achievement '%s'",
+                    achievement_info.get(const.DATA_NAME),
+                )
+                cleaned = True
+
+        # Clean challenges: clear selected_chore_id if chore no longer exists
+        for challenge_info in self.coordinator._data.get(
+            const.DATA_CHALLENGES, {}
+        ).values():
+            selected = challenge_info.get(const.DATA_CHALLENGE_SELECTED_CHORE_ID)
+            if selected and selected not in valid_chore_ids:
+                challenge_info[const.DATA_CHALLENGE_SELECTED_CHORE_ID] = (
+                    const.SENTINEL_EMPTY
+                )
+                const.LOGGER.debug(
+                    "Cleared selected chore in challenge '%s'",
+                    challenge_info.get(const.DATA_NAME),
+                )
+                cleaned = True
+
+        if cleaned:
+            self.coordinator._persist()
+            const.LOGGER.debug(
+                "GamificationManager: Cleaned gamification refs for deleted chore '%s'",
+                chore_name,
+            )
+
+    def _schedule_evaluation(self) -> None:
+        """Schedule debounced evaluation.
+
+        Cancels any existing timer and schedules a new one.
+        This batches rapid changes into a single evaluation pass.
+
+        Uses call_soon_threadsafe to safely interact with event loop
+        since this method may be called from dispatcher (SyncWorker thread).
+        """
+        if self._is_unloading:
+            return
+
+        self._schedule_eval_handle = self.hass.loop.call_soon_threadsafe(
+            self._schedule_evaluation_impl
+        )
+
+    def _schedule_evaluation_impl(self) -> None:
+        """Internal implementation that runs on the event loop thread.
+
+        This method must only be called from the event loop thread
+        (via call_soon_threadsafe from _schedule_evaluation).
+        """
+        self._schedule_eval_handle = None
+
+        if self._is_unloading:
+            return
+
+        if self._eval_timer:
+            self._eval_timer.cancel()
+
+        self._eval_timer = self.hass.loop.call_later(
+            self._debounce_seconds,
+            lambda: self.hass.add_job(self._evaluate_pending_assignees()),
+        )
+
+    async def _drain_pending_evaluations_now(self) -> None:
+        """Cancel debounce and evaluate the current pending queue immediately."""
+        if self._eval_timer:
+            self._eval_timer.cancel()
+            self._eval_timer = None
+
+        await self._evaluate_pending_assignees()
+
+    async def _evaluate_pending_assignees(self) -> None:
+        """Evaluate all pending assignees in batch.
+
+        This is the main evaluation loop that runs after debounce timer fires.
+        Clears the persistent queue after successful evaluation.
+        """
+        # Manual callers may force evaluation before the debounce fires.
+        # Cancel the scheduled timer so the test/runtime does not keep a stale
+        # handle alive after this batch has already been processed.
+        if self._eval_timer is not None:
+            self._eval_timer.cancel()
+            self._eval_timer = None
+
+        # Capture and clear pending set atomically
+        assignees_to_evaluate = self._pending_evaluations.copy()
+        self._pending_evaluations.clear()
+        self._persist_pending()  # Clear from storage
+
+        if not assignees_to_evaluate:
+            return
+
+        const.LOGGER.debug(
+            "Starting gamification evaluation for %d assignees: %s",
+            len(assignees_to_evaluate),
+            list(assignees_to_evaluate),
+        )
+
+        for assignee_id in assignees_to_evaluate:
+            try:
+                await self._evaluate_assignee(assignee_id)
+            except Exception:
+                const.LOGGER.exception(
+                    "Error evaluating gamification for assignee %s",
+                    assignee_id,
+                )
+
+    async def _evaluate_assignee(self, assignee_id: str) -> None:
+        """Evaluate all gamification criteria for a single assignee.
+
+        Args:
+            assignee_id: The internal UUID of the assignee
+        """
+        # Build evaluation context
+        context = self._build_evaluation_context(assignee_id)
+        if not context:
+            const.LOGGER.warning(
+                "Could not build evaluation context for assignee %s",
+                assignee_id,
+            )
+            return
+
+        # Get badge data from coordinator
+        badges_data = self.coordinator.badges_data
+
+        # Evaluate each badge
+        for badge_id, badge_data in badges_data.items():
+            await self._evaluate_badge_for_assignee(context, badge_id, badge_data)
+
+        # Get achievement data from coordinator
+        achievements_data = self.coordinator.achievements_data
+
+        # Evaluate each achievement
+        for achievement_id, achievement_data in achievements_data.items():
+            await self._evaluate_achievement_for_assignee(
+                context, achievement_id, achievement_data
+            )
+
+        challenge_count = len(self.coordinator.challenges_data)
+        if challenge_count:
+            const.LOGGER.debug(
+                "Challenge evaluation disabled during sunset; skipped %d challenges",
+                challenge_count,
+            )
+
+    # =========================================================================
+    # BADGE EVALUATION (Split by badge type for clarity)
+    # =========================================================================
+    # CRITICAL PRINCIPLE: Badges are NEVER removed/lost.
+    # - Cumulative: Can be DEMOTED (lower multiplier) but never removed
+    # - Periodic: Can be re-awarded (increment award_count) but never removed
+
+    async def _evaluate_badge_for_assignee(
+        self,
+        context: EvaluationContext,
+        badge_id: str,
+        badge_data: BadgeData,
+    ) -> None:
+        """Route badge evaluation to type-specific handler.
+
+        Args:
+            context: The evaluation context for the assignee
+            badge_id: Badge internal ID
+            badge_data: Badge definition
+        """
+        assignee_id = context["assignee_id"]
+
+        # Skip badges not assigned to this assignee (empty list = assigned to all)
+        assigned_to = badge_data.get(const.DATA_BADGE_ASSIGNED_USER_IDS, [])
+        if assigned_to and assignee_id not in assigned_to:
+            return
+
+        badge_type = badge_data.get(const.DATA_BADGE_TYPE)
+
+        # Route to type-specific evaluation (complete separation)
+        if badge_type == const.BADGE_TYPE_CUMULATIVE:
+            await self._evaluate_cumulative_badge(
+                assignee_id, badge_id, badge_data, context
+            )
+        else:
+            # Periodic, special occasion, and any future badge types
+            await self._evaluate_periodic_badge(
+                assignee_id, badge_id, badge_data, context
+            )
+
+    async def _evaluate_cumulative_badge(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+        context: EvaluationContext,
+    ) -> None:
+        """Evaluate cumulative badge — unified state machine.
+
+        Handles ALL state transitions for cumulative badges:
+        - NOT earned → acquisition check (total_points vs threshold)
+        - EARNED → date-aware maintenance state machine:
+          - No maintenance enabled → always ACTIVE, skip
+          - No dates yet → initialize maintenance dates
+          - Period still open (today < end_date) → skip (accumulate points)
+          - Period ended + maintenance met → confirm ACTIVE, reset cycle, advance dates
+          - Period ended + not met + grace available → enter GRACE
+          - Period ended + not met + no grace (or grace expired) → DEMOTED
+          - In GRACE + met → re-promote to ACTIVE
+          - In GRACE + expired → DEMOTED
+
+        CRITICAL: Maintenance ONLY evaluated for the highest-earned cumulative badge.
+        Lower-tier earned badges are always ACTIVE — their maintenance is never checked.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge internal ID
+            badge_data: Badge definition
+            context: Evaluation context
+        """
+        assignee_data = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_data:
+            return
+
+        badges_earned = assignee_data.get(const.DATA_USER_BADGES_EARNED, {})
+        already_earned = badge_id in badges_earned
+
+        if not already_earned:
+            # First-time acquisition: check lifetime points via engine
+            badge_dict = cast("dict[str, Any]", badge_data)
+            result = GamificationEngine.evaluate_badge(context, badge_dict)
+            if result.get("criteria_met", False):
+                await self._apply_cumulative_first_award(
+                    assignee_id, badge_id, badge_data, result
+                )
+            return
+
+        # ── ALREADY EARNED: maintenance state machine ──
+
+        # Guard: only evaluate maintenance for the highest-earned cumulative badge
+        highest_earned, _, _, _, _ = self.get_cumulative_badge_levels(assignee_id)
+        highest_badge_id = (
+            highest_earned.get(const.DATA_BADGE_INTERNAL_ID) if highest_earned else None
+        )
+        if badge_id != highest_badge_id:
+            return  # Lower-tier badge — always ACTIVE, skip maintenance
+
+        # Guard: maintenance must be enabled (has frequency + threshold)
+        if not self._badge_maintenance_enabled(badge_data):
+            return  # No maintenance = always ACTIVE
+
+        # Read maintenance state from cumulative_badge_progress
+        progress = self._ensure_cumulative_progress_container(assignee_data)
+        progress_dict = cast("dict[str, Any]", progress)
+        status = progress_dict.get(
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_STATUS,
+            const.CUMULATIVE_BADGE_STATE_ACTIVE,
+        )
+        end_date_str: str | None = progress_dict.get(
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_END_DATE
+        )
+        grace_end_str: str | None = progress_dict.get(
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_GRACE_END_DATE
+        )
+        cycle_points = float(
+            progress_dict.get(
+                const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_CYCLE_POINTS, 0.0
+            )
+        )
+
+        # Get maintenance threshold from badge target
+        target = badge_data.get(const.DATA_BADGE_TARGET, {})
+        maintenance_threshold = float(target.get(const.DATA_BADGE_MAINTENANCE_RULES, 0))
+
+        today_iso = dt_today_iso()
+
+        # 1. First-time dates (badge earned but no maintenance dates yet)
+        if not end_date_str:
+            self._apply_cumulative_init_maintenance_dates(
+                assignee_id, badge_id, badge_data, progress_dict
+            )
+            return
+
+        met = cycle_points >= maintenance_threshold
+
+        # 2. DEMOTED + maintenance met -> immediate re-promotion to ACTIVE
+        # Do not wait for period boundary once threshold is met in demoted state.
+        if status == const.CUMULATIVE_BADGE_STATE_DEMOTED and met:
+            await self._apply_cumulative_maintenance_met(
+                assignee_id, badge_id, badge_data
+            )
+            return
+
+        # 3. Maintenance period still open — just accumulate points, no action
+        if today_iso < end_date_str:
+            return
+
+        # 4. Period ended (today >= end_date) — evaluate
+
+        if met:
+            # Maintenance met: confirm ACTIVE, reset cycle, advance dates, emit rewards
+            await self._apply_cumulative_maintenance_met(
+                assignee_id, badge_id, badge_data
+            )
+            return
+
+        # 5. Not met — check current state for grace/demotion
+        if status == const.CUMULATIVE_BADGE_STATE_GRACE:
+            # In grace period — check if grace expired
+            if grace_end_str and today_iso > grace_end_str:
+                self._apply_cumulative_demotion(
+                    assignee_id,
+                    badge_id,
+                    badge_data,
+                    progress_dict,
+                    cycle_points,
+                    maintenance_threshold,
+                )
+            # else: still within grace window, do nothing
+            return
+
+        # 6. Not in grace — enter grace or demote immediately
+        reset_schedule = badge_data.get(const.DATA_BADGE_RESET_SCHEDULE, {})
+        grace_days = int(
+            reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_GRACE_PERIOD_DAYS, 0)
+        )
+
+        if grace_days > 0:
+            self._apply_cumulative_enter_grace(
+                assignee_id,
+                badge_id,
+                badge_data,
+                progress_dict,
+                end_date_str,
+                grace_days,
+            )
+        else:
+            self._apply_cumulative_demotion(
+                assignee_id,
+                badge_id,
+                badge_data,
+                progress_dict,
+                cycle_points,
+                maintenance_threshold,
+            )
+
+    async def _evaluate_periodic_badge(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+        context: EvaluationContext,
+    ) -> None:
+        """Evaluate periodic badge (period-based, never removed).
+
+        Flow:
+        1. NOT earned → Check acquisition (period stats vs threshold)
+        2. Earned → Check acquisition again (same criteria for re-award)
+           - Criteria met → Re-award badge (increment award_count, update periods)
+           - Criteria not met → Do nothing (badge stays earned)
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge internal ID
+            badge_data: Badge definition
+            context: Evaluation context
+        """
+        assignee_data = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_data:
+            return
+
+        canonical_target = self._map_badge_to_canonical_target(
+            assignee_id,
+            badge_id,
+            badge_data,
+        )
+        target_metadata = GamificationEngine.get_periodic_target_metadata(
+            str(canonical_target.get("source_raw_type", ""))
+        )
+        if target_metadata is None:
+            const.LOGGER.warning(
+                "Skipping periodic badge evaluation for badge %s due to unknown target type",
+                badge_id,
+            )
+            return
+
+        # Ensure periodic badge progress structure exists before evaluation.
+        self._ensure_assignee_periodic_badge_structures(
+            assignee_id, badge_id, badge_data
+        )
+
+        schedule_changed = self._advance_non_cumulative_badge_cycle_if_needed(
+            assignee_id,
+            badge_id,
+            badge_data,
+            today_iso=context["today_iso"],
+        )
+        if schedule_changed:
+            self.coordinator._persist_and_update()
+
+        if not self._is_non_cumulative_badge_active_today(
+            badge_data,
+            today_iso=context["today_iso"],
+        ):
+            return
+
+        badges_earned = assignee_data.get(const.DATA_USER_BADGES_EARNED, {})
+        already_earned = badge_id in badges_earned
+
+        # Cast TypedDict to dict for engine
+        badge_dict = cast("dict[str, Any]", badge_data)
+
+        runtime_context = self._build_target_runtime_context(
+            context,
+            badge_id,
+            badge_data,
+            canonical_target=canonical_target,
+        )
+
+        # Periodic badges use same criteria for first award and re-awards
+        result = GamificationEngine.evaluate_badge(runtime_context, badge_dict)
+
+        const.LOGGER.debug(
+            "Periodic badge evaluation result for assignee %s badge %s: criteria_met=%s overall_progress=%s current_value=%s target_type=%s today=%s schedule_changed=%s",
+            assignee_id,
+            badge_id,
+            result.get("criteria_met", False),
+            result.get("overall_progress", 0.0),
+            (
+                result.get("criterion_results", [{}])[0].get("current_value", 0.0)
+                if result.get("criterion_results")
+                else 0.0
+            ),
+            canonical_target.get("source_raw_type", ""),
+            context["today_iso"],
+            schedule_changed,
+        )
+
+        if self._persist_target_progress_state(
+            assignee_id,
+            source_item_id=badge_id,
+            source_item_data=badge_data,
+            result=result,
+            already_earned=already_earned,
+            today_iso=context["today_iso"],
+            canonical_target=canonical_target,
+        ):
+            self.coordinator._persist_and_update()
+
+        if result.get("criteria_met", False):
+            await self._apply_target_award_effects(
+                assignee_id,
+                badge_id,
+                badge_data,
+                result,
+                already_earned=already_earned,
+                canonical_target=canonical_target,
+            )
+        # If criteria not met: do nothing (badge stays earned, no re-award)
+
+    def _map_badge_to_canonical_target(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+    ) -> CanonicalTargetDefinition:
+        """Map a Badge Item to canonical target definition for shared processing."""
+        target = cast("dict[str, Any]", badge_data.get(const.DATA_BADGE_TARGET, {}))
+        target_type = str(target.get(const.DATA_BADGE_TARGET_TYPE, ""))
+
+        target_metadata = GamificationEngine.get_periodic_target_metadata(target_type)
+        canonical_type = (
+            str(target_metadata.get("canonical_type"))
+            if target_metadata is not None
+            else "unknown_target"
+        )
+
+        if target_metadata is None:
+            const.LOGGER.warning(
+                "Unknown periodic badge target type '%s' for badge %s",
+                target_type,
+                badge_id,
+            )
+
+        mapped_target: CanonicalTargetDefinition = {
+            "target_type": cast("Any", canonical_type),
+            "threshold_value": float(
+                target.get(const.DATA_BADGE_TARGET_THRESHOLD_VALUE, 0.0)
+            ),
+            "source_entity_type": "badge",
+            "source_item_id": badge_id,
+            "source_raw_type": target_type,
+            "tracked_chore_ids": self.get_badge_in_scope_chores_list(
+                badge_data, assignee_id
+            ),
+        }
+
+        if target_metadata is None:
+            return mapped_target
+
+        if target_metadata.get("use_due_only_scope"):
+            mapped_target["use_due_only_scope"] = True
+        if target_metadata.get("require_no_overdue"):
+            mapped_target["require_no_overdue"] = True
+        min_count_required = target_metadata.get("min_count_required")
+        if min_count_required is not None:
+            mapped_target["min_count_required"] = int(min_count_required)
+        percent_required = target_metadata.get("percent_required")
+        if percent_required is not None:
+            mapped_target["percent_required"] = float(percent_required)
+
+        return mapped_target
+
+    def _resolve_target_status_transition(
+        self,
+        *,
+        criteria_met: bool,
+        already_earned: bool,
+    ) -> str:
+        """Resolve deterministic non-cumulative badge status transitions."""
+        if criteria_met:
+            return const.BADGE_STATE_EARNED
+        if already_earned:
+            return const.BADGE_STATE_ACTIVE_CYCLE
+        return const.BADGE_STATE_IN_PROGRESS
+
+    async def _apply_target_award_effects(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+        result: EvaluationResult,
+        *,
+        already_earned: bool,
+        canonical_target: CanonicalTargetDefinition,
+    ) -> None:
+        """Apply non-cumulative badge award effects through a shared adapter."""
+        const.LOGGER.debug(
+            "Applying target award effects for assignee %s source %s canonical_type %s",
+            assignee_id,
+            canonical_target.get("source_item_id", badge_id),
+            canonical_target.get("target_type", "unknown"),
+        )
+
+        if not already_earned:
+            await self._apply_periodic_first_award(
+                assignee_id, badge_id, badge_data, result
+            )
+            return
+
+        if self._is_periodic_award_recorded_for_current_cycle(assignee_id, badge_id):
+            const.LOGGER.debug(
+                "Skipping periodic re-award for assignee %s badge %s "
+                "(already awarded in current cycle)",
+                assignee_id,
+                badge_id,
+            )
+            return
+
+        await self._apply_periodic_reaward(assignee_id, badge_id, badge_data)
+
+    def _is_periodic_award_recorded_for_current_cycle(
+        self,
+        assignee_id: str,
+        badge_id: str,
+    ) -> bool:
+        """Return True if periodic badge already has an award recorded this cycle."""
+        assignee_data: UserData | dict[str, Any] = self.coordinator.assignees_data.get(
+            assignee_id, {}
+        )
+
+        badges_earned = cast(
+            "dict[str, Any]", assignee_data.get(const.DATA_USER_BADGES_EARNED, {})
+        )
+        badge_entry = cast("dict[str, Any]", badges_earned.get(badge_id, {}))
+        last_awarded_raw = badge_entry.get(
+            const.DATA_USER_BADGES_EARNED_LAST_AWARDED, ""
+        )
+        last_awarded_local = dt_parse(
+            cast("str | date | None", last_awarded_raw),
+            return_type=const.HELPER_RETURN_DATETIME_LOCAL,
+        )
+        if not isinstance(last_awarded_local, datetime):
+            return False
+        last_awarded_date = last_awarded_local.date()
+
+        badge_data = cast("BadgeData", self.coordinator.badges_data.get(badge_id, {}))
+        reset_schedule = cast(
+            "dict[str, Any]",
+            badge_data.get(const.DATA_BADGE_RESET_SCHEDULE, {}),
+        )
+        recurring_frequency = str(
+            reset_schedule.get(
+                const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY,
+                const.FREQUENCY_NONE,
+            )
+        )
+
+        if recurring_frequency == const.FREQUENCY_NONE:
+            return True
+
+        start_raw = reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_START_DATE)
+        end_raw = reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_END_DATE)
+        start_date = dt_parse_date(start_raw if isinstance(start_raw, str) else None)
+        end_date = dt_parse_date(end_raw if isinstance(end_raw, str) else None)
+
+        if start_date and end_date:
+            return start_date <= last_awarded_date <= end_date
+
+        return last_awarded_date == dt_today_local()
+
+    def _is_non_cumulative_badge_active_today(
+        self,
+        badge_data: BadgeData,
+        *,
+        today_iso: str,
+    ) -> bool:
+        """Return True when the current day is inside the badge schedule window."""
+        reset_schedule = cast(
+            "dict[str, Any]",
+            badge_data.get(const.DATA_BADGE_RESET_SCHEDULE, {}),
+        )
+        recurring_frequency = str(
+            reset_schedule.get(
+                const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY,
+                const.FREQUENCY_NONE,
+            )
+        )
+
+        if recurring_frequency == const.FREQUENCY_NONE:
+            return True
+
+        start_date_iso = str(
+            reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_START_DATE, "")
+        )
+        end_date_iso = str(
+            reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_END_DATE, "")
+        )
+
+        if start_date_iso and today_iso < start_date_iso:
+            return False
+        if end_date_iso and today_iso > end_date_iso:
+            return False
+
+        return True
+
+    @staticmethod
+    def _resolve_badge_cycle_start(
+        reset_schedule: dict[str, Any],
+        today_iso: str,
+    ) -> str:
+        """Resolve the cycle start date used for badge window scoping.
+
+        Periodic badges get a start date written on cycle rollover; daily badges
+        cover a single day. Falls back to today when unset so a missing anchor
+        never fabricates earlier-in-cycle failures.
+        """
+        raw_start = reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_START_DATE)
+        return raw_start if isinstance(raw_start, str) and raw_start else today_iso
+
+    def _build_target_runtime_context(
+        self,
+        base_context: EvaluationContext,
+        badge_id: str,
+        badge_data: BadgeData,
+        *,
+        canonical_target: CanonicalTargetDefinition,
+    ) -> EvaluationContext:
+        """Build shared target runtime context using stats-owned period reads.
+
+        Args:
+            base_context: Base evaluation context for the assignee.
+            badge_id: Badge internal ID.
+            badge_data: Badge definition.
+            canonical_target: Canonical target mapping for source item.
+
+        Returns:
+            EvaluationContext augmented with runtime keys consumed
+            by GamificationEngine.
+        """
+        assignee_id = base_context["assignee_id"]
+        today_iso = base_context["today_iso"]
+
+        assignee_data: UserData | dict[str, Any] = self.coordinator.assignees_data.get(
+            assignee_id, {}
+        )
+        badge_progress = cast(
+            "dict[str, Any]",
+            assignee_data.get(const.DATA_USER_BADGE_PROGRESS, {}),
+        )
+        current_badge_progress = cast(
+            "dict[str, Any]", badge_progress.get(badge_id, {})
+        )
+        last_update_day_iso = str(
+            current_badge_progress.get(
+                const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY, ""
+            )
+        )
+
+        tracked_chores = canonical_target.get(
+            "tracked_chore_ids"
+        ) or self.get_badge_in_scope_chores_list(badge_data, assignee_id)
+
+        today_stats = self.coordinator.statistics_manager.get_badge_scoped_today_stats(
+            assignee_id,
+            tracked_chores,
+            today_iso=today_iso,
+        )
+        # One miss check serves both scope variants: the answer depends on the
+        # badge's advance day, not on the chore scope.
+        missed_since_advance = (
+            self.coordinator.statistics_manager.has_missed_occurrence_since_advance(
+                tracked_chores,
+                last_update_day_iso=last_update_day_iso,
+                today_iso=today_iso,
+            )
+        )
+        reset_schedule = cast(
+            "dict[str, Any]",
+            badge_data.get(const.DATA_BADGE_RESET_SCHEDULE, {}),
+        )
+        start_date_iso = str(
+            reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_START_DATE, "")
+        )
+        end_date_iso = str(
+            reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_END_DATE, "")
+        )
+        window_start_iso = start_date_iso or today_iso
+        window_end_iso = end_date_iso or today_iso
+        cycle_start_iso = self._resolve_badge_cycle_start(reset_schedule, today_iso)
+        target_type = canonical_target.get("source_raw_type")
+
+        if target_type in {
+            const.BADGE_TARGET_THRESHOLD_TYPE_POINTS,
+            const.BADGE_TARGET_THRESHOLD_TYPE_POINTS_CHORES,
+        }:
+            today_stats["window_points"] = self._get_tracked_window_points_total(
+                assignee_id,
+                tracked_chores,
+                window_start_iso,
+                window_end_iso,
+            )
+        if target_type == const.BADGE_TARGET_THRESHOLD_TYPE_CHORE_COUNT:
+            today_stats["window_approved"] = self._get_tracked_window_completion_total(
+                assignee_id,
+                tracked_chores,
+                window_start_iso,
+                window_end_iso,
+            )
+        today_completion = (
+            self.coordinator.statistics_manager.get_badge_scoped_today_completion(
+                assignee_id,
+                tracked_chores,
+                today_iso=today_iso,
+                cycle_start_iso=cycle_start_iso,
+                only_due_today=False,
+                last_update_day_iso=last_update_day_iso,
+                missed_since_advance=missed_since_advance,
+            )
+        )
+        today_completion_due = (
+            self.coordinator.statistics_manager.get_badge_scoped_today_completion(
+                assignee_id,
+                tracked_chores,
+                today_iso=today_iso,
+                cycle_start_iso=cycle_start_iso,
+                only_due_today=True,
+                last_update_day_iso=last_update_day_iso,
+                missed_since_advance=missed_since_advance,
+            )
+        )
+
+        runtime_context = cast("EvaluationContext", dict(base_context))
+        runtime_context["current_badge_progress"] = cast(
+            "AssigneeBadgeProgress", current_badge_progress
+        )
+        runtime_context["today_stats"] = today_stats
+        runtime_context["today_completion"] = today_completion
+        runtime_context["today_completion_due"] = today_completion_due
+        return runtime_context
+
+    def _reset_non_cumulative_badge_progress_runtime_fields(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        progress: dict[str, Any],
+    ) -> None:
+        """Reset runtime-only periodic badge progress for a new cycle."""
+        assignee_info: UserData | dict[str, Any] = self.coordinator.assignees_data.get(
+            assignee_id, {}
+        )
+        badges_earned = cast(
+            "dict[str, Any]",
+            assignee_info.get(const.DATA_USER_BADGES_EARNED, {}),
+        )
+        progress[const.DATA_USER_BADGE_PROGRESS_STATUS] = (
+            const.BADGE_STATE_ACTIVE_CYCLE
+            if badge_id in badges_earned
+            else const.BADGE_STATE_IN_PROGRESS
+        )
+        progress[const.DATA_USER_BADGE_PROGRESS_POINTS_CYCLE_COUNT] = 0.0
+        progress[const.DATA_USER_BADGE_PROGRESS_CHORES_CYCLE_COUNT] = 0
+        progress[const.DATA_USER_BADGE_PROGRESS_DAYS_CYCLE_COUNT] = 0
+        progress[const.DATA_USER_BADGE_PROGRESS_OVERALL_PROGRESS] = 0.0
+        progress[const.DATA_USER_BADGE_PROGRESS_CRITERIA_MET] = False
+        progress[const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY] = ""
+
+    def _ensure_assignee_periodic_badge_structures(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+    ) -> None:
+        """Ensure non-cumulative badge progress structure exists for evaluation.
+
+        Mirrors landlord ensure patterns used by chore/reward/badge tracking by
+        creating missing containers before tenant/stat/evaluation logic reads them.
+
+        Args:
+            assignee_id: Assignee internal ID.
+            badge_id: Badge internal ID.
+            badge_data: Badge definition.
+        """
+        assignee_info = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            return
+
+        if const.DATA_USER_BADGE_PROGRESS not in assignee_info:
+            assignee_info[const.DATA_USER_BADGE_PROGRESS] = {}
+
+        badge_progress = cast(
+            "dict[str, Any]", assignee_info.get(const.DATA_USER_BADGE_PROGRESS, {})
+        )
+        entry = cast("dict[str, Any]", badge_progress.setdefault(badge_id, {}))
+
+        entry.setdefault(
+            const.DATA_USER_BADGE_PROGRESS_NAME,
+            badge_data.get(const.DATA_BADGE_NAME),
+        )
+        entry.setdefault(
+            const.DATA_USER_BADGE_PROGRESS_STATUS,
+            const.BADGE_STATE_IN_PROGRESS,
+        )
+        entry.setdefault(const.DATA_USER_BADGE_PROGRESS_POINTS_CYCLE_COUNT, 0.0)
+        entry.setdefault(const.DATA_USER_BADGE_PROGRESS_CHORES_CYCLE_COUNT, 0)
+        entry.setdefault(const.DATA_USER_BADGE_PROGRESS_DAYS_CYCLE_COUNT, 0)
+        entry.setdefault(const.DATA_USER_BADGE_PROGRESS_OVERALL_PROGRESS, 0.0)
+        entry.setdefault(const.DATA_USER_BADGE_PROGRESS_CRITERIA_MET, False)
+        entry.setdefault(const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY, "")
+
+    def _advance_non_cumulative_badge_cycle_if_needed(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+        *,
+        today_iso: str,
+    ) -> bool:
+        """Advance expired daily/periodic cycle windows and reset cycle counters.
+
+        Args:
+            assignee_id: Assignee internal ID.
+            badge_id: Badge internal ID.
+            badge_data: Badge definition.
+            today_iso: Local date key for current evaluation cycle.
+
+        Returns:
+            True if schedule/progress fields were updated.
+        """
+        assignee_info = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            return False
+
+        badge_progress = cast(
+            "dict[str, Any]", assignee_info.get(const.DATA_USER_BADGE_PROGRESS, {})
+        )
+        progress = cast("dict[str, Any]", badge_progress.get(badge_id, {}))
+        if not progress:
+            return False
+
+        reset_schedule_raw = badge_data.get(const.DATA_BADGE_RESET_SCHEDULE)
+        if not isinstance(reset_schedule_raw, dict):
+            reset_schedule_raw = {}
+            badge_data[const.DATA_BADGE_RESET_SCHEDULE] = reset_schedule_raw
+        reset_schedule = cast("dict[str, Any]", reset_schedule_raw)
+        recurring_frequency = str(
+            reset_schedule.get(
+                const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY,
+                const.FREQUENCY_NONE,
+            )
+        )
+        if recurring_frequency == const.FREQUENCY_NONE:
+            return False
+
+        end_date_iso = str(
+            reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_END_DATE, "")
+        )
+        if not end_date_iso:
+            return False
+
+        if end_date_iso >= today_iso:
+            return False
+
+        const.LOGGER.debug(
+            "Periodic badge cycle rollover check for assignee %s badge %s with schedule start=%s end=%s today=%s and progress points=%s chores=%s days=%s last_update_day=%s",
+            assignee_id,
+            badge_id,
+            reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_START_DATE, ""),
+            end_date_iso,
+            today_iso,
+            progress.get(const.DATA_USER_BADGE_PROGRESS_POINTS_CYCLE_COUNT, 0.0),
+            progress.get(const.DATA_USER_BADGE_PROGRESS_CHORES_CYCLE_COUNT, 0),
+            progress.get(const.DATA_USER_BADGE_PROGRESS_DAYS_CYCLE_COUNT, 0),
+            progress.get(const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY, ""),
+        )
+
+        rolled_cycles = 0
+        current_end = end_date_iso
+        previous_end = end_date_iso
+        while current_end < today_iso:
+            next_end = self._get_next_non_cumulative_cycle_end(
+                badge_data,
+                current_end,
+            )
+            if not next_end or next_end <= current_end:
+                break
+            previous_end = current_end
+            current_end = next_end
+            rolled_cycles += 1
+
+        if rolled_cycles == 0:
+            return False
+
+        badge_type = badge_data.get(const.DATA_BADGE_TYPE)
+        is_special_occasion = badge_type in const.INCLUDE_SPECIAL_OCCASION_BADGE_TYPES
+        is_custom_1_day = (
+            recurring_frequency == const.FREQUENCY_CUSTOM
+            and reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL) == 1
+            and reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL_UNIT)
+            == const.TIME_UNIT_DAYS
+        )
+        is_single_day_window = (
+            recurring_frequency == const.FREQUENCY_DAILY
+            or is_custom_1_day
+            or is_special_occasion
+        )
+
+        next_start = current_end if is_single_day_window else previous_end
+        if not is_single_day_window:
+            candidate_start = dt_add_interval(
+                previous_end,
+                interval_unit=const.TIME_UNIT_DAYS,
+                delta=1,
+                require_future=False,
+                return_type=const.HELPER_RETURN_ISO_DATE,
+            )
+            if isinstance(candidate_start, str):
+                next_start = candidate_start
+
+        reset_schedule[const.DATA_BADGE_RESET_SCHEDULE_START_DATE] = next_start
+        reset_schedule[const.DATA_BADGE_RESET_SCHEDULE_END_DATE] = current_end
+
+        const.LOGGER.debug(
+            "Periodic badge cycle rollover advancing assignee %s badge %s by %s cycles to schedule start=%s end=%s",
+            assignee_id,
+            badge_id,
+            rolled_cycles,
+            next_start,
+            current_end,
+        )
+
+        assigned_to = cast(
+            "list[str]",
+            badge_data.get(const.DATA_BADGE_ASSIGNED_USER_IDS, []) or [assignee_id],
+        )
+        for assigned_assignee_id in assigned_to:
+            if assigned_assignee_id not in self.coordinator.assignees_data:
+                continue
+            self._ensure_assignee_periodic_badge_structures(
+                assigned_assignee_id,
+                badge_id,
+                badge_data,
+            )
+            assigned_progress = cast(
+                "dict[str, Any]",
+                self.coordinator.assignees_data[assigned_assignee_id]
+                .get(const.DATA_USER_BADGE_PROGRESS, {})
+                .get(badge_id, {}),
+            )
+            if not assigned_progress:
+                continue
+            const.LOGGER.debug(
+                "Periodic badge cycle rollover resetting assignee %s badge %s from points=%s chores=%s days=%s last_update_day=%s",
+                assigned_assignee_id,
+                badge_id,
+                assigned_progress.get(
+                    const.DATA_USER_BADGE_PROGRESS_POINTS_CYCLE_COUNT, 0.0
+                ),
+                assigned_progress.get(
+                    const.DATA_USER_BADGE_PROGRESS_CHORES_CYCLE_COUNT, 0
+                ),
+                assigned_progress.get(
+                    const.DATA_USER_BADGE_PROGRESS_DAYS_CYCLE_COUNT, 0
+                ),
+                assigned_progress.get(
+                    const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY, ""
+                ),
+            )
+            self._reset_non_cumulative_badge_progress_runtime_fields(
+                assigned_assignee_id,
+                badge_id,
+                assigned_progress,
+            )
+            const.LOGGER.debug(
+                "Periodic badge cycle rollover reset complete for assignee %s badge %s to points=%s chores=%s days=%s last_update_day=%s status=%s",
+                assigned_assignee_id,
+                badge_id,
+                assigned_progress.get(
+                    const.DATA_USER_BADGE_PROGRESS_POINTS_CYCLE_COUNT, 0.0
+                ),
+                assigned_progress.get(
+                    const.DATA_USER_BADGE_PROGRESS_CHORES_CYCLE_COUNT, 0
+                ),
+                assigned_progress.get(
+                    const.DATA_USER_BADGE_PROGRESS_DAYS_CYCLE_COUNT, 0
+                ),
+                assigned_progress.get(
+                    const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY, ""
+                ),
+                assigned_progress.get(const.DATA_USER_BADGE_PROGRESS_STATUS, ""),
+            )
+
+        return True
+
+    def _get_next_non_cumulative_cycle_end(
+        self,
+        badge_data: BadgeData,
+        current_end_iso: str,
+    ) -> str | None:
+        """Get the next cycle end date for a non-cumulative badge."""
+        reset_schedule = badge_data.get(const.DATA_BADGE_RESET_SCHEDULE, {})
+        recurring_frequency = reset_schedule.get(
+            const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY,
+            const.FREQUENCY_NONE,
+        )
+
+        if recurring_frequency == const.FREQUENCY_CUSTOM:
+            custom_interval = reset_schedule.get(
+                const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL
+            )
+            custom_interval_unit = reset_schedule.get(
+                const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL_UNIT
+            )
+            if custom_interval and custom_interval_unit:
+                custom_result = dt_add_interval(
+                    current_end_iso,
+                    interval_unit=custom_interval_unit,
+                    delta=int(custom_interval),
+                    require_future=False,
+                    return_type=const.HELPER_RETURN_ISO_DATE,
+                )
+                return str(custom_result) if custom_result else None
+            return None
+
+        if recurring_frequency in RecurrenceEngine.PERIOD_END_FREQUENCIES:
+            # advance_period_end_preserve_time advances to the NEXT period end.
+            # get_next_occurrence resolves the period end of the current date and
+            # returns that same date, which stalls the rollover loop below.
+            pe_config: ScheduleConfig = {
+                "frequency": recurring_frequency,
+                "base_date": current_end_iso,
+            }
+            pe_engine = RecurrenceEngine(pe_config)
+            current_end_dt = dt_parse(current_end_iso)
+            if not isinstance(current_end_dt, datetime):
+                return None
+            next_dt = pe_engine.advance_period_end_preserve_time(current_end_dt)
+            if next_dt:
+                return as_local(next_dt).date().isoformat()
+            return None
+
+        next_result = dt_next_schedule(
+            current_end_iso,
+            interval_type=recurring_frequency,
+            require_future=False,
+            return_type=const.HELPER_RETURN_ISO_DATE,
+        )
+        return str(next_result) if next_result else None
+
+    @staticmethod
+    def _resolve_period_end_cycle_end(
+        recurring_frequency: str,
+        reference_iso: str,
+    ) -> str | None:
+        """Resolve the upcoming period end for a period-end frequency.
+
+        Unlike dt_next_schedule, which adds a full interval before snapping to the
+        period end, this returns the first period end at or after the reference date
+        so calendar-aligned cycles do not start one period late.
+
+        Args:
+            recurring_frequency: Period-end frequency constant.
+            reference_iso: Reference local date in ISO format.
+
+        Returns:
+            ISO date of the resolved period end, or None when unavailable.
+        """
+        pe_config: ScheduleConfig = {
+            "frequency": recurring_frequency,
+            "base_date": reference_iso,
+        }
+        pe_engine = RecurrenceEngine(pe_config)
+        reference_dt = dt_parse(reference_iso)
+        if not isinstance(reference_dt, datetime):
+            return None
+        period_end = pe_engine.get_next_occurrence(
+            after=as_utc(reference_dt), require_future=True
+        )
+        if not period_end:
+            return None
+        return as_local(period_end).date().isoformat()
+
+    def _persist_target_progress_state(
+        self,
+        assignee_id: str,
+        *,
+        source_item_id: str,
+        source_item_data: BadgeData,
+        result: EvaluationResult,
+        already_earned: bool,
+        today_iso: str,
+        canonical_target: CanonicalTargetDefinition,
+    ) -> bool:
+        """Persist shared non-cumulative target progress state.
+
+        This shared mutator is currently badge-backed and is intentionally
+        source-shaped for future achievement/challenge wrapper reuse.
+
+        Args:
+            assignee_id: Assignee internal ID.
+            source_item_id: Source item UUID (badge for now).
+            source_item_data: Source item data (badge for now).
+            result: Evaluation result from engine.
+            already_earned: Whether source has already been earned/completed.
+            today_iso: Current local day ISO key.
+            canonical_target: Canonical target mapping for this source.
+
+        Returns:
+            True when any persisted field changed.
+        """
+        return self._persist_periodic_badge_progress(
+            assignee_id,
+            source_item_id,
+            source_item_data,
+            result,
+            already_earned=already_earned,
+            today_iso=today_iso,
+            canonical_target=canonical_target,
+        )
+
+    def repair_badge_streak(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        *,
+        count: int | None = None,
+    ) -> dict[str, Any]:
+        """Restore a badge streak, from retained history or an explicit count.
+
+        Moves `last_update_day` back to **yesterday**. Yesterday rather than today
+        because the evaluator treats `last_update_day == today_iso` as already
+        counted, so today would hold at the restored value instead of advancing it.
+        Yesterday also leaves an empty missed-occurrence window, which retroactively
+        clears the break that prompted the repair.
+
+        No caps and no guards are applied: an admin may restore any value, including
+        onto a live streak. That is deliberate, so the service is a bounded setter as
+        well as a repair.
+
+        Args:
+            assignee_id: Assignee internal ID.
+            badge_id: Badge internal ID.
+            count: Streak value to restore. When None, the highest retained value is
+                used and `source` reports `"history"`.
+
+        Returns:
+            Response payload with the restored count, its source, and the retained
+            history.
+
+        Raises:
+            HomeAssistantError: The badge has no progress, does not track a streak,
+                or has no retained history to restore from.
+        """
+        today_iso = dt_today_iso()
+
+        assignee_info = cast(
+            "dict[str, Any]", self.coordinator.assignees_data.get(assignee_id, {})
+        )
+        badge_progress = cast(
+            "dict[str, Any]", assignee_info.get(const.DATA_USER_BADGE_PROGRESS, {})
+        )
+        badge_data = cast(
+            "dict[str, Any]", self.coordinator.badges_data.get(badge_id, {})
+        )
+        progress = badge_progress.get(badge_id)
+        badge_name = str(badge_data.get(const.DATA_BADGE_NAME, badge_id))
+
+        if not isinstance(progress, dict) or not progress:
+            raise HomeAssistantError(
+                translation_domain=const.DOMAIN,
+                translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                translation_placeholders={
+                    "entity_type": const.LABEL_BADGE,
+                    "name": badge_name,
+                },
+            )
+
+        # Check the target type, not the presence of a counter. `days_cycle_count`
+        # is shared with the Days family, which counts accumulated days rather than
+        # a streak, and a badge edited away from a Streak target keeps the field
+        # behind. Only the current target type answers the question.
+        badge_target_type = str(badge_data.get(const.DATA_BADGE_TARGET_TYPE, ""))
+        if badge_target_type not in const.BADGE_TARGET_TYPES_STREAK:
+            raise HomeAssistantError(
+                translation_domain=const.DOMAIN,
+                translation_key=const.TRANS_KEY_ERROR_BADGE_NOT_STREAK,
+                translation_placeholders={"name": badge_name},
+            )
+
+        # Strict "survival check" variants are refused separately, because the
+        # refusal has a different cause: they *are* streaks, but they zero from
+        # chore-level lateness (`has_overdue` / a `last_overdue` or `last_missed`
+        # timestamp since cycle start). Repair writes badge progress only, so the
+        # restored count is re-zeroed on the next evaluation. Reporting success
+        # there would be worse than refusing.
+        if badge_target_type in const.BADGE_TARGET_TYPES_NO_OVERDUE:
+            raise HomeAssistantError(
+                translation_domain=const.DOMAIN,
+                translation_key=const.TRANS_KEY_ERROR_BADGE_STREAK_NO_OVERDUE,
+                translation_placeholders={"name": badge_name},
+            )
+
+        history = self.get_badge_streak_history(progress)
+
+        if count is None:
+            # A maximum of 0 means every retained day was already broken, so there is
+            # nothing meaningful to restore — refusing beats reporting a no-op as a
+            # successful repair.
+            if not history or max(history.values()) == 0:
+                raise HomeAssistantError(
+                    translation_domain=const.DOMAIN,
+                    translation_key=const.TRANS_KEY_ERROR_BADGE_STREAK_NOTHING_TO_RESTORE,
+                    translation_placeholders={"name": badge_name},
+                )
+            restored_count = max(history.values())
+            source = "history"
+        else:
+            restored_count = count
+            source = "manual"
+
+        progress[const.DATA_USER_BADGE_PROGRESS_DAYS_CYCLE_COUNT] = restored_count
+        progress[const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY] = dt_add_interval(
+            today_iso,
+            interval_unit=const.TIME_UNIT_DAYS,
+            delta=-1,
+            return_type=const.HELPER_RETURN_ISO_DATE,
+        )
+
+        self.coordinator._persist_and_update()
+
+        const.LOGGER.info(
+            "Repaired badge streak for badge '%s': count=%s source=%s history=%s",
+            badge_name,
+            restored_count,
+            source,
+            history,
+        )
+
+        return {
+            # Distinct literal keys, not DATA_* constants: DATA_USER_NAME and
+            # DATA_BADGE_NAME are both "name", so using them here would make the
+            # badge name silently overwrite the assignee name. get_ledger's
+            # top-level response uses literals for the same reason.
+            "assignee_id": assignee_id,
+            "assignee_name": assignee_info.get(const.DATA_USER_NAME, assignee_id),
+            "badge_id": badge_id,
+            "badge_name": badge_name,
+            "restored_count": restored_count,
+            "source": source,
+            "history": dict(sorted(history.items())),
+            "retention_days": const.DEFAULT_BADGE_STREAK_HISTORY_DAYS,
+        }
+
+    @staticmethod
+    def get_badge_streak_history(progress: dict[str, Any]) -> dict[str, int]:
+        """Return the retained per-day streak counts from badge progress.
+
+        The history maps LOCAL date keys ("YYYY-MM-DD") to the streak count for
+        that day, most recent days only. It exists so a broken streak's previous
+        value survives the reset to zero.
+
+        Reads defensively: a missing, wrongly typed, or partially malformed value
+        degrades to an empty history rather than raising, so corrupt data cannot
+        break badge evaluation. Non-integer counts are skipped for the same reason.
+        """
+        raw = progress.get(const.DATA_USER_BADGE_PROGRESS_STREAK_HISTORY)
+        if not isinstance(raw, dict):
+            return {}
+
+        history: dict[str, int] = {}
+        for day_iso, count in raw.items():
+            if not isinstance(day_iso, str):
+                continue
+            if isinstance(count, bool) or not isinstance(count, int):
+                continue
+            history[day_iso] = count
+        return history
+
+    @staticmethod
+    def record_badge_streak_history(
+        progress: dict[str, Any],
+        count: int,
+        today_iso: str,
+    ) -> bool:
+        """Record today's streak count, retaining the most recent days.
+
+        Written on every evaluation, including the day a streak breaks — there
+        `count` is 0. The pre-break value is not re-recorded under today's key; it
+        survives in the earlier day's entry and ages out on its own, which is what
+        bounds the repair lookback. Recording only on advance would leave nothing
+        to restore from.
+
+        A day is recorded when its key is absent or its value differs, deliberately
+        not behind the caller's "did the count change" check: a neutral day leaves
+        the count unchanged yet still needs its own key, and skipping it would leave
+        gaps that make "how many days ago" misleading.
+
+        Returns:
+            True when the history was modified, so the caller can flag persistence.
+        """
+        history = GamificationManager.get_badge_streak_history(progress)
+        if history.get(today_iso) == count:
+            return False
+
+        history[today_iso] = count
+        progress[const.DATA_USER_BADGE_PROGRESS_STREAK_HISTORY] = (
+            GamificationManager.prune_badge_streak_history(
+                history, const.DEFAULT_BADGE_STREAK_HISTORY_DAYS
+            )
+        )
+        return True
+
+    @staticmethod
+    def prune_badge_streak_history(
+        history: dict[str, int],
+        max_days: int,
+    ) -> dict[str, int]:
+        """Keep only the most recent `max_days` entries.
+
+        Keys are ISO dates, which sort correctly as strings, so the newest are
+        simply the last ones sorted. `max_days` is a parameter rather than being
+        baked in, so changing the retained depth never requires touching this code.
+        """
+        if max_days <= 0:
+            return {}
+        if len(history) <= max_days:
+            return dict(history)
+        return {day_iso: history[day_iso] for day_iso in sorted(history)[-max_days:]}
+
+    def _persist_periodic_badge_progress(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+        result: EvaluationResult,
+        *,
+        already_earned: bool,
+        today_iso: str,
+        canonical_target: CanonicalTargetDefinition | None = None,
+    ) -> bool:
+        """Persist runtime periodic evaluation fields into assignee badge progress.
+
+        Args:
+            assignee_id: Assignee internal ID.
+            badge_id: Badge internal ID.
+            badge_data: Badge definition.
+            result: Evaluation result from engine.
+            already_earned: Whether assignee already has this badge in badges_earned.
+            today_iso: Current local day ISO key.
+            canonical_target: Canonical target mapping for this source.
+                Optional for backward-compatible direct calls.
+
+        Returns:
+            True when any persisted field changed.
+        """
+        assignee_info = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            return False
+
+        badge_progress_all = cast(
+            "dict[str, Any]", assignee_info.get(const.DATA_USER_BADGE_PROGRESS, {})
+        )
+        progress = cast("dict[str, Any]", badge_progress_all.get(badge_id, {}))
+        if not progress:
+            return False
+
+        changed = False
+
+        overall_progress = round(
+            float(result.get("overall_progress", 0.0)),
+            const.DATA_FLOAT_PRECISION,
+        )
+        criteria_met = bool(result.get("criteria_met", False))
+        if (
+            progress.get(const.DATA_USER_BADGE_PROGRESS_OVERALL_PROGRESS)
+            != overall_progress
+        ):
+            progress[const.DATA_USER_BADGE_PROGRESS_OVERALL_PROGRESS] = overall_progress
+            changed = True
+        if progress.get(const.DATA_USER_BADGE_PROGRESS_CRITERIA_MET) != criteria_met:
+            progress[const.DATA_USER_BADGE_PROGRESS_CRITERIA_MET] = criteria_met
+            changed = True
+
+        expected_status = self._resolve_target_status_transition(
+            criteria_met=criteria_met,
+            already_earned=already_earned,
+        )
+        if progress.get(const.DATA_USER_BADGE_PROGRESS_STATUS) != expected_status:
+            progress[const.DATA_USER_BADGE_PROGRESS_STATUS] = expected_status
+            changed = True
+
+        if canonical_target is not None:
+            target_type = canonical_target.get("source_raw_type")
+        else:
+            target = cast("dict[str, Any]", badge_data.get(const.DATA_BADGE_TARGET, {}))
+            target_type = target.get(const.DATA_BADGE_TARGET_TYPE)
+
+        target_metadata = GamificationEngine.get_periodic_target_metadata(
+            str(target_type)
+        )
+        persist_bucket = (
+            str(target_metadata.get("persist_bucket"))
+            if target_metadata is not None
+            else "unknown"
+        )
+
+        criterion_results = result.get("criterion_results", [])
+        criterion_current_value = 0.0
+        if criterion_results:
+            criterion_current_value = float(
+                criterion_results[0].get("current_value", 0.0)
+            )
+
+        if persist_bucket == "points_cycle":
+            if (
+                float(
+                    progress.get(const.DATA_USER_BADGE_PROGRESS_POINTS_CYCLE_COUNT, 0.0)
+                )
+                != criterion_current_value
+            ):
+                progress[const.DATA_USER_BADGE_PROGRESS_POINTS_CYCLE_COUNT] = (
+                    criterion_current_value
+                )
+                changed = True
+                if (
+                    progress.get(const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY)
+                    != today_iso
+                ):
+                    progress[const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY] = today_iso
+                    changed = True
+
+        elif persist_bucket == "chores_cycle":
+            chores_count = int(criterion_current_value)
+            if (
+                int(progress.get(const.DATA_USER_BADGE_PROGRESS_CHORES_CYCLE_COUNT, 0))
+                != chores_count
+            ):
+                progress[const.DATA_USER_BADGE_PROGRESS_CHORES_CYCLE_COUNT] = (
+                    chores_count
+                )
+                changed = True
+                if (
+                    progress.get(const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY)
+                    != today_iso
+                ):
+                    progress[const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY] = today_iso
+                    changed = True
+
+        elif persist_bucket == "days_cycle":
+            previous_days = int(
+                progress.get(const.DATA_USER_BADGE_PROGRESS_DAYS_CYCLE_COUNT, 0)
+            )
+            days_count = int(criterion_current_value)
+            if previous_days != days_count:
+                progress[const.DATA_USER_BADGE_PROGRESS_DAYS_CYCLE_COUNT] = days_count
+                changed = True
+
+            # Retain today's count, including the 0 written on a break, so the
+            # pre-break value survives in an earlier entry and can be restored.
+            # Recorded outside the change check above: a neutral day leaves the
+            # count unchanged but still needs its own key.
+            #
+            # Only for Streak targets. This bucket is shared with the Days family,
+            # whose counter is an accumulated day count rather than a streak, so
+            # recording it in `streak_history` would store a misleading value and
+            # bloat progress for badges that can never use it.
+            if target_type in const.BADGE_TARGET_TYPES_STREAK and (
+                GamificationManager.record_badge_streak_history(
+                    progress, days_count, today_iso
+                )
+            ):
+                changed = True
+
+            # The anchor advances only when the streak does. A held or neutral day
+            # must leave it alone, because it bounds the missed-occurrence window:
+            # moving it forward would skip over an occurrence that was missed.
+            previous_update_day = str(
+                progress.get(const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY, "")
+            )
+            if (
+                days_count > 0
+                and days_count != previous_days
+                and previous_update_day != today_iso
+            ):
+                progress[const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY] = today_iso
+                changed = True
+
+        elif persist_bucket == "unknown":
+            const.LOGGER.warning(
+                "Skipping periodic badge progress persistence for unknown target type '%s'",
+                target_type,
+            )
+
+        if changed:
+            const.LOGGER.debug(
+                "Periodic badge progress persisted for assignee %s badge %s with status=%s points=%s chores=%s days=%s overall_progress=%s criteria_met=%s last_update_day=%s persist_bucket=%s today=%s",
+                assignee_id,
+                badge_id,
+                progress.get(const.DATA_USER_BADGE_PROGRESS_STATUS, ""),
+                progress.get(const.DATA_USER_BADGE_PROGRESS_POINTS_CYCLE_COUNT, 0.0),
+                progress.get(const.DATA_USER_BADGE_PROGRESS_CHORES_CYCLE_COUNT, 0),
+                progress.get(const.DATA_USER_BADGE_PROGRESS_DAYS_CYCLE_COUNT, 0),
+                progress.get(const.DATA_USER_BADGE_PROGRESS_OVERALL_PROGRESS, 0.0),
+                progress.get(const.DATA_USER_BADGE_PROGRESS_CRITERIA_MET, False),
+                progress.get(const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY, ""),
+                persist_bucket,
+                today_iso,
+            )
+
+        return changed
+
+    # =========================================================================
+    # CUMULATIVE BADGE OPERATIONS
+    # =========================================================================
+
+    async def _apply_cumulative_first_award(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+        result: EvaluationResult,
+    ) -> None:
+        """Award cumulative badge for the first time.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge internal ID
+            badge_data: Badge definition
+            result: Evaluation result (unused but kept for signature consistency)
+        """
+        assignee_data = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_data:
+            return
+
+        const.LOGGER.info(
+            "Assignee %s earned cumulative badge %s", assignee_id, badge_id
+        )
+
+        # Initialize cumulative badge progress
+        progress = self._ensure_cumulative_progress_container(assignee_data)
+        progress_dict = cast("dict[str, Any]", progress)
+        progress_dict[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_CYCLE_POINTS] = 0.0
+        progress_dict[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_STATUS] = (
+            const.CUMULATIVE_BADGE_STATE_ACTIVE
+        )
+
+        # Set maintenance dates if enabled
+        maintenance_enabled = self._badge_maintenance_enabled(badge_data)
+        if maintenance_enabled:
+            end_date, grace_end = self._calculate_maintenance_dates(badge_data)
+            progress_dict[
+                const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_END_DATE
+            ] = end_date
+            progress_dict[
+                const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_GRACE_END_DATE
+            ] = grace_end
+
+        # Update badge tracking (calls _persist_and_update)
+        await self._record_badge_earned(assignee_id, badge_id, badge_data)
+
+        # Build and emit Award Manifest
+        manifest = self._build_badge_award_manifest(badge_data)
+        self.emit(
+            const.SIGNAL_SUFFIX_BADGE_EARNED,
+            user_id=assignee_id,
+            badge_id=badge_id,
+            user_name=eh.get_assignee_name_by_id(self.coordinator, assignee_id) or "",
+            badge_name=badge_data.get(const.DATA_BADGE_NAME, "Unknown"),
+            **manifest,
+        )
+
+    def _apply_cumulative_init_maintenance_dates(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+        progress_dict: dict[str, Any],
+    ) -> None:
+        """Initialize maintenance dates for a newly earned cumulative badge.
+
+        Called when a badge is earned but has no maintenance_end_date yet.
+        Sets the first maintenance window dates and persists.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge internal ID
+            badge_data: Badge definition
+            progress_dict: Mutable reference to cumulative_badge_progress
+        """
+        end_date, grace_end = self._calculate_maintenance_dates(badge_data)
+        progress_dict[
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_END_DATE
+        ] = end_date
+        progress_dict[
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_GRACE_END_DATE
+        ] = grace_end
+        self.coordinator._persist_and_update()
+
+        assignee_name = (
+            eh.get_assignee_name_by_id(self.coordinator, assignee_id) or assignee_id
+        )
+        const.LOGGER.debug(
+            "Initialized maintenance dates for assignee '%s' badge '%s': "
+            "end=%s, grace_end=%s",
+            assignee_name,
+            badge_data.get(const.DATA_BADGE_NAME) or badge_id,
+            end_date,
+            grace_end,
+        )
+
+    def _apply_cumulative_enter_grace(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+        progress_dict: dict[str, Any],
+        end_date_str: str,
+        grace_days: int,
+    ) -> None:
+        """Enter grace period for cumulative badge maintenance.
+
+        Transitions status to GRACE and calculates grace_end date from
+        the maintenance end_date + grace_days.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge internal ID
+            badge_data: Badge definition
+            progress_dict: Mutable reference to cumulative_badge_progress
+            end_date_str: The maintenance end date (ISO string) grace starts from
+            grace_days: Number of grace days
+        """
+        progress_dict[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_STATUS] = (
+            const.CUMULATIVE_BADGE_STATE_GRACE
+        )
+        grace_end = dt_add_interval(
+            end_date_str,
+            interval_unit=const.TIME_UNIT_DAYS,
+            delta=grace_days,
+            return_type=const.HELPER_RETURN_ISO_DATE,
+        )
+        progress_dict[
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_GRACE_END_DATE
+        ] = str(grace_end) if grace_end else None
+        self.coordinator._persist_and_update()
+
+        assignee_name = (
+            eh.get_assignee_name_by_id(self.coordinator, assignee_id) or assignee_id
+        )
+        const.LOGGER.info(
+            "Assignee '%s' entered grace period for badge '%s' (grace ends: %s)",
+            assignee_name,
+            badge_data.get(const.DATA_BADGE_NAME) or badge_id,
+            grace_end,
+        )
+
+    def _apply_cumulative_demotion(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+        progress_dict: dict[str, Any],
+        cycle_points: float,
+        maintenance_threshold: float,
+    ) -> None:
+        """Demote cumulative badge — maintenance not met.
+
+        Sets status to DEMOTED, resets cycle_points, advances maintenance dates
+        for next evaluation cycle, recalculates point multiplier, and emits
+        BADGE_UPDATED signal.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge internal ID
+            badge_data: Badge definition
+            progress_dict: Mutable reference to cumulative_badge_progress
+            cycle_points: Points earned this cycle (for logging)
+            maintenance_threshold: Required threshold (for logging)
+        """
+        progress_dict[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_STATUS] = (
+            const.CUMULATIVE_BADGE_STATE_DEMOTED
+        )
+        progress_dict[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_CYCLE_POINTS] = 0.0
+
+        # Advance dates for next cycle (so demotion evaluation starts fresh)
+        end_date, grace_end = self._calculate_maintenance_dates(badge_data)
+        progress_dict[
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_END_DATE
+        ] = end_date
+        progress_dict[
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_GRACE_END_DATE
+        ] = grace_end
+
+        # Recalculate multiplier (uses next-lower badge)
+        self.update_point_multiplier_for_assignee(assignee_id)
+
+        self.coordinator._persist_and_update()
+
+        assignee_name = (
+            eh.get_assignee_name_by_id(self.coordinator, assignee_id) or assignee_id
+        )
+        const.LOGGER.info(
+            "Assignee '%s' demoted from badge '%s' — "
+            "maintenance not met (cycle_points=%.1f, required=%.1f)",
+            assignee_name,
+            badge_data.get(const.DATA_BADGE_NAME) or badge_id,
+            cycle_points,
+            maintenance_threshold,
+        )
+
+        self.emit(
+            const.SIGNAL_SUFFIX_BADGE_UPDATED,
+            user_id=assignee_id,
+            badge_id=badge_id,
+            status="demoted",
+            badge_name=badge_data.get(const.DATA_BADGE_NAME, "Unknown"),
+        )
+
+    async def _apply_cumulative_maintenance_met(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+    ) -> None:
+        """Handle cumulative badge maintenance met — confirm ACTIVE, reset cycle.
+
+        Called when maintenance threshold is met.
+        Applies regardless of current status (ACTIVE, GRACE, or DEMOTED).
+
+        Actions:
+        1. Set status = ACTIVE
+        2. Reset cycle_points = 0
+        3. Advance maintenance dates for next cycle
+        4. Recalculate point multiplier (restores full if was DEMOTED)
+        5. If current status is ACTIVE/GRACE: update badges_earned + emit manifest
+        6. If current status is DEMOTED: do not emit award manifest
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge internal ID
+            badge_data: Badge definition
+        """
+        assignee_data = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_data:
+            return
+
+        progress = self._ensure_cumulative_progress_container(assignee_data)
+        progress_dict = cast("dict[str, Any]", progress)
+        current_status = progress_dict.get(
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_STATUS,
+            const.CUMULATIVE_BADGE_STATE_ACTIVE,
+        )
+        was_demoted = current_status == const.CUMULATIVE_BADGE_STATE_DEMOTED
+
+        # Data corruption repair: DEMOTED when maintenance disabled
+        maintenance_enabled = self._badge_maintenance_enabled(badge_data)
+        if (
+            not maintenance_enabled
+            and current_status == const.CUMULATIVE_BADGE_STATE_DEMOTED
+        ):
+            progress_dict[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_STATUS] = (
+                const.CUMULATIVE_BADGE_STATE_ACTIVE
+            )
+            self.coordinator._persist_and_update()
+            const.LOGGER.info(
+                "Repaired invalid DEMOTED status for assignee %s badge %s "
+                "(maintenance not enabled)",
+                assignee_id,
+                badge_id,
+            )
+            return
+
+        # Set ACTIVE, reset cycle
+        progress_dict[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_STATUS] = (
+            const.CUMULATIVE_BADGE_STATE_ACTIVE
+        )
+        progress_dict[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_CYCLE_POINTS] = 0.0
+
+        # Advance maintenance dates for next cycle
+        end_date, grace_end = self._calculate_maintenance_dates(badge_data)
+        progress_dict[
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_END_DATE
+        ] = end_date
+        progress_dict[
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_GRACE_END_DATE
+        ] = grace_end
+
+        # Update badge tracking (period stats) only for non-demoted maintenance cycles.
+        # For DEMOTED -> ACTIVE reactivation we restore status/multiplier only.
+        if not was_demoted:
+            self.update_badges_earned_for_assignee(assignee_id, badge_id)
+
+        # Recalculate multiplier (restore full strength if was DEMOTED)
+        self.update_point_multiplier_for_assignee(assignee_id)
+
+        # Persist changes
+        self.coordinator._persist_and_update()
+
+        assignee_name = (
+            eh.get_assignee_name_by_id(self.coordinator, assignee_id) or assignee_id
+        )
+        const.LOGGER.info(
+            "Assignee '%s' maintained badge '%s' — cycle reset, next maintenance: %s",
+            assignee_name,
+            badge_data.get(const.DATA_BADGE_NAME, badge_id),
+            end_date,
+        )
+
+        if was_demoted:
+            self.emit(
+                const.SIGNAL_SUFFIX_BADGE_UPDATED,
+                user_id=assignee_id,
+                badge_id=badge_id,
+                status=const.CUMULATIVE_BADGE_STATE_ACTIVE,
+                badge_name=badge_data.get(const.DATA_BADGE_NAME, "Unknown"),
+            )
+            return
+
+        # Build and emit Award Manifest
+        manifest = self._build_badge_award_manifest(badge_data)
+        self.emit(
+            const.SIGNAL_SUFFIX_BADGE_EARNED,
+            user_id=assignee_id,
+            badge_id=badge_id,
+            user_name=assignee_name,
+            badge_name=badge_data.get(const.DATA_BADGE_NAME, "Unknown"),
+            **manifest,
+        )
+
+    def _badge_maintenance_enabled(self, badge_data: BadgeData) -> bool:
+        """Check if cumulative badge has maintenance enabled.
+
+        Maintenance requires BOTH a reset schedule AND a maintenance threshold.
+
+        Args:
+            badge_data: Badge definition
+
+        Returns:
+            True if maintenance is enabled
+        """
+        target = badge_data.get(const.DATA_BADGE_TARGET, {})
+        maintenance_threshold = float(target.get(const.DATA_BADGE_MAINTENANCE_RULES, 0))
+        reset_schedule = badge_data.get(const.DATA_BADGE_RESET_SCHEDULE, {})
+        recurring_frequency = reset_schedule.get(
+            const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY,
+            const.FREQUENCY_NONE,
+        )
+        return recurring_frequency != const.FREQUENCY_NONE and maintenance_threshold > 0
+
+    def _ensure_cumulative_progress_container(
+        self, assignee_data: UserData
+    ) -> AssigneeCumulativeBadgeProgress:
+        """Ensure assignee has a cumulative badge progress container.
+
+        Returns a typed mapping that can be safely mutated by cumulative
+        badge maintenance workflows.
+        """
+        progress = assignee_data.get(const.DATA_USER_CUMULATIVE_BADGE_PROGRESS)
+        if not isinstance(progress, dict):
+            default_progress: AssigneeCumulativeBadgeProgress = {}
+            progress = default_progress
+            assignee_data[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS] = progress
+        return progress
+
+    # =========================================================================
+    # PERIODIC BADGE OPERATIONS
+    # =========================================================================
+
+    async def _apply_periodic_first_award(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+        result: EvaluationResult,
+    ) -> None:
+        """Award periodic badge for the first time.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge internal ID
+            badge_data: Badge definition
+            result: Evaluation result (unused but kept for signature consistency)
+        """
+        const.LOGGER.info("Assignee %s earned periodic badge %s", assignee_id, badge_id)
+
+        # Update badge tracking (calls _persist_and_update)
+        await self._record_badge_earned(assignee_id, badge_id, badge_data)
+
+        # Build and emit Award Manifest
+        manifest = self._build_badge_award_manifest(badge_data)
+        self.emit(
+            const.SIGNAL_SUFFIX_BADGE_EARNED,
+            user_id=assignee_id,
+            badge_id=badge_id,
+            user_name=eh.get_assignee_name_by_id(self.coordinator, assignee_id) or "",
+            badge_name=badge_data.get(const.DATA_BADGE_NAME, "Unknown"),
+            **manifest,
+        )
+
+    async def _apply_periodic_reaward(
+        self,
+        assignee_id: str,
+        badge_id: str,
+        badge_data: BadgeData,
+    ) -> None:
+        """Re-award periodic badge (increment award_count).
+
+        Badges are never removed. Re-earning means incrementing award_count
+        and updating period statistics.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge internal ID
+            badge_data: Badge definition
+        """
+        assignee_data = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_data:
+            return
+
+        badges_earned = assignee_data.get(const.DATA_USER_BADGES_EARNED, {})
+        badge_entry = badges_earned.get(badge_id)
+        if not badge_entry:
+            return
+
+        const.LOGGER.info(
+            "Assignee %s re-earned periodic badge %s (incrementing award_count)",
+            assignee_id,
+            badge_id,
+        )
+
+        # Increment award_count (badge re-award)
+        badge_entry_dict = cast("dict[str, Any]", badge_entry)
+        current_count = badge_entry_dict.get(
+            const.DATA_USER_BADGES_EARNED_AWARD_COUNT, 1
+        )
+        badge_entry_dict[const.DATA_USER_BADGES_EARNED_AWARD_COUNT] = current_count + 1
+
+        # Update last award date
+        badge_entry_dict[const.DATA_USER_BADGES_EARNED_LAST_AWARDED] = dt_now_utc_iso()
+
+        # Persist changes
+        self.coordinator._persist_and_update()
+
+        # Build and emit Award Manifest (assignee gets all badge rewards again)
+        manifest = self._build_badge_award_manifest(badge_data)
+        self.emit(
+            const.SIGNAL_SUFFIX_BADGE_EARNED,
+            user_id=assignee_id,
+            badge_id=badge_id,
+            user_name=eh.get_assignee_name_by_id(self.coordinator, assignee_id) or "",
+            badge_name=badge_data.get(const.DATA_BADGE_NAME, "Unknown"),
+            **manifest,
+        )
+
+    # =========================================================================
+    # ACHIEVEMENT EVALUATION
+    # =========================================================================
+
+    async def _evaluate_achievement_for_assignee(
+        self,
+        context: EvaluationContext,
+        achievement_id: str,
+        achievement_data: AchievementData,
+    ) -> None:
+        """Evaluate a single achievement for a assignee.
+
+        Args:
+            context: The evaluation context for the assignee
+            achievement_id: Achievement internal ID
+            achievement_data: Achievement definition
+        """
+        assignee_id = context["assignee_id"]
+
+        # Check if assignee already has this achievement (awarded flag in progress)
+        achievement_progress = achievement_data.get(const.DATA_ACHIEVEMENT_PROGRESS, {})
+        assignee_progress = achievement_progress.get(assignee_id, {})
+        already_awarded = assignee_progress.get(const.DATA_ACHIEVEMENT_AWARDED, False)
+
+        if already_awarded:
+            # Achievements are permanent - no re-evaluation needed
+            return
+
+        canonical_target = self._map_achievement_to_canonical_target(
+            assignee_id,
+            achievement_id,
+            achievement_data,
+            assignee_progress,
+        )
+        runtime_context = self._build_source_runtime_context(
+            context,
+            assignee_id=assignee_id,
+            canonical_target=canonical_target,
+            current_achievement_progress=assignee_progress,
+        )
+        result = GamificationEngine.evaluate_canonical_target(
+            runtime_context,
+            entity_id=achievement_id,
+            entity_name=str(
+                achievement_data.get(const.DATA_ACHIEVEMENT_NAME, "Unknown Achievement")
+            ),
+            entity_type="achievement",
+            canonical_target=canonical_target,
+        )
+
+        # Apply result
+        await self._apply_achievement_result(
+            assignee_id, achievement_id, achievement_data, result
+        )
+
+    async def _apply_achievement_result(
+        self,
+        assignee_id: str,
+        achievement_id: str,
+        achievement_data: AchievementData,
+        result: EvaluationResult,
+    ) -> None:
+        """Apply achievement evaluation result.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            achievement_id: Achievement internal ID
+            achievement_data: Achievement definition
+            result: Evaluation result from engine
+        """
+        criteria_met = result.get("criteria_met", False)
+
+        progress_changed = False
+        criterion_results = result.get("criterion_results", [])
+        current_value_raw: Any = None
+        if criterion_results and isinstance(criterion_results, list):
+            first_criterion = criterion_results[0]
+            if isinstance(first_criterion, dict):
+                current_value_raw = first_criterion.get("current_value")
+
+        if isinstance(current_value_raw, (int, float)):
+            achievement_progress = achievement_data.setdefault(
+                const.DATA_ACHIEVEMENT_PROGRESS, {}
+            )
+            assignee_progress = achievement_progress.setdefault(assignee_id, {})
+            assignee_progress_dict = cast("dict[str, Any]", assignee_progress)
+
+            if const.DATA_ACHIEVEMENT_AWARDED not in assignee_progress_dict:
+                assignee_progress_dict[const.DATA_ACHIEVEMENT_AWARDED] = False
+                progress_changed = True
+
+            achievement_type = achievement_data.get(const.DATA_ACHIEVEMENT_TYPE)
+            current_value = int(current_value_raw)
+
+            if achievement_type == const.ACHIEVEMENT_TYPE_STREAK:
+                if (
+                    assignee_progress_dict.get(const.DATA_ACHIEVEMENT_CURRENT_STREAK)
+                    != current_value
+                ):
+                    assignee_progress_dict[const.DATA_ACHIEVEMENT_CURRENT_STREAK] = (
+                        current_value
+                    )
+                    progress_changed = True
+            elif (
+                assignee_progress_dict.get(const.DATA_ACHIEVEMENT_CURRENT_VALUE)
+                != current_value
+            ):
+                assignee_progress_dict[const.DATA_ACHIEVEMENT_CURRENT_VALUE] = (
+                    current_value
+                )
+                progress_changed = True
+
+        if progress_changed and not criteria_met:
+            self.coordinator._persist_and_update()
+
+        if criteria_met:
+            const.LOGGER.info(
+                "Assignee %s unlocked achievement %s",
+                assignee_id,
+                achievement_id,
+            )
+            # Persist achievement award (handles data update + notifications)
+            await self.award_achievement(assignee_id, achievement_id)
+
+            # Emit event for any additional listeners
+            self.emit(
+                const.SIGNAL_SUFFIX_ACHIEVEMENT_EARNED,
+                user_id=assignee_id,
+                user_name=eh.get_assignee_name_by_id(self.coordinator, assignee_id)
+                or "",
+                achievement_id=achievement_id,
+                achievement_name=achievement_data.get(
+                    const.DATA_ACHIEVEMENT_NAME, "Unknown"
+                ),
+                result=result,
+            )
+
+    # =========================================================================
+    # CHALLENGE EVALUATION
+    # =========================================================================
+
+    async def _evaluate_challenge_for_assignee(
+        self,
+        context: EvaluationContext,
+        challenge_id: str,
+        challenge_data: ChallengeData,
+    ) -> None:
+        """Evaluate a single challenge for a assignee.
+
+        Args:
+            context: The evaluation context for the assignee
+            challenge_id: Challenge internal ID
+            challenge_data: Challenge definition
+        """
+        const.LOGGER.debug(
+            "Challenge evaluation disabled during sunset; skipping challenge %s",
+            challenge_id,
+        )
+        return
+
+        assignee_id = context["assignee_id"]
+
+        # Check if assignee already completed this challenge (awarded flag in progress)
+        challenge_progress = challenge_data.get(const.DATA_CHALLENGE_PROGRESS, {})
+        assignee_progress = challenge_progress.get(assignee_id, {})
+        already_awarded = assignee_progress.get(const.DATA_CHALLENGE_AWARDED, False)
+
+        if already_awarded:
+            # Challenges can only be completed once
+            return
+
+        today_iso = str(context.get("today_iso", dt_today_iso()))
+        start_date = str(challenge_data.get(const.DATA_CHALLENGE_START_DATE, ""))
+        end_date = str(challenge_data.get(const.DATA_CHALLENGE_END_DATE, ""))
+
+        # Lifecycle wrapper ownership stays in manager: only active-window
+        # challenges are evaluated.
+        if start_date and today_iso < start_date[:10]:
+            return
+        if end_date and today_iso > end_date[:10]:
+            return
+
+        canonical_target = self._map_challenge_to_canonical_target(
+            assignee_id,
+            challenge_id,
+            challenge_data,
+        )
+        runtime_context = self._build_source_runtime_context(
+            context,
+            assignee_id=assignee_id,
+            canonical_target=canonical_target,
+            current_challenge_progress=assignee_progress,
+        )
+        result = GamificationEngine.evaluate_canonical_target(
+            runtime_context,
+            entity_id=challenge_id,
+            entity_name=str(
+                challenge_data.get(const.DATA_CHALLENGE_NAME, "Unknown Challenge")
+            ),
+            entity_type="challenge",
+            canonical_target=canonical_target,
+        )
+
+        # Apply result
+        await self._apply_challenge_result(
+            assignee_id, challenge_id, challenge_data, result
+        )
+
+    def _map_achievement_to_canonical_target(
+        self,
+        assignee_id: str,
+        achievement_id: str,
+        achievement_data: AchievementData,
+        assignee_progress: AchievementProgress | dict[str, Any],
+    ) -> CanonicalTargetDefinition:
+        """Map Achievement Item definitions to canonical target definitions."""
+        raw_type = str(achievement_data.get(const.DATA_ACHIEVEMENT_TYPE, ""))
+        canonical_type = str(
+            const.ACHIEVEMENT_TO_CANONICAL_TARGET_MAP.get(raw_type, "unknown_target")
+        )
+        source_badge_id = str(
+            achievement_data.get(const.DATA_ACHIEVEMENT_SOURCE_BADGE_ID, "")
+        )
+        assignee_data = self.coordinator.assignees_data.get(assignee_id)
+        assignee_badges_earned = (
+            assignee_data.get(const.DATA_USER_BADGES_EARNED, {})
+            if assignee_data
+            else {}
+        )
+
+        if (
+            raw_type == const.ACHIEVEMENT_TYPE_TOTAL
+            and source_badge_id
+            and source_badge_id in assignee_badges_earned
+        ):
+            canonical_type = const.CANONICAL_TARGET_TYPE_BADGE_AWARD_COUNT
+
+        mapped: CanonicalTargetDefinition = {
+            "target_type": cast("Any", canonical_type),
+            "threshold_value": float(
+                achievement_data.get(const.DATA_ACHIEVEMENT_TARGET_VALUE, 0.0)
+            ),
+            "source_entity_type": "achievement",
+            "source_item_id": achievement_id,
+            "source_raw_type": raw_type,
+            "baseline_value": float(
+                cast("Any", assignee_progress).get(const.DATA_ACHIEVEMENT_BASELINE, 0)
+            ),
+        }
+        selected_chore_id = str(
+            achievement_data.get(const.DATA_ACHIEVEMENT_SELECTED_CHORE_ID, "")
+        )
+        if selected_chore_id:
+            assignee_assigned_chores = self._get_assignee_assigned_chores(assignee_id)
+            mapped["tracked_chore_ids"] = (
+                [selected_chore_id]
+                if selected_chore_id in assignee_assigned_chores
+                else []
+            )
+        if source_badge_id:
+            mapped["source_badge_id"] = source_badge_id
+        return mapped
+
+    def _map_challenge_to_canonical_target(
+        self,
+        assignee_id: str,
+        challenge_id: str,
+        challenge_data: ChallengeData,
+    ) -> CanonicalTargetDefinition:
+        """Map Challenge Item definitions to canonical target definitions."""
+        raw_type = str(challenge_data.get(const.DATA_CHALLENGE_TYPE, ""))
+        canonical_type = str(
+            const.CHALLENGE_TO_CANONICAL_TARGET_MAP.get(raw_type, "unknown_target")
+        )
+
+        mapped: CanonicalTargetDefinition = {
+            "target_type": cast("Any", canonical_type),
+            "threshold_value": float(
+                challenge_data.get(const.DATA_CHALLENGE_TARGET_VALUE, 0.0)
+            ),
+            "source_entity_type": "challenge",
+            "source_item_id": challenge_id,
+            "source_raw_type": raw_type,
+        }
+        selected_chore_id = str(
+            challenge_data.get(const.DATA_CHALLENGE_SELECTED_CHORE_ID, "")
+        )
+        if selected_chore_id:
+            assignee_assigned_chores = self._get_assignee_assigned_chores(assignee_id)
+            mapped["tracked_chore_ids"] = (
+                [selected_chore_id]
+                if selected_chore_id in assignee_assigned_chores
+                else []
+            )
+        return mapped
+
+    def _build_source_runtime_context(
+        self,
+        base_context: EvaluationContext,
+        *,
+        assignee_id: str,
+        canonical_target: CanonicalTargetDefinition,
+        current_achievement_progress: AchievementProgress
+        | dict[str, Any]
+        | None = None,
+        current_challenge_progress: ChallengeProgress | dict[str, Any] | None = None,
+    ) -> EvaluationContext:
+        """Build runtime context for canonical source target evaluation."""
+        runtime_context = cast("EvaluationContext", dict(base_context))
+        today_iso = str(base_context.get("today_iso", dt_today_iso()))
+        tracked_chores_from_target = canonical_target.get("tracked_chore_ids")
+        if isinstance(tracked_chores_from_target, list):
+            tracked_chores = tracked_chores_from_target
+        else:
+            tracked_chores = self._get_assignee_assigned_chores(assignee_id)
+
+        runtime_context["today_stats"] = (
+            self.coordinator.statistics_manager.get_badge_scoped_today_stats(
+                assignee_id,
+                tracked_chores,
+                today_iso=today_iso,
+            )
+        )
+        runtime_context["today_completion"] = (
+            self.coordinator.statistics_manager.get_badge_scoped_today_completion(
+                assignee_id,
+                tracked_chores,
+                today_iso=today_iso,
+                cycle_start_iso=today_iso,
+                only_due_today=False,
+            )
+        )
+        runtime_context["today_completion_due"] = (
+            self.coordinator.statistics_manager.get_badge_scoped_today_completion(
+                assignee_id,
+                tracked_chores,
+                today_iso=today_iso,
+                cycle_start_iso=today_iso,
+                only_due_today=True,
+            )
+        )
+        runtime_context_dict = cast("dict[str, Any]", runtime_context)
+        runtime_context_dict["tracked_current_streak"] = (
+            self._get_tracked_current_streak(
+                assignee_id,
+                tracked_chores,
+            )
+        )
+        # Scope the all-time period stats to the tracked chores when a specific
+        # chore is selected (e.g. "Chore Total" achievement with a selected
+        # chore). Without this override, TOTAL_WITH_BASELINE evaluation reads the
+        # assignee's GLOBAL all-time totals, so completing any chore would count
+        # toward every scoped achievement (issue #245). When tracked_chores is
+        # empty (no scope / assignee not assigned), the scoped read returns an
+        # empty bucket so the target never progresses.
+        if tracked_chores:
+            runtime_context_dict["chore_periods_all_time"] = (
+                self.coordinator.statistics_manager.get_badge_scoped_all_time_stats(
+                    assignee_id,
+                    tracked_chores,
+                )
+            )
+        if (
+            canonical_target.get("source_entity_type") == "challenge"
+            and canonical_target.get("target_type")
+            == const.CANONICAL_TARGET_TYPE_TOTAL_WITHIN_WINDOW
+        ):
+            challenge_id = str(canonical_target.get("source_item_id", ""))
+            challenge_data = cast(
+                "dict[str, Any]",
+                self.coordinator.challenges_data.get(challenge_id, {}),
+            )
+            start_date_iso = str(
+                challenge_data.get(const.DATA_CHALLENGE_START_DATE, "")
+            )[:10]
+            end_date_iso = str(challenge_data.get(const.DATA_CHALLENGE_END_DATE, ""))[
+                :10
+            ]
+            runtime_context_dict["tracked_total_within_window"] = (
+                self._get_tracked_window_completion_total(
+                    assignee_id,
+                    tracked_chores,
+                    start_date_iso,
+                    end_date_iso,
+                )
+            )
+
+        if current_achievement_progress is not None:
+            runtime_context["current_achievement_progress"] = cast(
+                "Any", current_achievement_progress
+            )
+        if current_challenge_progress is not None:
+            runtime_context["current_challenge_progress"] = cast(
+                "Any", current_challenge_progress
+            )
+
+        return runtime_context
+
+    def _streak_alive(self, chore_id: str, last_value: Any) -> bool:
+        """Return True when a chore's stored streak has not been broken.
+
+        A streak is only written on completion and nothing decays it later, so a
+        broken streak keeps its stored value until the next completion. Whether it
+        actually survived is decided by the same schedule-aware check the chore and
+        badge streaks use: an occurrence that passed unmet inside
+        `[last completion, start of today)` breaks it.
+
+        The window ends at the **start of today**, never "now", so today's
+        still-pending occurrence cannot break a valid streak mid-day. The
+        consequence is a one-day latch, the same as badges: a missed occurrence
+        breaks the streak on the following day.
+
+        Unreadable data returns False rather than preserving the streak. A positive
+        streak implies a completion timestamp exists, so its absence or an
+        unparseable value is a defect, and silently continuing would mask it
+        (decision 19). This is only reachable with `streak > 0`; a chore with no
+        credited streak is filtered by the caller before this runs.
+        """
+        last_local = dt_parse(last_value, return_type=HELPER_RETURN_DATETIME_LOCAL)
+        if not last_value or not isinstance(last_local, datetime):
+            return False
+
+        chore_data = self.coordinator.chores_data.get(chore_id)
+        if not chore_data:
+            return False
+
+        today_start = as_utc(start_of_local_day(dt_now_local()))
+
+        return not ChoreEngine.has_missed_occurrence_between(
+            chore_data,
+            window_start_utc=as_utc(last_local),
+            window_end_utc=today_start,
+        )
+
+    def _get_tracked_current_streak(
+        self,
+        assignee_id: str,
+        tracked_chores: list[str],
+    ) -> int:
+        """Return current streak from assignee chore data for tracked chores.
+
+        A chore's stored streak only counts while it has not been broken; a
+        missed occurrence ends it, on the chore's own schedule (see
+        `_streak_alive`).
+        """
+        assignee_data = cast(
+            "dict[str, Any]",
+            self.coordinator.assignees_data.get(assignee_id, {}),
+        )
+        assignee_chore_data = cast(
+            "dict[str, Any]",
+            assignee_data.get(const.DATA_USER_CHORE_DATA, {}),
+        )
+
+        def _effective(chore_id: str, chore_entry: dict[str, Any]) -> int:
+            streak = int(chore_entry.get(const.DATA_USER_CHORE_DATA_CURRENT_STREAK, 0))
+            if streak <= 0:
+                return 0
+            if not self._streak_alive(
+                chore_id,
+                chore_entry.get(const.DATA_USER_CHORE_DATA_LAST_COMPLETED),
+            ):
+                return 0
+            return streak
+
+        if tracked_chores:
+            return max(
+                (
+                    _effective(
+                        chore_id,
+                        cast("dict[str, Any]", assignee_chore_data.get(chore_id, {})),
+                    )
+                    for chore_id in tracked_chores
+                ),
+                default=0,
+            )
+
+        return max(
+            (
+                _effective(str(chore_id), cast("dict[str, Any]", chore_entry))
+                for chore_id, chore_entry in assignee_chore_data.items()
+                if isinstance(chore_entry, dict)
+            ),
+            default=0,
+        )
+
+    def _get_tracked_window_completion_total(
+        self,
+        assignee_id: str,
+        tracked_chores: list[str],
+        start_date_iso: str,
+        end_date_iso: str,
+    ) -> int:
+        """Return approved completion count for tracked chores within date window."""
+        assignee_data = cast(
+            "dict[str, Any]",
+            self.coordinator.assignees_data.get(assignee_id, {}),
+        )
+        assignee_chore_data = cast(
+            "dict[str, Any]",
+            assignee_data.get(const.DATA_USER_CHORE_DATA, {}),
+        )
+
+        chore_ids = tracked_chores or list(assignee_chore_data.keys())
+        total_approved = 0
+
+        for chore_id in chore_ids:
+            chore_entry = cast("dict[str, Any]", assignee_chore_data.get(chore_id, {}))
+            periods = cast(
+                "dict[str, Any]",
+                chore_entry.get(const.DATA_USER_CHORE_DATA_PERIODS, {}),
+            )
+            daily_periods = cast(
+                "dict[str, Any]",
+                periods.get(const.DATA_USER_CHORE_DATA_PERIODS_DAILY, {}),
+            )
+
+            for day_iso, day_bucket in daily_periods.items():
+                if not isinstance(day_iso, str) or not isinstance(day_bucket, dict):
+                    continue
+                if start_date_iso and day_iso < start_date_iso:
+                    continue
+                if end_date_iso and day_iso > end_date_iso:
+                    continue
+                total_approved += int(
+                    day_bucket.get(const.DATA_USER_CHORE_DATA_PERIOD_APPROVED, 0)
+                )
+
+        return total_approved
+
+    def _get_tracked_window_points_total(
+        self,
+        assignee_id: str,
+        tracked_chores: list[str],
+        start_date_iso: str,
+        end_date_iso: str,
+    ) -> float:
+        """Return chore points total for tracked chores within date window."""
+        assignee_data = cast(
+            "dict[str, Any]",
+            self.coordinator.assignees_data.get(assignee_id, {}),
+        )
+        assignee_chore_data = cast(
+            "dict[str, Any]",
+            assignee_data.get(const.DATA_USER_CHORE_DATA, {}),
+        )
+
+        chore_ids = tracked_chores or list(assignee_chore_data.keys())
+        total_points = 0.0
+
+        for chore_id in chore_ids:
+            chore_entry = cast("dict[str, Any]", assignee_chore_data.get(chore_id, {}))
+            periods = cast(
+                "dict[str, Any]",
+                chore_entry.get(const.DATA_USER_CHORE_DATA_PERIODS, {}),
+            )
+            daily_periods = cast(
+                "dict[str, Any]",
+                periods.get(const.DATA_USER_CHORE_DATA_PERIODS_DAILY, {}),
+            )
+
+            for day_iso, day_bucket in daily_periods.items():
+                if not isinstance(day_iso, str) or not isinstance(day_bucket, dict):
+                    continue
+                if start_date_iso and day_iso < start_date_iso:
+                    continue
+                if end_date_iso and day_iso > end_date_iso:
+                    continue
+                total_points += float(
+                    day_bucket.get(const.DATA_USER_CHORE_DATA_PERIOD_POINTS, 0.0)
+                )
+
+        return total_points
+
+    async def _apply_challenge_result(
+        self,
+        assignee_id: str,
+        challenge_id: str,
+        challenge_data: ChallengeData,
+        result: EvaluationResult,
+    ) -> None:
+        """Apply challenge evaluation result.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            challenge_id: Challenge internal ID
+            challenge_data: Challenge definition
+            result: Evaluation result from engine
+        """
+        criteria_met = result.get("criteria_met", False)
+
+        progress_changed = False
+        criterion_results = result.get("criterion_results", [])
+        current_value_raw: Any = None
+        if criterion_results and isinstance(criterion_results, list):
+            first_criterion = criterion_results[0]
+            if isinstance(first_criterion, dict):
+                current_value_raw = first_criterion.get("current_value")
+
+        if isinstance(current_value_raw, (int, float)):
+            challenge_progress = challenge_data.setdefault(
+                const.DATA_CHALLENGE_PROGRESS, {}
+            )
+            assignee_progress = challenge_progress.setdefault(assignee_id, {})
+            assignee_progress_dict = cast("dict[str, Any]", assignee_progress)
+
+            if const.DATA_CHALLENGE_AWARDED not in assignee_progress_dict:
+                assignee_progress_dict[const.DATA_CHALLENGE_AWARDED] = False
+                progress_changed = True
+
+            challenge_type = challenge_data.get(const.DATA_CHALLENGE_TYPE)
+            current_value = int(current_value_raw)
+
+            if challenge_type == const.CHALLENGE_TYPE_DAILY_MIN:
+                daily_counts = assignee_progress_dict.setdefault(
+                    const.DATA_CHALLENGE_DAILY_COUNTS, {}
+                )
+                if isinstance(daily_counts, dict):
+                    today_iso = dt_today_iso()
+                    if daily_counts.get(today_iso) != current_value:
+                        daily_counts[today_iso] = current_value
+                        progress_changed = True
+
+                if (
+                    assignee_progress_dict.get(const.DATA_CHALLENGE_COUNT)
+                    != current_value
+                ):
+                    assignee_progress_dict[const.DATA_CHALLENGE_COUNT] = current_value
+                    progress_changed = True
+            elif (
+                assignee_progress_dict.get(const.DATA_CHALLENGE_COUNT) != current_value
+            ):
+                assignee_progress_dict[const.DATA_CHALLENGE_COUNT] = current_value
+                progress_changed = True
+
+        if progress_changed and not criteria_met:
+            self.coordinator._persist_and_update()
+
+        if criteria_met:
+            const.LOGGER.info(
+                "Assignee %s completed challenge %s",
+                assignee_id,
+                challenge_id,
+            )
+            # Persist challenge completion (handles data update + notifications)
+            await self.award_challenge(assignee_id, challenge_id)
+
+            # Emit event for any additional listeners
+            self.emit(
+                const.SIGNAL_SUFFIX_CHALLENGE_COMPLETED,
+                user_id=assignee_id,
+                user_name=eh.get_assignee_name_by_id(self.coordinator, assignee_id)
+                or "",
+                challenge_id=challenge_id,
+                challenge_name=challenge_data.get(const.DATA_CHALLENGE_NAME, "Unknown"),
+                result=result,
+            )
+
+    # =========================================================================
+    # CONTEXT BUILDING
+    # =========================================================================
+
+    def _build_evaluation_context(self, assignee_id: str) -> EvaluationContext | None:
+        """Build evaluation context from coordinator data.
+
+        This extracts minimal data needed for gamification evaluation.
+
+        Args:
+            assignee_id: The internal UUID of the assignee
+
+        Returns:
+            EvaluationContext dict or None if assignee not found
+        """
+        assignee_data = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_data:
+            return None
+
+        # Get today's ISO date using helper
+        today_iso = dt_today_iso()
+
+        # Get total earned from all_time period bucket using stats engine
+        point_periods = assignee_data.get(const.DATA_USER_POINT_PERIODS, {})
+        period_key_mapping = {
+            const.PERIOD_ALL_TIME: const.DATA_USER_POINT_PERIODS_ALL_TIME
+        }
+        total_earned = float(
+            self.coordinator.stats.get_period_total(
+                point_periods,
+                const.PERIOD_ALL_TIME,
+                const.DATA_USER_POINT_PERIOD_POINTS_EARNED,
+                period_key_mapping=period_key_mapping,
+            )
+        )
+
+        # Get badge progress from assignee data
+        badge_progress = assignee_data.get(const.DATA_USER_BADGE_PROGRESS, {})
+
+        # Build achievement progress from achievements_data
+        # (progress is stored in each achievement, keyed by assignee_id)
+        achievement_progress: dict[str, Any] = {}
+        for ach_id, ach_data in self.coordinator.achievements_data.items():
+            ach_progress = ach_data.get(const.DATA_ACHIEVEMENT_PROGRESS, {})
+            if assignee_id in ach_progress:
+                achievement_progress[ach_id] = ach_progress[assignee_id]
+
+        # Build challenge progress from challenges_data
+        # (progress is stored in each challenge, keyed by assignee_id)
+        challenge_progress: dict[str, Any] = {}
+        for chal_id, chal_data in self.coordinator.challenges_data.items():
+            chal_progress = chal_data.get(const.DATA_CHALLENGE_PROGRESS, {})
+            if assignee_id in chal_progress:
+                challenge_progress[chal_id] = chal_progress[assignee_id]
+
+        # Build context using the typed chore_periods bucket on assignee data.
+        chore_periods = assignee_data.get(const.DATA_USER_CHORE_PERIODS, {})
+        context: EvaluationContext = {
+            "assignee_id": assignee_id,
+            "assignee_name": assignee_data.get(const.DATA_USER_NAME, "Unknown"),
+            "current_points": float(assignee_data.get(const.DATA_USER_POINTS, 0.0)),
+            "total_points_earned": total_earned,
+            "badge_progress": badge_progress,
+            "cumulative_badge_progress": assignee_data.get(
+                const.DATA_USER_CUMULATIVE_BADGE_PROGRESS, {}
+            ),
+            "badges_earned": assignee_data.get(const.DATA_USER_BADGES_EARNED, {}),
+            # v43+: chore_stats deleted, use chore_periods.all_time for totals
+            # Cast to dict[str, Any] since chore_periods is a runtime-added bucket
+            # All-time uses nested structure: periods["all_time"]["all_time"] = {data}
+            "chore_periods_all_time": cast(
+                "dict[str, Any]",
+                chore_periods.get(const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME, {}).get(
+                    const.PERIOD_ALL_TIME,
+                    {},
+                ),
+            ),
+            "achievement_progress": achievement_progress,
+            "challenge_progress": challenge_progress,
+            "today_iso": today_iso,
+        }
+
+        return context
+
+    # =========================================================================
+    # DRY RUN (SHADOW MODE)
+    # =========================================================================
+
+    def dry_run_badge(
+        self,
+        assignee_id: str,
+        badge_id: str,
+    ) -> EvaluationResult | None:
+        """Evaluate badge without applying results (for comparison/debugging).
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge internal ID
+
+        Returns:
+            EvaluationResult or None if context/badge not found
+        """
+        context = self._build_evaluation_context(assignee_id)
+        if not context:
+            return None
+
+        badge_data = self.coordinator.badges_data.get(badge_id)
+        if not badge_data:
+            return None
+
+        # Cast TypedDict to dict for engine
+        badge_dict = cast("dict[str, Any]", badge_data)
+        return GamificationEngine.evaluate_badge(context, badge_dict)
+
+    def dry_run_achievement(
+        self,
+        assignee_id: str,
+        achievement_id: str,
+    ) -> EvaluationResult | None:
+        """Evaluate achievement without applying results.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            achievement_id: Achievement internal ID
+
+        Returns:
+            EvaluationResult or None if context/achievement not found
+        """
+        context = self._build_evaluation_context(assignee_id)
+        if not context:
+            return None
+
+        achievement_data = self.coordinator.achievements_data.get(achievement_id)
+        if not achievement_data:
+            return None
+
+        # Cast TypedDict to dict for engine
+        achievement_dict = cast("dict[str, Any]", achievement_data)
+        return GamificationEngine.evaluate_achievement(context, achievement_dict)
+
+    def dry_run_challenge(
+        self,
+        assignee_id: str,
+        challenge_id: str,
+    ) -> EvaluationResult | None:
+        """Evaluate challenge without applying results.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            challenge_id: Challenge internal ID
+
+        Returns:
+            EvaluationResult or None if context/challenge not found
+        """
+        const.LOGGER.debug(
+            "Challenge dry-run disabled during sunset; skipping challenge %s",
+            challenge_id,
+        )
+        return None
+
+    # =========================================================================
+    # BADGE UTILITIES (Pure Helpers - No Side Effects)
+    # =========================================================================
+    # These methods perform calculations/lookups without modifying state.
+    # Migrated from coordinator.py as Tier 1 (no internal dependencies).
+
+    def process_award_items(
+        self,
+        award_items: list[str],
+        rewards_dict: dict[str, Any],
+        bonuses_dict: dict[str, Any],
+        penalties_dict: dict[str, Any],
+    ) -> tuple[dict[str, list[str]], list[str]]:
+        """Process award_items and return dicts of items to award or penalize.
+
+        Args:
+            award_items: List of award item strings (e.g., "reward:uuid", "bonus:uuid")
+            rewards_dict: Dictionary of reward data keyed by reward_id
+            bonuses_dict: Dictionary of bonus data keyed by bonus_id
+            penalties_dict: Dictionary of penalty data keyed by penalty_id
+
+        Returns:
+            Tuple of (to_award dict, to_penalize list)
+        """
+        to_award: dict[str, list[str]] = {
+            const.AWARD_ITEMS_KEY_REWARDS: [],
+            const.AWARD_ITEMS_KEY_BONUSES: [],
+        }
+        to_penalize: list[str] = []
+        for item in award_items:
+            if item.startswith(const.AWARD_ITEMS_PREFIX_REWARD):
+                reward_id = item.split(":", 1)[1]
+                if reward_id in rewards_dict:
+                    to_award[const.AWARD_ITEMS_KEY_REWARDS].append(reward_id)
+            elif item.startswith(const.AWARD_ITEMS_PREFIX_BONUS):
+                bonus_id = item.split(":", 1)[1]
+                if bonus_id in bonuses_dict:
+                    to_award[const.AWARD_ITEMS_KEY_BONUSES].append(bonus_id)
+            elif item.startswith(const.AWARD_ITEMS_PREFIX_PENALTY):
+                penalty_id = item.split(":", 1)[1]
+                if penalty_id in penalties_dict:
+                    to_penalize.append(penalty_id)
+        return to_award, to_penalize
+
+    def _build_badge_award_manifest(self, badge_data: BadgeData) -> dict[str, Any]:
+        """Build Award Manifest from badge data.
+
+        Extracts and processes award items from badge definition into
+        a manifest dict ready for SIGNAL_SUFFIX_BADGE_EARNED emission.
+
+        Args:
+            badge_data: Badge definition containing awards
+
+        Returns:
+            Manifest dict with keys: points, multiplier, reward_ids,
+            bonus_ids, penalty_ids
+        """
+        award_data = badge_data.get(const.DATA_BADGE_AWARDS, {})
+        # Extract award items - stored as list of "type:uuid" strings
+        award_items = award_data.get(const.DATA_BADGE_AWARDS_AWARD_ITEMS, [])
+        to_award, to_penalize = self.process_award_items(
+            award_items,
+            self.coordinator.rewards_data,
+            self.coordinator.bonuses_data,
+            self.coordinator.penalties_data,
+        )
+
+        return {
+            "points": award_data.get(
+                const.DATA_BADGE_AWARDS_AWARD_POINTS, const.DEFAULT_ZERO
+            ),
+            "multiplier": award_data.get(const.DATA_BADGE_AWARDS_POINT_MULTIPLIER),
+            "reward_ids": to_award.get(const.AWARD_ITEMS_KEY_REWARDS, []),
+            "bonus_ids": to_award.get(const.AWARD_ITEMS_KEY_BONUSES, []),
+            "penalty_ids": to_penalize,
+        }
+
+    def get_structured_badge_awards(
+        self, badge_data: BadgeData | dict[str, Any]
+    ) -> dict[str, Any]:
+        """Return badge awards grouped into a UI-friendly structure.
+
+        This read-only helper converts the canonical `award_items` storage
+        contract into a normalized sensor/dashboard payload so templates can
+        consume award data without string parsing.
+
+        Args:
+            badge_data: Badge definition containing the awards block.
+
+        Returns:
+            Structured awards payload with stable keys for points,
+            multiplier, rewards, bonuses, and penalties.
+        """
+        award_data_raw = badge_data.get(const.DATA_BADGE_AWARDS, {})
+        award_data = (
+            cast("dict[str, Any]", award_data_raw)
+            if isinstance(award_data_raw, dict)
+            else {}
+        )
+
+        award_items_raw = award_data.get(const.DATA_BADGE_AWARDS_AWARD_ITEMS, [])
+        award_items = [item for item in award_items_raw if isinstance(item, str)]
+
+        to_award, to_penalize = self.process_award_items(
+            award_items,
+            self.coordinator.rewards_data,
+            self.coordinator.bonuses_data,
+            self.coordinator.penalties_data,
+        )
+
+        structured_awards: dict[str, Any] = {
+            const.DATA_BADGE_AWARDS_AWARD_POINTS: float(
+                award_data.get(const.DATA_BADGE_AWARDS_AWARD_POINTS, 0.0) or 0.0
+            ),
+            const.DATA_BADGE_AWARDS_POINT_MULTIPLIER: award_data.get(
+                const.DATA_BADGE_AWARDS_POINT_MULTIPLIER
+            ),
+            const.AWARD_ITEMS_KEY_REWARDS: [],
+            const.AWARD_ITEMS_KEY_BONUSES: [],
+            const.AWARD_ITEMS_KEY_PENALTIES: [],
+        }
+
+        for reward_id in to_award.get(const.AWARD_ITEMS_KEY_REWARDS, []):
+            reward_info = cast(
+                "dict[str, Any]",
+                self.coordinator.rewards_data.get(reward_id, {}),
+            )
+            structured_awards[const.AWARD_ITEMS_KEY_REWARDS].append(
+                {
+                    const.DATA_REWARD_ID: reward_id,
+                    const.DATA_REWARD_NAME: reward_info.get(
+                        const.DATA_REWARD_NAME,
+                        reward_id,
+                    ),
+                }
+            )
+
+        for bonus_id in to_award.get(const.AWARD_ITEMS_KEY_BONUSES, []):
+            bonus_info = cast(
+                "dict[str, Any]",
+                self.coordinator.bonuses_data.get(bonus_id, {}),
+            )
+            structured_awards[const.AWARD_ITEMS_KEY_BONUSES].append(
+                {
+                    const.DATA_BONUS_ID: bonus_id,
+                    const.DATA_BONUS_NAME: bonus_info.get(
+                        const.DATA_BONUS_NAME,
+                        bonus_id,
+                    ),
+                }
+            )
+
+        for penalty_id in to_penalize:
+            penalty_info = cast(
+                "dict[str, Any]",
+                self.coordinator.penalties_data.get(penalty_id, {}),
+            )
+            structured_awards[const.AWARD_ITEMS_KEY_PENALTIES].append(
+                {
+                    const.DATA_PENALTY_ID: penalty_id,
+                    const.DATA_PENALTY_NAME: penalty_info.get(
+                        const.DATA_PENALTY_NAME,
+                        penalty_id,
+                    ),
+                }
+            )
+
+        return structured_awards
+
+    def get_badge_in_scope_chores_list(
+        self,
+        badge_info: BadgeData,
+        assignee_id: str,
+        assignee_assigned_chores: list[str] | None = None,
+    ) -> list[str]:
+        """Get the list of chore IDs that are in-scope for this badge evaluation.
+
+        For badges with tracked chores:
+        - Returns only those specific chore IDs that are also assigned to the assignee
+        For badges without tracked chores:
+        - Returns all chore IDs assigned to the assignee
+
+        Args:
+            badge_info: Badge configuration dictionary
+            assignee_id: Assignee's internal ID
+            assignee_assigned_chores: Optional pre-computed list of chores assigned to assignee
+                                (optimization to avoid re-iterating all chores)
+
+        Returns:
+            List of chore IDs in scope for this badge/assignee combination
+        """
+        badge_type = badge_info.get(const.DATA_BADGE_TYPE, const.BADGE_TYPE_PERIODIC)
+        include_tracked_chores = badge_type in const.INCLUDE_TRACKED_CHORES_BADGE_TYPES
+
+        # OPTIMIZATION: Use pre-computed list if provided, otherwise compute
+        if assignee_assigned_chores is None:
+            assignee_assigned_chores = self._get_assignee_assigned_chores(assignee_id)
+
+        # If badge does not include tracked chores, evaluate against all chores
+        # currently assigned to the assignee.
+        if include_tracked_chores:
+            tracked_chores = badge_info.get(const.DATA_BADGE_TRACKED_CHORES, {})
+            tracked_chore_ids = tracked_chores.get(
+                const.DATA_BADGE_TRACKED_CHORES_SELECTED_CHORES, []
+            )
+
+            if tracked_chore_ids:
+                # Badge has specific tracked chores, return only those assigned to the assignee
+                return [
+                    chore_id
+                    for chore_id in tracked_chore_ids
+                    if chore_id in assignee_assigned_chores
+                ]
+            # Badge considers all chores, return all chores assigned to the assignee
+            return assignee_assigned_chores
+        # Badge does not include tracked chores component, return all assigned chores
+        return assignee_assigned_chores
+
+    def _get_assignee_assigned_chores(self, assignee_id: str) -> list[str]:
+        """Return all chore IDs currently assigned to the assignee."""
+        assignee_assigned_chores: list[str] = []
+        for chore_id, chore_info in self.coordinator.chores_data.items():
+            chore_assigned_to = chore_info.get(const.DATA_CHORE_ASSIGNED_USER_IDS, [])
+            if not chore_assigned_to or assignee_id in chore_assigned_to:
+                assignee_assigned_chores.append(chore_id)
+        return assignee_assigned_chores
+
+    def get_cumulative_badge_levels(
+        self, assignee_id: str
+    ) -> tuple[
+        dict[str, Any] | None,
+        dict[str, Any] | None,
+        dict[str, Any] | None,
+        float,
+        float,
+    ]:
+        """Determine the highest earned cumulative badge and adjacent tier badges.
+
+        Args:
+            assignee_id: Assignee's internal ID
+
+        Returns:
+            Tuple of:
+            - highest_earned_badge_info (dict or None)
+            - next_higher_badge_info (dict or None)
+            - next_lower_badge_info (dict or None)
+            - baseline (float) - DEPRECATED, returns 0.0
+            - cycle_points (float)
+        """
+        assignee_info = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            return None, None, None, 0.0, 0.0
+
+        # Get total earned from point_periods using stats engine
+        point_periods = assignee_info.get(const.DATA_USER_POINT_PERIODS, {})
+        period_key_mapping = {
+            const.PERIOD_ALL_TIME: const.DATA_USER_POINT_PERIODS_ALL_TIME
+        }
+        total_points_earned = float(
+            self.coordinator.stats.get_period_total(
+                point_periods,
+                const.PERIOD_ALL_TIME,
+                const.DATA_USER_POINT_PERIOD_POINTS_EARNED,
+                period_key_mapping=period_key_mapping,
+            )
+        )
+
+        # Get cycle_points for maintenance tracking
+        progress = assignee_info.get(const.DATA_USER_CUMULATIVE_BADGE_PROGRESS, {})
+        cycle_points = round(
+            float(
+                progress.get(const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_CYCLE_POINTS, 0)
+            ),
+            const.DATA_FLOAT_PRECISION,
+        )
+
+        # Get badges this assignee has earned (from badges_earned dict)
+        badges_earned = assignee_info.get(const.DATA_USER_BADGES_EARNED, {})
+
+        # Get sorted list of cumulative badges (lowest to highest threshold)
+        cumulative_badges = sorted(
+            (
+                (badge_id, badge_info)
+                for badge_id, badge_info in self.coordinator.badges_data.items()
+                if badge_info.get(const.DATA_BADGE_TYPE) == const.BADGE_TYPE_CUMULATIVE
+            ),
+            key=lambda item: float(
+                item[1]
+                .get(const.DATA_BADGE_TARGET, {})
+                .get(const.DATA_BADGE_TARGET_THRESHOLD_VALUE, 0)
+            ),
+        )
+
+        if not cumulative_badges:
+            # No cumulative badges exist
+            return None, None, None, 0.0, cycle_points
+
+        highest_earned: dict[str, Any] | None = None
+        next_higher: dict[str, Any] | None = None
+        next_lower: dict[str, Any] | None = None
+        previous_badge_info: dict[str, Any] | None = None
+
+        for badge_id, badge_info in cumulative_badges:
+            threshold = float(
+                badge_info.get(const.DATA_BADGE_TARGET, {}).get(
+                    const.DATA_BADGE_TARGET_THRESHOLD_VALUE, 0
+                )
+            )
+
+            # Check if badge is assigned to this assignee (empty list = assigned to all)
+            is_assigned_to = not badge_info.get(
+                const.DATA_BADGE_ASSIGNED_USER_IDS, []
+            ) or assignee_id in badge_info.get(const.DATA_BADGE_ASSIGNED_USER_IDS, [])
+
+            if not is_assigned_to:
+                continue
+
+            # Badge is earned if it's in badges_earned dict OR total_points >= threshold
+            is_earned = badge_id in badges_earned or total_points_earned >= threshold
+
+            if is_earned:
+                highest_earned = cast("dict[str, Any]", badge_info)
+                next_lower = previous_badge_info
+            else:
+                # First unearned badge is next_higher
+                next_higher = cast("dict[str, Any]", badge_info)
+                break
+
+            previous_badge_info = cast("dict[str, Any]", badge_info)
+
+        return (
+            highest_earned,
+            next_higher,
+            next_lower,
+            0.0,  # baseline deprecated, return 0
+            cycle_points,
+        )
+
+    def update_point_multiplier_for_assignee(self, assignee_id: str) -> None:
+        """Update the assignee's points multiplier based on current cumulative badge.
+
+        Phase 3A: Use get_cumulative_badge_progress to compute current badge
+        (demotion-aware, no storage reads).
+
+        Phase 3B Landlord/Tenant: GamificationManager calculates the multiplier
+        but emits a signal for EconomyManager (the Landlord) to perform the write.
+
+        Args:
+            assignee_id: Assignee's internal ID
+        """
+        assignee_info = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            return
+
+        old_multiplier = float(
+            assignee_info.get(
+                const.DATA_USER_POINTS_MULTIPLIER,
+                const.DEFAULT_ASSIGNEE_POINTS_MULTIPLIER,
+            )
+        )
+
+        # Phase 3A: Get current badge via computed progress (demotion-aware)
+        cumulative_badge_progress = self.get_cumulative_badge_progress(assignee_id)
+        current_badge_id = cumulative_badge_progress.get(
+            const.CUMULATIVE_BADGE_PROGRESS_CURRENT_BADGE_ID
+        )
+
+        multiplier: float = const.DEFAULT_ASSIGNEE_POINTS_MULTIPLIER
+
+        if current_badge_id:
+            badge_data = self.coordinator.badges_data.get(current_badge_id)
+            if badge_data:
+                badge_awards = badge_data.get(const.DATA_BADGE_AWARDS, {})
+                raw_multiplier = badge_awards.get(
+                    const.DATA_BADGE_AWARDS_POINT_MULTIPLIER,
+                    const.DEFAULT_ASSIGNEE_POINTS_MULTIPLIER,
+                )
+                if isinstance(raw_multiplier, (int, float)):
+                    multiplier = float(raw_multiplier)
+
+        # Phase 3B: Emit signal for EconomyManager (Landlord) to write
+        self.emit(
+            const.SIGNAL_SUFFIX_POINTS_MULTIPLIER_CHANGE_REQUESTED,
+            user_id=assignee_id,
+            multiplier=multiplier,
+            old_multiplier=old_multiplier,
+            new_multiplier=multiplier,
+            reference_id=current_badge_id,
+        )
+
+    # =========================================================================
+    # BADGE CORE OPERATIONS (State-Modifying Methods)
+    # =========================================================================
+    # These methods award/demote/remove badges and modify assignee/badge state.
+    # Migrated from coordinator.py as Tier 2/3 (depend on utilities above).
+
+    def update_badges_earned_for_assignee(
+        self, assignee_id: str, badge_id: str
+    ) -> None:
+        """Update the assignee's badges-earned tracking for the given badge.
+
+        Updates period stats (daily, weekly, etc.) for badge award tracking.
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge's internal ID
+        """
+        assignee_info = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            const.LOGGER.error(
+                "ERROR: Update Assignee Badges Earned - Assignee ID '%s' not found",
+                assignee_id,
+            )
+            return
+
+        badge_info = self.coordinator.badges_data.get(badge_id)
+        if not badge_info:
+            const.LOGGER.error(
+                "ERROR: Update Assignee Badges Earned - Badge ID '%s' not found",
+                badge_id,
+            )
+            return
+
+        today_local_iso = dt_today_iso()
+
+        badges_earned = assignee_info.setdefault(const.DATA_USER_BADGES_EARNED, {})
+        # Phase 4: GamificationManager (Landlord) creates/updates structure only
+        # StatisticsManager (Tenant) handles period updates via _on_badge_earned listener
+        if badge_id not in badges_earned:
+            # Create new badge tracking entry with empty periods (Landlord creates structure only)
+            # StatisticsEngine creates daily/weekly/monthly/yearly keys on-demand
+            # Top-level award_count is manager-owned for periodic re-awards.
+            # Tenant-owned period aggregates remain in periods buckets.
+            badges_earned[badge_id] = {  # pyright: ignore[reportArgumentType]
+                const.DATA_USER_BADGES_EARNED_NAME: badge_info.get(
+                    const.DATA_BADGE_NAME, ""
+                ),
+                const.DATA_USER_BADGES_EARNED_LAST_AWARDED: today_local_iso,
+                const.DATA_USER_BADGES_EARNED_PERIODS: {},  # Tenant populates sub-keys
+            }
+            const.LOGGER.info(
+                "Update Assignee Badges Earned - Created new tracking for badge '%s' for assignee '%s'",
+                badge_info.get(const.DATA_BADGE_NAME, badge_id),
+                assignee_info.get(const.DATA_USER_NAME, assignee_id),
+            )
+        else:
+            # Update existing badge tracking (Landlord updates metadata fields only)
+            # award_count increment for periodic re-award is manager-owned.
+            # Tenant-owned period aggregates are still handled in periods buckets.
+            tracking_entry = badges_earned[badge_id]
+            tracking_entry[const.DATA_USER_BADGES_EARNED_NAME] = badge_info.get(
+                const.DATA_BADGE_NAME, ""
+            )
+            tracking_entry[const.DATA_USER_BADGES_EARNED_LAST_AWARDED] = today_local_iso
+            # Ensure periods structure exists (Landlord ensures container)
+            # StatisticsEngine creates daily/weekly/monthly/yearly keys on-demand
+            tracking_entry.setdefault(
+                const.DATA_USER_BADGES_EARNED_PERIODS,
+                {},  # type: ignore[typeddict-item]  # Tenant populates sub-keys
+            )
+
+            const.LOGGER.info(
+                "Update Assignee Badges Earned - Updated tracking for badge '%s' for assignee '%s'",
+                badge_info.get(const.DATA_BADGE_NAME, badge_id),
+                assignee_info.get(const.DATA_USER_NAME, assignee_id),
+            )
+
+        # Phase 4: Periods updated by StatisticsManager._on_badge_earned listener
+        # No direct StatisticsEngine calls - clean Landlord/Tenant separation
+
+    def _ensure_assignee_badge_structures(
+        self, assignee_id: str, badge_id: str
+    ) -> None:
+        """Ensure badge periods structure exists (Landlord responsibility).
+
+        Creates ONLY the empty periods dict. StatisticsManager (Tenant) populates
+        everything inside via StatisticsEngine.record_transaction which creates
+        period type keys (daily/weekly/etc.) on-demand.
+
+        Follows the Landlord-Tenant pattern used by ChoreManager and RewardManager:
+        - Landlord (GamificationManager): Creates empty periods: {} container
+        - Tenant (StatisticsManager): Populates ALL sub-keys via record_transaction
+
+        This prevents the race condition where:
+        1. Badge entry created with periods: {}
+        2. BADGE_EARNED signal emitted
+        3. StatisticsManager._on_badge_earned finds periods structure ready
+
+        Pattern matches:
+        - ChoreManager._ensure_assignee_structures() - creates empty periods: {}
+        - RewardManager._ensure_assignee_structures() - creates empty periods: {}
+
+        Args:
+            assignee_id: Assignee's internal ID
+            badge_id: Badge's internal ID
+        """
+        assignee_info = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            return
+
+        badges_earned = assignee_info.get(const.DATA_USER_BADGES_EARNED, {})
+        badge_entry = badges_earned.get(badge_id)
+        if not badge_entry:
+            const.LOGGER.warning(
+                "_ensure_assignee_badge_structures: Badge entry not found for assignee=%s, badge=%s",
+                assignee_id,
+                badge_id,
+            )
+            return
+
+        # Cast to mutable dict for dynamic period structure creation
+        badge_entry_dict = cast("dict[str, Any]", badge_entry)
+
+        # Landlord creates ONLY empty periods container
+        # Tenant (StatisticsEngine.record_transaction) creates ALL sub-keys on-demand
+        if const.DATA_USER_BADGES_EARNED_PERIODS not in badge_entry_dict:
+            badge_entry_dict[const.DATA_USER_BADGES_EARNED_PERIODS] = {}
+
+        const.LOGGER.debug(
+            "_ensure_assignee_badge_structures: Ensured periods container for assignee=%s, badge=%s",
+            assignee_id,
+            badge_id,
+        )
+
+        self.coordinator._persist_and_update()
+
+    def update_chore_badge_references_for_assignee(
+        self, include_cumulative_badges: bool = False
+    ) -> None:
+        """Update badge reference lists in assignee chore data.
+
+        Legacy helper retained for diagnostics and migration parity.
+
+        Runtime badge evaluation resolves scope dynamically from badge definitions,
+        so startup no longer materializes `badge_refs` snapshots.
+
+        Args:
+            include_cumulative_badges: Include cumulative badges in references.
+                Default False since cumulative badges are points-only.
+        """
+        # Clear existing badge references
+        for _assignee_id, assignee_info in self.coordinator.assignees_data.items():
+            if const.DATA_USER_CHORE_DATA not in assignee_info:
+                continue
+
+            for chore_data in assignee_info[const.DATA_USER_CHORE_DATA].values():
+                chore_data[const.DATA_USER_CHORE_DATA_BADGE_REFS] = []
+
+        # Add badge references to relevant chores
+        for badge_id, badge_info in self.coordinator.badges_data.items():
+            # Skip cumulative badges if not explicitly included
+            if (
+                not include_cumulative_badges
+                and badge_info.get(const.DATA_BADGE_TYPE) == const.BADGE_TYPE_CUMULATIVE
+            ):
+                continue
+
+            # For each assignee this badge is assigned to
+            assigned_to = badge_info.get(const.DATA_BADGE_ASSIGNED_USER_IDS, [])
+            for assignee_id in (
+                assigned_to or self.coordinator.assignees_data.keys()
+            ):  # If empty, apply to all assignees
+                assignee_info_loop = self.coordinator.assignees_data.get(assignee_id)
+                if (
+                    not assignee_info_loop
+                    or const.DATA_USER_CHORE_DATA not in assignee_info_loop
+                ):
+                    continue
+
+                # Use the helper function to get the correct in-scope chores
+                in_scope_chores_list = self.get_badge_in_scope_chores_list(
+                    badge_info, assignee_id
+                )
+
+                # Add badge reference to each tracked chore
+                for chore_id in in_scope_chores_list:
+                    if chore_id in assignee_info_loop[const.DATA_USER_CHORE_DATA]:
+                        chore_entry = assignee_info_loop[const.DATA_USER_CHORE_DATA][
+                            chore_id
+                        ]
+                        badge_refs: list[str] = chore_entry.get(
+                            const.DATA_USER_CHORE_DATA_BADGE_REFS, []
+                        )
+                        if badge_id not in badge_refs:
+                            badge_refs.append(badge_id)
+                            chore_entry[const.DATA_USER_CHORE_DATA_BADGE_REFS] = (
+                                badge_refs
+                            )
+
+    def get_cumulative_badge_progress(self, assignee_id: str) -> dict[str, Any]:
+        """Build and return the full cumulative badge progress block for a assignee.
+
+        Phase 3A: Returns dict with CUMULATIVE_BADGE_PROGRESS_* constant keys.
+        All derived fields computed on-read, only state fields read from storage.
+
+        Uses badge level logic, progress tracking, and next-tier metadata.
+        Does not mutate state.
+
+        Args:
+            assignee_id: Assignee's internal ID
+
+        Returns:
+            Dictionary with cumulative badge progress data (state + computed fields)
+        """
+        assignee_info = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            return {}
+
+        # Get stored state fields (only 4 fields remain in storage)
+        stored_progress = assignee_info.get(
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS, {}
+        ).copy()
+
+        # Compute values from badge level logic
+        (highest_earned, next_higher, next_lower, _, cycle_points) = (
+            self.get_cumulative_badge_levels(assignee_id)
+        )
+
+        # Get assignee's total points from point_periods using stats engine
+        point_periods = assignee_info.get(const.DATA_USER_POINT_PERIODS, {})
+        period_key_mapping = {
+            const.PERIOD_ALL_TIME: const.DATA_USER_POINT_PERIODS_ALL_TIME
+        }
+        total_points = float(
+            self.coordinator.stats.get_period_total(
+                point_periods,
+                const.PERIOD_ALL_TIME,
+                const.DATA_USER_POINT_PERIOD_POINTS_EARNED,
+                period_key_mapping=period_key_mapping,
+            )
+        )
+
+        # Check if highest earned badge has a reset schedule (maintenance cycle)
+        # If no reset schedule → no maintenance, no demotion, cycle_points = 0
+        has_reset_schedule = False
+        if highest_earned:
+            reset_schedule = highest_earned.get(const.DATA_BADGE_RESET_SCHEDULE, {})
+            recurring_frequency = reset_schedule.get(
+                const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY,
+                const.FREQUENCY_NONE,
+            )
+            has_reset_schedule = recurring_frequency != const.FREQUENCY_NONE
+
+        # Determine status and current badge based on reset schedule
+        if not has_reset_schedule:
+            # No reset schedule → no maintenance cycle
+            # Status is always active, cycle_points is 0, current badge = highest earned
+            current_status = const.CUMULATIVE_BADGE_STATE_ACTIVE
+            cycle_points = 0.0
+            current_badge_info = highest_earned
+        else:
+            # Has reset schedule → use stored status and cycle_points
+            current_status = stored_progress.get(
+                const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_STATUS,
+                const.CUMULATIVE_BADGE_STATE_ACTIVE,
+            )
+            if current_status == const.CUMULATIVE_BADGE_STATE_DEMOTED:
+                current_badge_info = next_lower
+            else:
+                current_badge_info = highest_earned
+
+        # Phase 3A: Use CUMULATIVE_BADGE_PROGRESS_* constants for dict keys
+        computed_progress = {
+            # State fields (corrected based on reset schedule check)
+            const.CUMULATIVE_BADGE_PROGRESS_STATUS: current_status,
+            const.CUMULATIVE_BADGE_PROGRESS_CYCLE_POINTS: cycle_points,
+            # Derived fields (computed only, not stored)
+            const.CUMULATIVE_BADGE_PROGRESS_HIGHEST_EARNED_BADGE_ID: (
+                highest_earned.get(const.DATA_BADGE_INTERNAL_ID)
+                if highest_earned
+                else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_HIGHEST_EARNED_BADGE_NAME: (
+                highest_earned.get(const.DATA_BADGE_NAME) if highest_earned else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_HIGHEST_EARNED_THRESHOLD: (
+                float(
+                    highest_earned.get(const.DATA_BADGE_TARGET, {}).get(
+                        const.DATA_BADGE_TARGET_THRESHOLD_VALUE, 0
+                    )
+                )
+                if highest_earned
+                else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_CURRENT_BADGE_ID: (
+                current_badge_info.get(const.DATA_BADGE_INTERNAL_ID)
+                if current_badge_info
+                else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_CURRENT_BADGE_NAME: (
+                current_badge_info.get(const.DATA_BADGE_NAME)
+                if current_badge_info
+                else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_CURRENT_THRESHOLD: (
+                float(
+                    current_badge_info.get(const.DATA_BADGE_TARGET, {}).get(
+                        const.DATA_BADGE_TARGET_THRESHOLD_VALUE, 0
+                    )
+                )
+                if current_badge_info
+                else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_HIGHER_BADGE_ID: (
+                next_higher.get(const.DATA_BADGE_INTERNAL_ID) if next_higher else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_HIGHER_BADGE_NAME: (
+                next_higher.get(const.DATA_BADGE_NAME) if next_higher else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_HIGHER_THRESHOLD: (
+                float(
+                    next_higher.get(const.DATA_BADGE_TARGET, {}).get(
+                        const.DATA_BADGE_TARGET_THRESHOLD_VALUE, 0
+                    )
+                )
+                if next_higher
+                else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_HIGHER_POINTS_NEEDED: (
+                max(
+                    0.0,
+                    float(
+                        next_higher.get(const.DATA_BADGE_TARGET, {}).get(
+                            const.DATA_BADGE_TARGET_THRESHOLD_VALUE, 0
+                        )
+                    )
+                    - total_points,
+                )
+                if next_higher
+                else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_LOWER_BADGE_ID: (
+                next_lower.get(const.DATA_BADGE_INTERNAL_ID) if next_lower else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_LOWER_BADGE_NAME: (
+                next_lower.get(const.DATA_BADGE_NAME) if next_lower else None
+            ),
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_LOWER_THRESHOLD: (
+                float(next_lower.get(const.DATA_BADGE_TARGET_THRESHOLD_VALUE, 0))
+                if next_lower
+                else None
+            ),
+        }
+
+        # Merge computed values over stored progress
+        stored_progress.update(computed_progress)  # type: ignore[typeddict-item]
+
+        return cast("dict[str, Any]", stored_progress)
+
+    def demote_cumulative_badge(self, assignee_id: str) -> None:
+        """Update cumulative badge status to DEMOTED when maintenance fails.
+
+        Called when a cumulative badge's maintenance requirements are no longer met.
+        The badge is not removed, but the assignee's status is set to DEMOTED which
+        affects their multiplier.
+
+        Args:
+            assignee_id: Assignee's internal ID
+        """
+        assignee_info = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            const.LOGGER.error(
+                "Demote Cumulative Badge - Assignee ID '%s' not found", assignee_id
+            )
+            return
+
+        progress = assignee_info.get(const.DATA_USER_CUMULATIVE_BADGE_PROGRESS)
+        if not progress:
+            const.LOGGER.debug(
+                "Demote Cumulative Badge - No cumulative badge progress for assignee '%s'",
+                assignee_id,
+            )
+            return
+
+        # Only update if not already demoted
+        current_status = progress.get(
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_STATUS,
+            const.CUMULATIVE_BADGE_STATE_ACTIVE,
+        )
+        if current_status != const.CUMULATIVE_BADGE_STATE_DEMOTED:
+            progress[const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_STATUS] = (
+                const.CUMULATIVE_BADGE_STATE_DEMOTED
+            )
+
+            # Recalculate multiplier immediately so the penalty takes effect
+            self.update_point_multiplier_for_assignee(assignee_id)
+
+            self.coordinator._persist_and_update()
+
+            assignee_name = assignee_info.get(const.DATA_USER_NAME, assignee_id)
+            const.LOGGER.info(
+                "Demoted cumulative badge status for assignee '%s' (%s)",
+                assignee_name,
+                assignee_id,
+            )
+
+    def _calculate_maintenance_dates(
+        self, badge_data: BadgeData
+    ) -> tuple[str | None, str | None]:
+        """Calculate next maintenance end date and grace end date for a badge.
+
+        Uses the badge's reset_schedule to compute the next maintenance window
+        from today. Called at award time (first-time, re-promotion, maintenance
+        renewal) so dates are set in real-time, not deferred to midnight.
+
+        Args:
+            badge_data: Badge configuration dict with reset_schedule.
+
+        Returns:
+            Tuple of (maintenance_end_date, maintenance_grace_end_date) as
+            ISO date strings, or (None, None) if schedule is not configured.
+        """
+        reset_schedule = badge_data.get(const.DATA_BADGE_RESET_SCHEDULE, {})
+        recurring_frequency = reset_schedule.get(
+            const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY,
+            const.FREQUENCY_NONE,
+        )
+
+        if recurring_frequency == const.FREQUENCY_NONE:
+            return (None, None)
+
+        today_iso = dt_today_iso()
+        next_end_date: str | None = None
+
+        if recurring_frequency == const.FREQUENCY_CUSTOM:
+            custom_interval = reset_schedule.get(
+                const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL
+            )
+            custom_unit = reset_schedule.get(
+                const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL_UNIT
+            )
+            if custom_interval and custom_unit:
+                result = dt_add_interval(
+                    today_iso,
+                    interval_unit=custom_unit,
+                    delta=int(custom_interval),
+                    require_future=True,
+                    return_type=const.HELPER_RETURN_ISO_DATE,
+                )
+                next_end_date = str(result) if result else None
+        elif recurring_frequency in RecurrenceEngine.PERIOD_END_FREQUENCIES:
+            next_end_date = self._resolve_period_end_cycle_end(
+                str(recurring_frequency), today_iso
+            )
+        else:
+            result = dt_next_schedule(
+                today_iso,
+                interval_type=recurring_frequency,
+                require_future=True,
+                return_type=const.HELPER_RETURN_ISO_DATE,
+            )
+            next_end_date = str(result) if result else None
+
+        # Calculate grace end date from the maintenance end date.
+        # When grace_days == 0, grace_end == end_date (no grace window).
+        next_grace_end_date: str | None = None
+        grace_days = int(
+            reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_GRACE_PERIOD_DAYS, 0)
+        )
+        if next_end_date:
+            if grace_days > 0:
+                grace_result = dt_add_interval(
+                    next_end_date,
+                    interval_unit=const.TIME_UNIT_DAYS,
+                    delta=grace_days,
+                    return_type=const.HELPER_RETURN_ISO_DATE,
+                )
+                next_grace_end_date = (
+                    str(grace_result) if grace_result else next_end_date
+                )
+            else:
+                # No grace period — grace end matches maintenance end
+                next_grace_end_date = next_end_date
+
+        return (next_end_date, next_grace_end_date)
+
+    def remove_awarded_badges(
+        self, assignee_name: str | None = None, badge_name: str | None = None
+    ) -> None:
+        """Remove awarded badges based on provided assignee_name and badge_name.
+
+        This is the public API that accepts names and converts to IDs.
+
+        Args:
+            assignee_name: Assignee's display name (optional)
+            badge_name: Badge's display name (optional)
+        """
+        # Convert assignee_name to assignee_id if provided
+        assignee_id: str | None = None
+        if assignee_name:
+            assignee_id = get_item_id_by_name(
+                self.coordinator,
+                const.ITEM_TYPE_USER,
+                assignee_name,
+                role=const.ROLE_ASSIGNEE,
+            )
+            if assignee_id is None:
+                const.LOGGER.error(
+                    "ERROR: Remove Awarded Badges - Assignee name '%s' not found",
+                    assignee_name,
+                )
+                raise HomeAssistantError(
+                    translation_domain=const.DOMAIN,
+                    translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                    translation_placeholders={
+                        "entity_type": const.LABEL_ASSIGNEE,
+                        "name": assignee_name,
+                    },
+                )
+
+        # If badge_name is provided, try to find its corresponding badge_id
+        badge_id: str | None = None
+        if badge_name:
+            badge_id = get_item_id_by_name(
+                self.coordinator, const.ITEM_TYPE_BADGE, badge_name
+            )
+            if not badge_id:
+                # Badge isn't found, may have been deleted - clean up assignee data only
+                const.LOGGER.warning(
+                    "Remove Awarded Badges - Badge name '%s' not found in badges_data. "
+                    "Removing from assignee data only",
+                    badge_name,
+                )
+                # Remove badge name from specific assignee or all assignees
+                if assignee_id:
+                    assignee_info = self.coordinator.assignees_data.get(assignee_id)
+                    if assignee_info:
+                        badges_earned = assignee_info.get(
+                            const.DATA_USER_BADGES_EARNED, {}
+                        )
+                        to_remove = [
+                            bid
+                            for bid, entry in badges_earned.items()
+                            if entry.get(const.DATA_USER_BADGES_EARNED_NAME)
+                            == badge_name
+                        ]
+                        for bid in to_remove:
+                            del badges_earned[bid]
+                else:
+                    for assignee_info in self.coordinator.assignees_data.values():
+                        badges_earned = assignee_info.get(
+                            const.DATA_USER_BADGES_EARNED, {}
+                        )
+                        to_remove = [
+                            bid
+                            for bid, entry in badges_earned.items()
+                            if entry.get(const.DATA_USER_BADGES_EARNED_NAME)
+                            == badge_name
+                        ]
+                        for bid in to_remove:
+                            del badges_earned[bid]
+
+                self.coordinator._persist_and_update()
+                return
+
+        self.remove_awarded_badges_by_id(assignee_id, badge_id)
+
+    def remove_awarded_badges_by_id(
+        self, assignee_id: str | None = None, badge_id: str | None = None
+    ) -> None:
+        """Remove awarded badges based on provided assignee_id and badge_id.
+
+        This is the internal method that operates on IDs directly.
+
+        Args:
+            assignee_id: Assignee's internal ID (optional)
+            badge_id: Badge's internal ID (optional)
+        """
+        const.LOGGER.info("Remove Awarded Badges - Starting removal process")
+        found = False
+
+        if badge_id and assignee_id:
+            # Reset a specific badge for a specific assignee
+            assignee_info = self.coordinator.assignees_data.get(assignee_id)
+            badge_info = self.coordinator.badges_data.get(badge_id)
+            if not assignee_info:
+                const.LOGGER.error(
+                    "ERROR: Remove Awarded Badges - Assignee ID '%s' not found",
+                    assignee_id,
+                )
+                raise HomeAssistantError(
+                    translation_domain=const.DOMAIN,
+                    translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                    translation_placeholders={
+                        "entity_type": const.LABEL_ASSIGNEE,
+                        "name": assignee_id,
+                    },
+                )
+            if not badge_info:
+                const.LOGGER.error(
+                    "ERROR: Remove Awarded Badges - Badge ID '%s' not found", badge_id
+                )
+                raise HomeAssistantError(
+                    translation_domain=const.DOMAIN,
+                    translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                    translation_placeholders={
+                        "entity_type": const.LABEL_BADGE,
+                        "name": badge_id,
+                    },
+                )
+            badge_name = badge_info.get(const.DATA_BADGE_NAME, badge_id)
+            assignee_name_str = assignee_info.get(const.DATA_USER_NAME, assignee_id)
+            badge_type = badge_info.get(const.DATA_BADGE_TYPE)
+
+            # Remove the badge from the assignee's badges_earned
+            badges_earned = assignee_info.setdefault(const.DATA_USER_BADGES_EARNED, {})
+            if badge_id in badges_earned:
+                found = True
+                const.LOGGER.warning(
+                    "Remove Awarded Badges - Removing badge '%s' from assignee '%s'",
+                    badge_name,
+                    assignee_name_str,
+                )
+                del badges_earned[badge_id]
+
+            # Remove the assignee from the badge earned_by list
+            earned_by_list = badge_info.get(const.DATA_BADGE_EARNED_BY, [])
+            if assignee_id in earned_by_list:
+                earned_by_list.remove(assignee_id)
+
+            # Update multiplier if cumulative badge was removed
+            if found and badge_type == const.BADGE_TYPE_CUMULATIVE:
+                self.update_point_multiplier_for_assignee(assignee_id)
+
+            if not found:
+                const.LOGGER.warning(
+                    "Remove Awarded Badges - Badge '%s' ('%s') not found in assignee '%s' ('%s') data",
+                    badge_id,
+                    badge_name,
+                    assignee_id,
+                    assignee_name_str,
+                )
+
+        elif badge_id:
+            # Remove a specific awarded badge for all assignees
+            badge_info_elif = self.coordinator.badges_data.get(badge_id)
+            if not badge_info_elif:
+                const.LOGGER.warning(
+                    "Remove Awarded Badges - Badge ID '%s' not found in badges data",
+                    badge_id,
+                )
+            else:
+                badge_name = badge_info_elif.get(const.DATA_BADGE_NAME, badge_id)
+                badge_type = badge_info_elif.get(const.DATA_BADGE_TYPE)
+                assignees_affected: list[str] = []
+                for (
+                    loop_assignee_id,
+                    assignee_info,
+                ) in self.coordinator.assignees_data.items():
+                    assignee_name_str = assignee_info.get(
+                        const.DATA_USER_NAME, "Unknown Assignee"
+                    )
+                    badges_earned = assignee_info.setdefault(
+                        const.DATA_USER_BADGES_EARNED, {}
+                    )
+                    if badge_id in badges_earned:
+                        found = True
+                        assignees_affected.append(loop_assignee_id)
+                        const.LOGGER.warning(
+                            "Remove Awarded Badges - Removing badge '%s' from assignee '%s'",
+                            badge_name,
+                            assignee_name_str,
+                        )
+                        del badges_earned[badge_id]
+
+                    # Remove the assignee from the badge earned_by list
+                    earned_by_list = badge_info_elif.get(const.DATA_BADGE_EARNED_BY, [])
+                    if loop_assignee_id in earned_by_list:
+                        earned_by_list.remove(loop_assignee_id)
+
+                # Update multiplier for all affected assignees if cumulative badge
+                if badge_type == const.BADGE_TYPE_CUMULATIVE:
+                    for affected_assignee_id in assignees_affected:
+                        self.update_point_multiplier_for_assignee(affected_assignee_id)
+
+                # Clear orphan earned_by references
+                if const.DATA_BADGE_EARNED_BY in badge_info_elif:
+                    badge_info_elif[const.DATA_BADGE_EARNED_BY].clear()
+
+                if not found:
+                    const.LOGGER.warning(
+                        "Remove Awarded Badges - Badge '%s' ('%s') not found in any assignee's data",
+                        badge_id,
+                        badge_name,
+                    )
+
+        elif assignee_id:
+            # Remove all awarded badges for a specific assignee
+            assignee_info_elif = self.coordinator.assignees_data.get(assignee_id)
+            if not assignee_info_elif:
+                const.LOGGER.error(
+                    "ERROR: Remove Awarded Badges - Assignee ID '%s' not found",
+                    assignee_id,
+                )
+                raise HomeAssistantError(
+                    translation_domain=const.DOMAIN,
+                    translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                    translation_placeholders={
+                        "entity_type": const.LABEL_ASSIGNEE,
+                        "name": assignee_id,
+                    },
+                )
+            assignee_name_str = assignee_info_elif.get(
+                const.DATA_USER_NAME, "Unknown Assignee"
+            )
+            had_cumulative = False
+            for loop_badge_id, badge_info in self.coordinator.badges_data.items():
+                badge_name = badge_info.get(const.DATA_BADGE_NAME, "")
+                badge_type = badge_info.get(const.DATA_BADGE_TYPE)
+                earned_by_list = badge_info.get(const.DATA_BADGE_EARNED_BY, [])
+                badges_earned = assignee_info_elif.setdefault(
+                    const.DATA_USER_BADGES_EARNED, {}
+                )
+                if assignee_id in earned_by_list:
+                    found = True
+                    if badge_type == const.BADGE_TYPE_CUMULATIVE:
+                        had_cumulative = True
+                    earned_by_list.remove(assignee_id)
+                    if loop_badge_id in badges_earned:
+                        const.LOGGER.warning(
+                            "Remove Awarded Badges - Removing badge '%s' from assignee '%s'",
+                            badge_name,
+                            assignee_name_str,
+                        )
+                        del badges_earned[loop_badge_id]
+
+            # Clear orphan badges_earned
+            if const.DATA_USER_BADGES_EARNED in assignee_info_elif:
+                assignee_info_elif[const.DATA_USER_BADGES_EARNED].clear()
+
+            # Update multiplier if any cumulative badges were removed
+            if had_cumulative:
+                self.update_point_multiplier_for_assignee(assignee_id)
+
+            if not found:
+                const.LOGGER.warning(
+                    "Remove Awarded Badges - No badge found for assignee '%s'",
+                    assignee_info_elif.get(const.DATA_USER_NAME, assignee_id),
+                )
+
+        else:
+            # Remove all awarded badges for all assignees
+            const.LOGGER.info(
+                "Remove Awarded Badges - Removing all awarded badges for all assignees"
+            )
+            assignees_with_cumulative: set[str] = set()
+            for loop_badge_id, badge_info in self.coordinator.badges_data.items():
+                badge_name = badge_info.get(const.DATA_BADGE_NAME, "")
+                badge_type = badge_info.get(const.DATA_BADGE_TYPE)
+                for (
+                    loop_assignee_id,
+                    assignee_info,
+                ) in self.coordinator.assignees_data.items():
+                    assignee_name_str = assignee_info.get(
+                        const.DATA_USER_NAME, "Unknown Assignee"
+                    )
+                    badges_earned = assignee_info.setdefault(
+                        const.DATA_USER_BADGES_EARNED, {}
+                    )
+                    if loop_badge_id in badges_earned:
+                        found = True
+                        if badge_type == const.BADGE_TYPE_CUMULATIVE:
+                            assignees_with_cumulative.add(loop_assignee_id)
+                        const.LOGGER.warning(
+                            "Remove Awarded Badges - Removing badge '%s' from assignee '%s'",
+                            badge_name,
+                            assignee_name_str,
+                        )
+                        del badges_earned[loop_badge_id]
+
+                    # Remove the assignee from the badge earned_by list
+                    earned_by_list = badge_info.get(const.DATA_BADGE_EARNED_BY, [])
+                    if loop_assignee_id in earned_by_list:
+                        earned_by_list.remove(loop_assignee_id)
+
+                    # Clear orphan badges_earned
+                    if const.DATA_USER_BADGES_EARNED in assignee_info:
+                        assignee_info[const.DATA_USER_BADGES_EARNED].clear()
+
+                # Clear orphan earned_by references
+                if const.DATA_BADGE_EARNED_BY in badge_info:
+                    badge_info[const.DATA_BADGE_EARNED_BY].clear()
+
+            # Update multiplier for all assignees who had cumulative badges removed
+            for affected_assignee_id in assignees_with_cumulative:
+                self.update_point_multiplier_for_assignee(affected_assignee_id)
+
+            if not found:
+                const.LOGGER.warning(
+                    "Remove Awarded Badges - No awarded badges found in any assignee's data"
+                )
+
+        const.LOGGER.info("Remove Awarded Badges - Badge removal process completed")
+        self.coordinator._persist_and_update()
+
+    # =========================================================================
+    # BADGE AWARDING AND PROGRESS SYNC (State-Modifying Methods)
+    # =========================================================================
+
+    async def _record_badge_earned(
+        self, assignee_id: str, badge_id: str, badge_data: BadgeData
+    ) -> None:
+        """Record that a assignee earned a badge (GamificationManager's domain only).
+
+        Phase 7 Signal-First Logic: This method ONLY updates badge tracking data.
+        All award processing (points, multiplier, rewards, bonuses, penalties)
+        is handled by domain experts via BADGE_EARNED signal:
+        - EconomyManager: points, multiplier, bonuses, penalties
+        - RewardManager: reward grants
+
+        Args:
+            assignee_id: The assignee's internal UUID
+            badge_id: The badge's internal UUID
+            badge_data: Badge definition
+        """
+        assignee_info = self.coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            const.LOGGER.error(
+                "_record_badge_earned: Assignee ID '%s' not found", assignee_id
+            )
+            return
+
+        badge_name = badge_data.get(const.DATA_BADGE_NAME, badge_id)
+        assignee_name = assignee_info.get(const.DATA_USER_NAME, assignee_id)
+
+        # Update badge's earned_by list
+        earned_by_list = badge_data.setdefault(const.DATA_BADGE_EARNED_BY, [])
+        if assignee_id not in earned_by_list:
+            earned_by_list.append(assignee_id)
+
+        # Update assignee's badges_earned dict (Landlord creates structure)
+        self.update_badges_earned_for_assignee(assignee_id, badge_id)
+
+        # Phase 4: Ensure badge periods structure exists before emitting signal
+        # This ensures StatisticsManager (Tenant) has structure ready when signal fires
+        self._ensure_assignee_badge_structures(assignee_id, badge_id)
+
+        const.LOGGER.info(
+            "Badge recorded: '%s' earned by assignee '%s'",
+            badge_name,
+            assignee_name,
+        )
+
+        # Persist badge tracking data
+        self.coordinator._persist_and_update()
+
+    async def award_badge(self, assignee_id: str, badge_id: str) -> None:
+        """Award a badge to a assignee (public API, emits full manifest).
+
+        This is the public method for manually awarding badges (e.g., special occasion).
+        It delegates to _record_badge_earned for tracking and emits the Award Manifest
+        so domain experts handle their items:
+        - EconomyManager: points, multiplier, bonuses, penalties
+        - RewardManager: reward grants (free)
+
+        For automatic badge evaluation, use _evaluate_badge_for_assignee instead.
+
+        Args:
+            assignee_id: The assignee's internal UUID
+            badge_id: The badge's internal UUID
+        """
+        badge_info: BadgeData | None = self.coordinator.badges_data.get(badge_id)
+        assignee_info: UserData | None = self.coordinator.assignees_data.get(
+            assignee_id
+        )
+        if not assignee_info:
+            const.LOGGER.error("award_badge: Assignee ID '%s' not found", assignee_id)
+            return
+        if not badge_info:
+            const.LOGGER.error(
+                "award_badge: Badge ID '%s' not found",
+                badge_id,
+            )
+            return
+
+        # Record badge in GamificationManager's domain
+        await self._record_badge_earned(assignee_id, badge_id, badge_info)
+
+        # Build and emit Award Manifest for domain experts
+        award_data = badge_info.get(const.DATA_BADGE_AWARDS, {})
+        award_items = award_data.get(const.DATA_BADGE_AWARDS_AWARD_ITEMS, [])
+        to_award, to_penalize = self.process_award_items(
+            award_items,
+            self.coordinator.rewards_data,
+            self.coordinator.bonuses_data,
+            self.coordinator.penalties_data,
+        )
+
+        # Emit the Award Manifest
+        self.emit(
+            const.SIGNAL_SUFFIX_BADGE_EARNED,
+            user_id=assignee_id,
+            badge_id=badge_id,
+            badge_name=badge_info.get(const.DATA_BADGE_NAME, "Unknown"),
+            points=award_data.get(
+                const.DATA_BADGE_AWARDS_AWARD_POINTS, const.DEFAULT_ZERO
+            ),
+            multiplier=award_data.get(const.DATA_BADGE_AWARDS_POINT_MULTIPLIER),
+            reward_ids=to_award.get(const.AWARD_ITEMS_KEY_REWARDS, []),
+            bonus_ids=to_award.get(const.AWARD_ITEMS_KEY_BONUSES, []),
+            penalty_ids=to_penalize,
+        )
+
+    def sync_badge_progress_for_assignee(self, assignee_id: str) -> None:
+        """Sync badge progress for a specific assignee.
+
+        Initializes badge progress for new badges and updates existing progress
+        for configuration changes. Handles all non-cumulative badge types.
+
+        This method does NOT persist - caller is responsible for persistence.
+
+        Args:
+            assignee_id: The assignee's internal UUID
+        """
+
+        def _resolve_initial_cycle_end(
+            recurring_frequency: str,
+            reset_schedule: dict[str, Any],
+            today_local_iso: str,
+        ) -> str:
+            """Resolve initial cycle end date for non-cumulative recurring badges."""
+            is_daily = recurring_frequency == const.FREQUENCY_DAILY
+            is_custom_1_day = (
+                recurring_frequency == const.FREQUENCY_CUSTOM
+                and reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL)
+                == 1
+                and reset_schedule.get(
+                    const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL_UNIT
+                )
+                == const.TIME_UNIT_DAYS
+            )
+
+            if is_daily or is_custom_1_day:
+                return today_local_iso
+
+            if recurring_frequency == const.FREQUENCY_CUSTOM:
+                custom_interval = reset_schedule.get(
+                    const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL
+                )
+                custom_interval_unit = reset_schedule.get(
+                    const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL_UNIT
+                )
+                if custom_interval and custom_interval_unit:
+                    custom_end = dt_add_interval(
+                        today_local_iso,
+                        interval_unit=custom_interval_unit,
+                        delta=int(custom_interval),
+                        require_future=True,
+                        return_type=const.HELPER_RETURN_ISO_DATE,
+                    )
+                    if custom_end:
+                        return str(custom_end)
+
+                fallback_end = dt_add_interval(
+                    today_local_iso,
+                    interval_unit=const.TIME_UNIT_WEEKS,
+                    delta=1,
+                    require_future=True,
+                    return_type=const.HELPER_RETURN_ISO_DATE,
+                )
+                return str(fallback_end) if fallback_end else today_local_iso
+
+            if recurring_frequency in RecurrenceEngine.PERIOD_END_FREQUENCIES:
+                period_end = self._resolve_period_end_cycle_end(
+                    recurring_frequency, today_local_iso
+                )
+                if period_end:
+                    return period_end
+
+            next_end = dt_next_schedule(
+                today_local_iso,
+                interval_type=recurring_frequency,
+                require_future=True,
+                return_type=const.HELPER_RETURN_ISO_DATE,
+            )
+            return str(next_end) if next_end else today_local_iso
+
+        def _is_single_day_cycle_mode(
+            badge_type: str | None,
+            recurring_frequency: str,
+            reset_schedule: dict[str, Any],
+        ) -> bool:
+            """Return True when progress window should be a single local date."""
+            is_special_occasion = (
+                badge_type in const.INCLUDE_SPECIAL_OCCASION_BADGE_TYPES
+            )
+            is_custom_1_day = (
+                recurring_frequency == const.FREQUENCY_CUSTOM
+                and reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL)
+                == 1
+                and reset_schedule.get(
+                    const.DATA_BADGE_RESET_SCHEDULE_CUSTOM_INTERVAL_UNIT
+                )
+                == const.TIME_UNIT_DAYS
+            )
+            return (
+                recurring_frequency == const.FREQUENCY_DAILY
+                or is_custom_1_day
+                or is_special_occasion
+            )
+
+        def _resolve_single_day_window_date(
+            badge_data: BadgeData,
+            candidate_iso: str,
+            recurring_frequency: str,
+            today_local_iso: str,
+        ) -> str:
+            """Resolve single-day window anchor date at-or-after today."""
+            current_iso = candidate_iso or today_local_iso
+            if not current_iso:
+                return today_local_iso
+
+            while current_iso < today_local_iso:
+                next_iso = self._get_next_non_cumulative_cycle_end(
+                    badge_data,
+                    current_iso,
+                )
+                if not next_iso or next_iso <= current_iso:
+                    break
+                current_iso = next_iso
+
+            if (
+                current_iso < today_local_iso
+                and recurring_frequency == const.FREQUENCY_DAILY
+            ):
+                return today_local_iso
+            return current_iso
+
+        def _sync_badge_reset_schedule_window(badge_data: BadgeData) -> None:
+            """Normalize canonical badge reset schedule for active non-cumulative windows."""
+            reset_schedule_raw = badge_data.get(const.DATA_BADGE_RESET_SCHEDULE)
+            if not isinstance(reset_schedule_raw, dict):
+                reset_schedule_raw = {}
+                badge_data[const.DATA_BADGE_RESET_SCHEDULE] = reset_schedule_raw
+            reset_schedule = cast("dict[str, Any]", reset_schedule_raw)
+            recurring_frequency = str(
+                reset_schedule.get(
+                    const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY,
+                    const.FREQUENCY_NONE,
+                )
+            )
+            reset_schedule[const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY] = (
+                recurring_frequency
+            )
+
+            start_date_raw = reset_schedule.get(
+                const.DATA_BADGE_RESET_SCHEDULE_START_DATE
+            )
+            end_date_raw = reset_schedule.get(const.DATA_BADGE_RESET_SCHEDULE_END_DATE)
+            start_date = dt_parse_date(
+                start_date_raw if isinstance(start_date_raw, str) else None
+            )
+            end_date = dt_parse_date(
+                end_date_raw if isinstance(end_date_raw, str) else None
+            )
+            start_date_iso = start_date.isoformat() if start_date else ""
+            end_date_iso = end_date.isoformat() if end_date else ""
+
+            if recurring_frequency == const.FREQUENCY_NONE:
+                reset_schedule[const.DATA_BADGE_RESET_SCHEDULE_START_DATE] = (
+                    start_date_iso or None
+                )
+                reset_schedule[const.DATA_BADGE_RESET_SCHEDULE_END_DATE] = (
+                    end_date_iso or None
+                )
+                return
+
+            today_local_iso = dt_today_iso()
+            resolved_end = end_date_iso or _resolve_initial_cycle_end(
+                recurring_frequency,
+                reset_schedule,
+                today_local_iso,
+            )
+            resolved_start = start_date_iso or today_local_iso
+
+            if _is_single_day_cycle_mode(
+                badge_data.get(const.DATA_BADGE_TYPE),
+                recurring_frequency,
+                reset_schedule,
+            ):
+                candidate_date = resolved_start or resolved_end
+                window_date = _resolve_single_day_window_date(
+                    badge_data,
+                    candidate_date,
+                    recurring_frequency,
+                    today_local_iso,
+                )
+                resolved_start = window_date
+                resolved_end = window_date
+
+            reset_schedule[const.DATA_BADGE_RESET_SCHEDULE_START_DATE] = resolved_start
+            reset_schedule[const.DATA_BADGE_RESET_SCHEDULE_END_DATE] = resolved_end
+
+        assignee_info: UserData | None = self.coordinator.assignees_data.get(
+            assignee_id
+        )
+        if not assignee_info:
+            return
+
+        # Phase 4: Clean up badge_progress for badges no longer assigned to this assignee
+        if const.DATA_USER_BADGE_PROGRESS in assignee_info:
+            badges_to_remove = []
+            for progress_badge_id in assignee_info[const.DATA_USER_BADGE_PROGRESS]:
+                badge_info: BadgeData | None = self.coordinator.badges_data.get(
+                    progress_badge_id
+                )
+                # Remove if badge deleted OR assignee not in assigned_to list
+                if not badge_info or assignee_id not in badge_info.get(
+                    const.DATA_BADGE_ASSIGNED_USER_IDS, []
+                ):
+                    badges_to_remove.append(progress_badge_id)
+
+            for badge_id in badges_to_remove:
+                del assignee_info[const.DATA_USER_BADGE_PROGRESS][badge_id]
+                const.LOGGER.debug(
+                    "DEBUG: Removed badge_progress for badge '%s' from assignee '%s' "
+                    "(unassigned or deleted)",
+                    badge_id,
+                    assignee_info.get(const.DATA_USER_NAME, assignee_id),
+                )
+
+        for badge_id, badge_info in self.coordinator.badges_data.items():
+            # Feature Change v4.2: Badges now require explicit assignment.
+            # Empty assigned_to means badge is not assigned to any assignee.
+            assigned_to_list = badge_info.get(const.DATA_BADGE_ASSIGNED_USER_IDS, [])
+            is_assigned_to = assignee_id in assigned_to_list
+            if not is_assigned_to:
+                continue
+
+            # Skip cumulative badges (handled separately)
+            if badge_info.get(const.DATA_BADGE_TYPE) == const.BADGE_TYPE_CUMULATIVE:
+                continue
+
+            # Initialize progress structure if it doesn't exist
+            if const.DATA_USER_BADGE_PROGRESS not in assignee_info:
+                assignee_info[const.DATA_USER_BADGE_PROGRESS] = {}
+
+            badge_type = badge_info.get(const.DATA_BADGE_TYPE)
+
+            # --- Set flags based on badge type ---
+            has_target = badge_type in const.INCLUDE_TARGET_BADGE_TYPES
+            has_reset_schedule = badge_type in const.INCLUDE_RESET_SCHEDULE_BADGE_TYPES
+
+            # ===============================================================
+            # SECTION 1: NEW BADGE SETUP - Create initial progress structure
+            # ===============================================================
+            badge_progress_dict = assignee_info.get(const.DATA_USER_BADGE_PROGRESS, {})
+            if badge_id not in badge_progress_dict:
+                # --- Common fields ---
+                progress: dict[str, Any] = {
+                    const.DATA_USER_BADGE_PROGRESS_NAME: badge_info.get(
+                        const.DATA_BADGE_NAME
+                    ),
+                    const.DATA_USER_BADGE_PROGRESS_STATUS: const.BADGE_STATE_IN_PROGRESS,
+                }
+
+                # --- Target fields ---
+                if has_target:
+                    # Initialize all possible progress fields to their defaults
+                    progress.setdefault(
+                        const.DATA_USER_BADGE_PROGRESS_POINTS_CYCLE_COUNT, 0.0
+                    )
+                    progress.setdefault(
+                        const.DATA_USER_BADGE_PROGRESS_CHORES_CYCLE_COUNT, 0
+                    )
+                    progress.setdefault(
+                        const.DATA_USER_BADGE_PROGRESS_DAYS_CYCLE_COUNT, 0
+                    )
+
+                # --- Reset Schedule fields ---
+                if has_reset_schedule:
+                    _sync_badge_reset_schedule_window(badge_info)
+
+                # Store the progress data
+                assignee_info[const.DATA_USER_BADGE_PROGRESS][badge_id] = cast(  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                    "AssigneeBadgeProgress", progress
+                )
+
+            # ===============================================================
+            # SECTION 2: BADGE SYNC - Update existing badge progress data
+            # ===============================================================
+            else:
+                # Remove badge progress if badge no longer available or not assigned
+                if badge_id not in self.coordinator.badges_data or (
+                    badge_info.get(const.DATA_BADGE_ASSIGNED_USER_IDS, [])
+                    and assignee_id
+                    not in badge_info.get(const.DATA_BADGE_ASSIGNED_USER_IDS, [])
+                ):
+                    if badge_id in badge_progress_dict:
+                        del badge_progress_dict[badge_id]
+                        const.LOGGER.info(
+                            "INFO: Badge Maintenance - Removed badge progress for "
+                            "badge '%s' from assignee '%s' (badge deleted or unassigned).",
+                            badge_id,
+                            assignee_info.get(const.DATA_USER_NAME, assignee_id),
+                        )
+                    continue
+
+                # The badge already exists in progress data - sync configuration fields
+                progress_sync: dict[str, Any] = cast(
+                    "dict[str, Any]", badge_progress_dict[badge_id]
+                )
+
+                # --- Common fields ---
+                progress_sync[const.DATA_USER_BADGE_PROGRESS_NAME] = badge_info.get(
+                    const.DATA_BADGE_NAME, "Unknown Badge"
+                )
+
+                # --- Reset Schedule fields ---
+                if has_reset_schedule:
+                    _sync_badge_reset_schedule_window(badge_info)
+
+    # =========================================================================
+    # CRUD METHODS (Manager-owned create/update/delete)
+    # =========================================================================
+    # These methods own the write operations for badge entities.
+    # Called by options_flow.py and services.py - they must NOT write directly.
+
+    def create_badge(
+        self,
+        user_input: dict[str, Any],
+        internal_id: str | None = None,
+        badge_type: str | None = None,
+        immediate_persist: bool = False,
+    ) -> dict[str, Any]:
+        """Create a new badge in storage.
+
+        Args:
+            user_input: Badge data with DATA_* keys.
+            internal_id: Optional pre-generated UUID (for form resubmissions).
+            badge_type: Optional badge type override.
+            immediate_persist: If True, persist immediately (use for config flow operations).
+
+        Returns:
+            Complete BadgeData dict ready for use.
+
+        Emits:
+            SIGNAL_SUFFIX_BADGE_CREATED with badge_id and badge_name.
+        """
+        # Build complete badge data structure
+        if badge_type:
+            badge_data = dict(db.build_badge(user_input, badge_type=badge_type))
+        else:
+            badge_data = dict(db.build_badge(user_input))
+
+        # Override internal_id if provided (for form resubmission consistency)
+        if internal_id:
+            badge_data[const.DATA_BADGE_INTERNAL_ID] = internal_id
+
+        final_id = str(badge_data[const.DATA_BADGE_INTERNAL_ID])
+        badge_name = str(badge_data.get(const.DATA_BADGE_NAME, ""))
+
+        # Store in coordinator data
+        self.coordinator._data[const.DATA_BADGES][final_id] = badge_data
+
+        # Sync badge progress for all assignees (creates progress sensors)
+        for assignee_id in self.coordinator.assignees_data:
+            self.sync_badge_progress_for_assignee(assignee_id)
+        # Recalculate badges to trigger initial evaluation
+        self.recalculate_all_badges()
+
+        self.coordinator._persist(immediate=immediate_persist)
+        self.coordinator.async_update_listeners()
+
+        # Emit lifecycle event
+        self.emit(
+            const.SIGNAL_SUFFIX_BADGE_CREATED,
+            badge_id=final_id,
+            badge_name=badge_name,
+        )
+
+        const.LOGGER.info(
+            "Created badge '%s' (ID: %s)",
+            badge_name,
+            final_id,
+        )
+
+        return badge_data
+
+    def update_badge(
+        self,
+        badge_id: str,
+        updates: dict[str, Any],
+        badge_type: str | None = None,
+        immediate_persist: bool = False,
+    ) -> dict[str, Any]:
+        """Update an existing badge in storage.
+
+        Args:
+            badge_id: Internal UUID of the badge to update.
+            updates: Partial badge data with DATA_* keys to merge.
+            badge_type: Optional badge type override.
+            immediate_persist: If True, persist immediately (use for config flow operations).
+
+        Returns:
+            Updated BadgeData dict.
+
+        Raises:
+            HomeAssistantError: If badge not found.
+
+        Emits:
+            SIGNAL_SUFFIX_BADGE_UPDATED with badge_id and badge_name.
+        """
+        badges_data = self.coordinator._data.get(const.DATA_BADGES, {})
+        if badge_id not in badges_data:
+            raise HomeAssistantError(
+                translation_domain=const.DOMAIN,
+                translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                translation_placeholders={
+                    "entity_type": const.LABEL_BADGE,
+                    "name": badge_id,
+                },
+            )
+
+        existing = badges_data[badge_id]
+        # Build updated badge (merge existing with updates)
+        if badge_type:
+            updated_badge = dict(
+                db.build_badge(updates, existing=existing, badge_type=badge_type)
+            )
+        else:
+            updated_badge = dict(db.build_badge(updates, existing=existing))
+
+        # Store updated badge
+        self.coordinator._data[const.DATA_BADGES][badge_id] = updated_badge
+
+        # Sync badge progress for all assignees after badge update
+        for assignee_id in self.coordinator.assignees_data:
+            self.sync_badge_progress_for_assignee(assignee_id)
+        self.recalculate_all_badges()
+
+        self.coordinator._persist(immediate=immediate_persist)
+        self.coordinator.async_update_listeners()
+
+        badge_name = str(updated_badge.get(const.DATA_BADGE_NAME, ""))
+
+        # Emit lifecycle event
+        self.emit(
+            const.SIGNAL_SUFFIX_BADGE_UPDATED,
+            badge_id=badge_id,
+            badge_name=badge_name,
+        )
+
+        const.LOGGER.debug(
+            "Updated badge '%s' (ID: %s)",
+            badge_name,
+            badge_id,
+        )
+
+        return updated_badge
+
+    def delete_badge(self, badge_id: str, *, immediate_persist: bool = False) -> None:
+        """Delete a badge from storage and cleanup references.
+
+        Args:
+            badge_id: Internal UUID of the badge to delete.
+            immediate_persist: If True, persist immediately (use for config flow operations).
+
+        Raises:
+            HomeAssistantError: If badge not found.
+
+        Emits:
+            SIGNAL_SUFFIX_BADGE_DELETED with badge_id and badge_name.
+        """
+        badges_data = self.coordinator._data.get(const.DATA_BADGES, {})
+        if badge_id not in badges_data:
+            raise HomeAssistantError(
+                translation_domain=const.DOMAIN,
+                translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                translation_placeholders={
+                    "entity_type": const.LABEL_BADGE,
+                    "name": badge_id,
+                },
+            )
+
+        badge_name = badges_data[badge_id].get(const.DATA_BADGE_NAME, badge_id)
+        badge_type = badges_data[badge_id].get(const.DATA_BADGE_TYPE)
+        earned_by = list(badges_data[badge_id].get(const.DATA_BADGE_EARNED_BY, []))
+
+        # Delete from storage
+        del self.coordinator._data[const.DATA_BADGES][badge_id]
+
+        # Remove awarded badges from assignees (this manager has the method)
+        self.remove_awarded_badges_by_id(badge_id=badge_id)
+
+        # Recalculate multiplier for assignees that had this badge earned,
+        # since remove_awarded_badges_by_id can no longer find the badge data.
+        # Must happen after deletion from badges_data so get_cumulative_badge_levels
+        # does not match the deleted badge via threshold check.
+        if badge_type == const.BADGE_TYPE_CUMULATIVE:
+            for assignee_id in earned_by:
+                self.update_point_multiplier_for_assignee(assignee_id)
+
+        # Sync badge progress for all assignees after badge deletion
+        # Phase 3A: cumulative progress computed on-read (no storage write needed)
+        for assignee_id in self.coordinator.assignees_data:
+            self.sync_badge_progress_for_assignee(assignee_id)
+
+        # Remove badge-related entities from Home Assistant registry
+        remove_entities_by_item_id(
+            self.hass,
+            self.coordinator.config_entry.entry_id,
+            badge_id,
+        )
+
+        self.coordinator._persist(immediate=immediate_persist)
+        self.coordinator.async_update_listeners()
+
+        # Emit lifecycle event
+        self.emit(
+            const.SIGNAL_SUFFIX_BADGE_DELETED,
+            badge_id=badge_id,
+            badge_name=badge_name,
+        )
+
+        const.LOGGER.info(
+            "Deleted badge '%s' (ID: %s)",
+            badge_name,
+            badge_id,
+        )
+
+    # =========================================================================
+    # ACHIEVEMENT CRUD
+    # =========================================================================
+
+    def create_achievement(
+        self,
+        user_input: dict[str, Any],
+        internal_id: str | None = None,
+        *,
+        immediate_persist: bool = False,
+    ) -> str:
+        """Create a new achievement in storage.
+
+        Args:
+            user_input: Achievement data with DATA_* keys.
+            internal_id: Optional pre-generated UUID.
+            immediate_persist: If True, persist immediately (use for config flow operations).
+
+        Returns:
+            The internal_id of the created achievement.
+
+        Emits:
+            SIGNAL_SUFFIX_ACHIEVEMENT_CREATED with achievement_id and achievement_name.
+        """
+        # Build complete achievement data structure
+        achievement_data = dict(db.build_achievement(user_input))
+
+        # Override internal_id if provided
+        if internal_id:
+            achievement_data[const.DATA_ACHIEVEMENT_INTERNAL_ID] = internal_id
+
+        final_id = str(achievement_data[const.DATA_ACHIEVEMENT_INTERNAL_ID])
+        achievement_name = str(achievement_data.get(const.DATA_ACHIEVEMENT_NAME, ""))
+
+        # Store in coordinator data
+        self.coordinator._data.setdefault(const.DATA_ACHIEVEMENTS, {})[final_id] = (
+            achievement_data
+        )
+
+        self.coordinator._persist(immediate=immediate_persist)
+        self.coordinator.async_update_listeners()
+
+        # Emit lifecycle event
+        self.emit(
+            const.SIGNAL_SUFFIX_ACHIEVEMENT_CREATED,
+            achievement_id=final_id,
+            achievement_name=achievement_name,
+        )
+
+        const.LOGGER.info(
+            "Created achievement '%s' (ID: %s)",
+            achievement_name,
+            final_id,
+        )
+
+        return final_id
+
+    def update_achievement(
+        self,
+        achievement_id: str,
+        updates: dict[str, Any],
+        immediate_persist: bool = False,
+    ) -> dict[str, Any]:
+        """Update an existing achievement in storage.
+
+        Args:
+            achievement_id: Internal UUID of the achievement to update.
+            updates: Partial achievement data with DATA_* keys to merge.
+            immediate_persist: If True, persist immediately (use for config flow operations).
+
+        Returns:
+            Updated AchievementData dict.
+
+        Raises:
+            HomeAssistantError: If achievement not found.
+
+        Emits:
+            SIGNAL_SUFFIX_ACHIEVEMENT_UPDATED with achievement_id and achievement_name.
+        """
+        achievements_data = self.coordinator._data.get(const.DATA_ACHIEVEMENTS, {})
+        if achievement_id not in achievements_data:
+            raise HomeAssistantError(
+                translation_domain=const.DOMAIN,
+                translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                translation_placeholders={
+                    "entity_type": const.LABEL_ACHIEVEMENT,
+                    "name": achievement_id,
+                },
+            )
+
+        existing = achievements_data[achievement_id]
+        # Build updated achievement (merge existing with updates)
+        updated_achievement = dict(db.build_achievement(updates, existing=existing))
+        # Preserve internal_id
+        updated_achievement[const.DATA_ACHIEVEMENT_INTERNAL_ID] = achievement_id
+
+        # Store updated achievement
+        self.coordinator._data[const.DATA_ACHIEVEMENTS][achievement_id] = (
+            updated_achievement
+        )
+
+        self.coordinator._persist(immediate=immediate_persist)
+        self.coordinator.async_update_listeners()
+
+        achievement_name = str(updated_achievement.get(const.DATA_ACHIEVEMENT_NAME, ""))
+
+        # Emit lifecycle event
+        self.emit(
+            const.SIGNAL_SUFFIX_ACHIEVEMENT_UPDATED,
+            achievement_id=achievement_id,
+            achievement_name=achievement_name,
+        )
+
+        const.LOGGER.debug(
+            "Updated achievement '%s' (ID: %s)",
+            achievement_name,
+            achievement_id,
+        )
+
+        return updated_achievement
+
+    def delete_achievement(
+        self, achievement_id: str, *, immediate_persist: bool = False
+    ) -> None:
+        """Delete an achievement from storage and cleanup references.
+
+        Args:
+            achievement_id: Internal UUID of the achievement to delete.
+            immediate_persist: If True, persist immediately (use for config flow operations).
+
+        Raises:
+            HomeAssistantError: If achievement not found.
+
+        Emits:
+            SIGNAL_SUFFIX_ACHIEVEMENT_DELETED with achievement_id and achievement_name.
+        """
+        achievements_data = self.coordinator._data.get(const.DATA_ACHIEVEMENTS, {})
+        if achievement_id not in achievements_data:
+            raise HomeAssistantError(
+                translation_domain=const.DOMAIN,
+                translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                translation_placeholders={
+                    "entity_type": const.LABEL_ACHIEVEMENT,
+                    "name": achievement_id,
+                },
+            )
+
+        achievement_name = achievements_data[achievement_id].get(
+            const.DATA_ACHIEVEMENT_NAME, achievement_id
+        )
+
+        # Delete from storage
+        del self.coordinator._data[const.DATA_ACHIEVEMENTS][achievement_id]
+
+        # Remove achievement-related entities from Home Assistant registry
+        remove_entities_by_item_id(
+            self.hass,
+            self.coordinator.config_entry.entry_id,
+            achievement_id,
+        )
+
+        self.coordinator._persist(immediate=immediate_persist)
+        self.coordinator.async_update_listeners()
+
+        # Emit lifecycle event
+        self.emit(
+            const.SIGNAL_SUFFIX_ACHIEVEMENT_DELETED,
+            achievement_id=achievement_id,
+            achievement_name=achievement_name,
+        )
+
+        const.LOGGER.info(
+            "Deleted achievement '%s' (ID: %s)",
+            achievement_name,
+            achievement_id,
+        )
+
+    # =========================================================================
+    # CHALLENGE CRUD
+    # =========================================================================
+
+    def create_challenge(
+        self,
+        user_input: dict[str, Any],
+        internal_id: str | None = None,
+        *,
+        immediate_persist: bool = False,
+    ) -> str:
+        """Create a new challenge in storage.
+
+        Args:
+            user_input: Challenge data with DATA_* keys.
+            internal_id: Optional pre-generated UUID.
+            immediate_persist: If True, persist immediately (use for config flow operations).
+            internal_id: Optional pre-generated UUID.
+
+        Returns:
+            The internal_id of the created challenge.
+
+        Emits:
+            SIGNAL_SUFFIX_CHALLENGE_CREATED with challenge_id and challenge_name.
+        """
+        # Build complete challenge data structure
+        challenge_data = dict(db.build_challenge(user_input))
+
+        # Override internal_id if provided
+        if internal_id:
+            challenge_data[const.DATA_CHALLENGE_INTERNAL_ID] = internal_id
+
+        final_id = str(challenge_data[const.DATA_CHALLENGE_INTERNAL_ID])
+        challenge_name = str(challenge_data.get(const.DATA_CHALLENGE_NAME, ""))
+
+        # Store in coordinator data
+        self.coordinator._data.setdefault(const.DATA_CHALLENGES, {})[final_id] = (
+            challenge_data
+        )
+
+        self.coordinator._persist(immediate=immediate_persist)
+        self.coordinator.async_update_listeners()
+
+        # Emit lifecycle event
+        self.emit(
+            const.SIGNAL_SUFFIX_CHALLENGE_CREATED,
+            challenge_id=final_id,
+            challenge_name=challenge_name,
+        )
+
+        const.LOGGER.info(
+            "Created challenge '%s' (ID: %s)",
+            challenge_name,
+            final_id,
+        )
+
+        return final_id
+
+    def update_challenge(
+        self,
+        challenge_id: str,
+        updates: dict[str, Any],
+        immediate_persist: bool = False,
+    ) -> dict[str, Any]:
+        """Update an existing challenge in storage.
+
+        Args:
+            challenge_id: Internal UUID of the challenge to update.
+            updates: Partial challenge data with DATA_* keys to merge.
+            immediate_persist: If True, persist immediately (use for config flow operations).
+
+        Returns:
+            Updated ChallengeData dict.
+
+        Raises:
+            HomeAssistantError: If challenge not found.
+
+        Emits:
+            SIGNAL_SUFFIX_CHALLENGE_UPDATED with challenge_id and challenge_name.
+        """
+        challenges_data = self.coordinator._data.get(const.DATA_CHALLENGES, {})
+        if challenge_id not in challenges_data:
+            raise HomeAssistantError(
+                translation_domain=const.DOMAIN,
+                translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                translation_placeholders={
+                    "entity_type": const.LABEL_CHALLENGE,
+                    "name": challenge_id,
+                },
+            )
+
+        existing = challenges_data[challenge_id]
+        # Build updated challenge (merge existing with updates)
+        updated_challenge = dict(db.build_challenge(updates, existing=existing))
+        # Preserve internal_id
+        updated_challenge[const.DATA_CHALLENGE_INTERNAL_ID] = challenge_id
+
+        # Store updated challenge
+        self.coordinator._data[const.DATA_CHALLENGES][challenge_id] = updated_challenge
+
+        self.coordinator._persist(immediate=immediate_persist)
+        self.coordinator.async_update_listeners()
+
+        challenge_name = str(updated_challenge.get(const.DATA_CHALLENGE_NAME, ""))
+
+        # Emit lifecycle event
+        self.emit(
+            const.SIGNAL_SUFFIX_CHALLENGE_UPDATED,
+            challenge_id=challenge_id,
+            challenge_name=challenge_name,
+        )
+
+        const.LOGGER.debug(
+            "Updated challenge '%s' (ID: %s)",
+            challenge_name,
+            challenge_id,
+        )
+
+        return updated_challenge
+
+    def delete_challenge(
+        self, challenge_id: str, *, immediate_persist: bool = False
+    ) -> None:
+        """Delete a challenge from storage and cleanup references.
+
+        Args:
+            challenge_id: Internal UUID of the challenge to delete.
+            immediate_persist: If True, persist immediately (use for config flow operations).
+
+        Raises:
+            HomeAssistantError: If challenge not found.
+
+        Emits:
+            SIGNAL_SUFFIX_CHALLENGE_DELETED with challenge_id and challenge_name.
+        """
+        challenges_data = self.coordinator._data.get(const.DATA_CHALLENGES, {})
+        if challenge_id not in challenges_data:
+            raise HomeAssistantError(
+                translation_domain=const.DOMAIN,
+                translation_key=const.TRANS_KEY_ERROR_NOT_FOUND,
+                translation_placeholders={
+                    "entity_type": const.LABEL_CHALLENGE,
+                    "name": challenge_id,
+                },
+            )
+
+        challenge_name = challenges_data[challenge_id].get(
+            const.DATA_CHALLENGE_NAME, challenge_id
+        )
+
+        # Delete from storage
+        del self.coordinator._data[const.DATA_CHALLENGES][challenge_id]
+
+        # Remove challenge-related entities from Home Assistant registry
+        remove_entities_by_item_id(
+            self.hass,
+            self.coordinator.config_entry.entry_id,
+            challenge_id,
+        )
+
+        self.coordinator._persist(immediate=immediate_persist)
+        self.coordinator.async_update_listeners()
+
+        # Emit lifecycle event
+        self.emit(
+            const.SIGNAL_SUFFIX_CHALLENGE_DELETED,
+            challenge_id=challenge_id,
+            challenge_name=challenge_name,
+        )
+
+        const.LOGGER.info(
+            "Deleted challenge '%s' (ID: %s)",
+            challenge_name,
+            challenge_id,
+        )
+
+    # =========================================================================
+    # DATA RESET - Transactional Data Reset for Gamification Domain
+    # =========================================================================
+
+    async def data_reset_badges(
+        self,
+        scope: str,
+        assignee_id: str | None = None,
+        item_id: str | None = None,
+    ) -> None:
+        """Reset runtime data for badges domain.
+
+        Clears per-assignee badge state including badge_data tracking and
+        badge-related lists while preserving badge definitions.
+
+        Args:
+            scope: Reset scope (global, assignee, item_type, item)
+            assignee_id: Target assignee ID for assignee scope (optional)
+            item_id: Target badge ID for item scope (optional)
+
+        Emits:
+            SIGNAL_SUFFIX_BADGE_DATA_RESET_COMPLETE with scope, assignee_id, item_id
+        """
+        const.LOGGER.info(
+            "Data reset: badges domain - scope=%s, assignee_id=%s, item_id=%s",
+            scope,
+            assignee_id,
+            item_id,
+        )
+
+        assignees_data = self.coordinator.users_data
+
+        # Determine which assignees to process
+        if assignee_id:
+            assignee_ids = [assignee_id] if assignee_id in assignees_data else []
+        else:
+            assignee_ids = list(assignees_data.keys())
+
+        for loop_assignee_id in assignee_ids:
+            assignee_info = assignees_data.get(loop_assignee_id)
+            if not assignee_info:
+                continue
+
+            assignee_info_dict = cast("dict[str, Any]", assignee_info)
+
+            # Reset badge-related fields from _BADGE_KID_RUNTIME_FIELDS
+            for field in db._BADGE_USER_RUNTIME_FIELDS:
+                if field not in assignee_info_dict:
+                    continue
+                field_data = assignee_info_dict[field]
+                if item_id and isinstance(field_data, dict):
+                    # Item scope - only clear specific badge
+                    field_data.pop(item_id, None)
+                elif isinstance(field_data, (dict, list)):
+                    field_data.clear()
+
+        # Persist → Emit (per DEVELOPMENT_STANDARDS.md § 5.3)
+        self.coordinator._persist_and_update()
+
+        # Recalculate multiplier for affected assignees after clearing badge data
+        # With cumulative badge progress cleared, this will emit signal with 1.0
+        # (same pattern as demote_cumulative_badge)
+        for loop_assignee_id in assignee_ids:
+            self.update_point_multiplier_for_assignee(loop_assignee_id)
+
+        # Emit completion signal
+        self.emit(
+            const.SIGNAL_SUFFIX_BADGE_DATA_RESET_COMPLETE,
+            scope=scope,
+            user_id=assignee_id,
+            item_id=item_id,
+        )
+
+        const.LOGGER.info(
+            "Data reset: badges domain complete - %d assignees affected",
+            len(assignee_ids),
+        )
+
+    async def data_reset_achievements(
+        self,
+        scope: str,
+        assignee_id: str | None = None,
+        item_id: str | None = None,
+    ) -> None:
+        """Reset runtime data for achievements domain.
+
+        Clears per-assignee achievement progress stored in the achievement's
+        progress dict while preserving achievement definitions.
+
+        Args:
+            scope: Reset scope (global, assignee, item_type, item)
+            assignee_id: Target assignee ID for assignee scope (optional)
+            item_id: Target achievement ID for item scope (optional)
+
+        Emits:
+            SIGNAL_SUFFIX_ACHIEVEMENT_DATA_RESET_COMPLETE with scope, assignee_id, item_id
+        """
+        const.LOGGER.info(
+            "Data reset: achievements domain - scope=%s, assignee_id=%s, item_id=%s",
+            scope,
+            assignee_id,
+            item_id,
+        )
+
+        achievements_data = self.coordinator._data.get(const.DATA_ACHIEVEMENTS, {})
+        assignees_data = self.coordinator.users_data
+
+        # Determine which achievements to process
+        if item_id:
+            achievement_ids = [item_id] if item_id in achievements_data else []
+        else:
+            achievement_ids = list(achievements_data.keys())
+
+        # Validate assignee_id if provided
+        if assignee_id and assignee_id not in assignees_data:
+            const.LOGGER.warning(
+                "Data reset: achievements - assignee_id '%s' not found",
+                assignee_id,
+            )
+            return
+
+        affected_count = 0
+        for achievement_id in achievement_ids:
+            achievement_info = achievements_data.get(achievement_id)
+            if not achievement_info:
+                continue
+
+            progress = achievement_info.get(const.DATA_ACHIEVEMENT_PROGRESS, {})
+            if assignee_id:
+                # Assignee scope - only clear this assignee's progress
+                if assignee_id in progress:
+                    del progress[assignee_id]
+                    affected_count += 1
+            else:
+                # Global/item_type/item scope - clear all progress
+                affected_count += len(progress)
+                progress.clear()
+
+        # Persist → Emit (per DEVELOPMENT_STANDARDS.md § 5.3)
+        self.coordinator._persist_and_update()
+
+        # Emit completion signal
+        self.emit(
+            const.SIGNAL_SUFFIX_ACHIEVEMENT_DATA_RESET_COMPLETE,
+            scope=scope,
+            user_id=assignee_id,
+            item_id=item_id,
+        )
+
+        const.LOGGER.info(
+            "Data reset: achievements domain complete - %d progress entries cleared",
+            affected_count,
+        )
+
+    async def data_reset_challenges(
+        self,
+        scope: str,
+        assignee_id: str | None = None,
+        item_id: str | None = None,
+    ) -> None:
+        """Reset runtime data for challenges domain.
+
+        Clears challenge progress while preserving challenge definitions.
+        Progress is stored in challenge[progress][assignee_id].
+
+        Args:
+            scope: Reset scope (global, assignee, item_type, item)
+            assignee_id: Target assignee ID for assignee scope (optional)
+            item_id: Target challenge ID for item scope (optional)
+
+        Emits:
+            SIGNAL_SUFFIX_CHALLENGE_DATA_RESET_COMPLETE with scope, assignee_id, item_id
+        """
+        const.LOGGER.info(
+            "Data reset: challenges domain - scope=%s, assignee_id=%s, item_id=%s",
+            scope,
+            assignee_id,
+            item_id,
+        )
+
+        challenges_data = self.coordinator._data.get(const.DATA_CHALLENGES, {})
+
+        # Determine which challenges to process
+        if item_id:
+            challenge_ids = [item_id] if item_id in challenges_data else []
+        else:
+            challenge_ids = list(challenges_data.keys())
+
+        affected_count = 0
+        # Reset challenge progress
+        for challenge_id in challenge_ids:
+            challenge_info = challenges_data.get(challenge_id)
+            if not challenge_info:
+                continue
+
+            progress = challenge_info.get(const.DATA_CHALLENGE_PROGRESS, {})
+            if assignee_id:
+                # Assignee scope - only clear this assignee's progress
+                if assignee_id in progress:
+                    del progress[assignee_id]
+                    affected_count += 1
+            else:
+                # Global/item_type/item scope - reset all progress
+                affected_count += len(progress)
+                progress.clear()
+
+        # Persist → Emit (per DEVELOPMENT_STANDARDS.md § 5.3)
+        self.coordinator._persist_and_update()
+
+        # Emit completion signal
+        self.emit(
+            const.SIGNAL_SUFFIX_CHALLENGE_DATA_RESET_COMPLETE,
+            scope=scope,
+            user_id=assignee_id,
+            item_id=item_id,
+        )
+
+        const.LOGGER.info(
+            "Data reset: challenges domain complete - %d progress entries cleared",
+            affected_count,
+        )

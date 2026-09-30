@@ -1,0 +1,167 @@
+{
+  "_comment_assignee_section": "════════════════════════════════════════════════════════════════════════════════════════",
+  "_comment_assignee_desc": "TEKIJÄN ILMOITUKSET: Pelillinen, toisen persoonan, kannustava sävy emojeilla. EI 'ChoreOps:'-etuliitettä.",
+  "_comment_assignee_footer": "════════════════════════════════════════════════════════════════════════════════════════",
+  "chore_approved_assignee": {
+    "title": "🎉 Kotityöt hyväksytty!",
+    "message": "{chore_name} hyväksytty! Ansaitsit {points} {points_label}"
+  },
+  "chore_disapproved_assignee": {
+    "title": "↩️ Kotityö palautettu",
+    "message": "{chore_name} vaatii lisää työtä."
+  },
+  "chore_overdue_assignee": {
+    "title": "⏰ Myöhässä oleva kotityö",
+    "message": "{chore_name} on myöhässä! Suorita se nyt ansaitaksesi {points} {points_label}"
+  },
+  "chore_overdue_steal_available": {
+    "title": "⚡ Kotiapuhälytys",
+    "message": "{chore_name} on myöhässä ja varastettavissa! Suorita se ensin ansaitaksesi {points} {points_label}"
+  },
+  "chore_missed_assignee": {
+    "title": "😔 Työtehtävä vanhentunut",
+    "message": "{chore_name} vanheni ilman valmistumista."
+  },
+  "chore_due_reminder_assignee": {
+    "title": "⏰ Kotitöiden muistutus",
+    "message": "{chore_name} erääntyy {minutes} minuutin kuluttua! Arvo {points} {points_label}"
+  },
+  "chore_due_window_assignee": {
+    "title": "🎯 Kotityön eräpäivä",
+    "message": "{chore_name} erääntyy! Suorita {hours} tunnin sisällä ansaitaksesi {points} {points_label}"
+  },
+  "chore_approved_assignee_no_points": {
+    "message": "{chore_name} hyväksytty!"
+  },
+  "chore_overdue_assignee_no_points": {
+    "message": "{chore_name} on myöhässä! Suorita se nyt"
+  },
+  "chore_overdue_steal_available_no_points": {
+    "message": "{chore_name} on myöhässä ja varastattavissa! Suorita se ensin"
+  },
+  "chore_standby_needed_no_points": {
+    "message": "{primary_name}:n tehtävä {chore_name} on myöhässä! Lunasta se nyt"
+  },
+  "chore_due_reminder_assignee_no_points": {
+    "message": "{chore_name} erääntyy {minutes} minuutin kuluttua!"
+  },
+  "chore_due_window_assignee_no_points": {
+    "message": "{chore_name} erääntyy! Tee se {hours} tunnin sisällä"
+  },
+  "reward_approved_assignee": {
+    "title": "🎉 Palkinto hyväksytty!",
+    "message": "{reward_name} hyväksytty!"
+  },
+  "reward_disapproved_assignee": {
+    "title": "💭 Palkintopyyntö palautettu",
+    "message": "{reward_name} ei tällä kertaa hyväksytty."
+  },
+  "badge_earned_assignee": {
+    "title": "🥇 Merkki ansaittu!",
+    "message": "Ansaitsit {badge_name} -merkin!"
+  },
+  "achievement_earned_assignee": {
+    "title": "🏆 Saavutus ansaittu!",
+    "message": "Ansaitsit {achievement_name}! Jatka samaan malliin"
+  },
+  "challenge_completed_assignee": {
+    "title": "🏁 Haaste suoritettu!",
+    "message": "Suoritit {challenge_name}! Jatka samaan malliin!"
+  },
+  "penalty_applied_assignee": {
+    "title": "⚠️ Rangaistus sovellettu",
+    "message": "{penalty_name}: {points} {points_label} vähennetty. Palataanpa raiteille!"
+  },
+  "bonus_applied_assignee": {
+    "title": "⭐ Bonus käytetty!",
+    "message": "{bonus_name}: Ansaitsit {points} bonuksen {points_label}! Hienoa työtä!"
+  },
+  "multiplier_changed_assignee": {
+    "title": "⚖️ Kerroin päivitetty",
+    "message": "{points_label} kertoimesi muuttui arvosta {old_multiplier}x arvoon {new_multiplier}x"
+  },
+  "_comment_approver_section": "════════════════════════════════════════════════════════════════════════════════════════",
+  "_comment_approver_desc": "HYVÄKSYJÄN ILMOITUKSET: Informatiiviset, kolmannen persoonan, toiminnalliset. Muoto: '{assignee_name}: Toiminta'. EI 'ChoreOps:'-etuliitettä.",
+  "_comment_approver_footer": "════════════════════════════════════════════════════════════════════════════════════════",
+  "chore_claimed_approver": {
+    "title": "✋ {assignee_name}: Kotitehtävä lunastettu",
+    "message": "{assignee_name} väitti {chore_name}"
+  },
+  "chore_reminder_approver": {
+    "title": "⏰ {assignee_name}: Hyväksyntä tarvitaan",
+    "message": "Muistutus: {chore_name} , jonka {assignee_name} on vaatimuksensa kohteena, odottaa arviotasi."
+  },
+  "chore_overdue_approver": {
+    "title": "⚠️ {assignee_name}: Kotityö myöhässä",
+    "message": "{assignee_name}:n tehtävä {chore_name} on myöhässä (eräpäivä: {due_date})"
+  },
+  "pending_chores_approver": {
+    "title": "📋 {assignee_name}: {count} Odottaa",
+    "message": "{count} tehtävää odottaa arviointia. Viimeisin: {latest_chore} (+{points} {points_label})"
+  },
+  "pending_chores_approver_no_points": {
+    "message": "{count} askareita odottaa tarkistusta. Viimeisimmät: {latest_chore}"
+  },
+  "reward_claimed_approver": {
+    "title": "🎁 {assignee_name}: Palkintopyyntö",
+    "message": "{assignee_name} pyysi {reward_name} kohteelle {points} {points_label}"
+  },
+  "reward_reminder_approver": {
+    "title": "⏰ {assignee_name}: Palkintoa odotetaan",
+    "message": "Muistutus: {reward_name} , käyttäjän {assignee_name} pyyntö odottaa hyväksyntääsi"
+  },
+  "badge_earned_approver": {
+    "title": "🥇 {assignee_name}: Ansaittu merkki",
+    "message": "{assignee_name} ansaitsi {badge_name} -merkin!"
+  },
+  "achievement_earned_approver": {
+    "title": "🏆 {assignee_name}: Saavutus",
+    "message": "{assignee_name} ansaittu {achievement_name}"
+  },
+  "challenge_completed_approver": {
+    "title": "🏁 {assignee_name}: Haaste suoritettu",
+    "message": "{assignee_name} valmis {challenge_name}"
+  },
+  "multiplier_changed_approver": {
+    "title": "⚖️ {assignee_name}: Kerroin päivitetty",
+    "message": "{assignee_name}:n {points_label} kerroin muuttui arvosta {old_multiplier}x arvoon {new_multiplier}x"
+  },
+  "_comment_system_section": "════════════════════════════════════════════════════════════════════════════════════════",
+  "_comment_system_desc": "JÄRJESTELMÄN/JÄRJESTELMÄNVALVOJAN ILMOITUKSET: Tiedonhallintatoiminnot",
+  "_comment_system_footer": "════════════════════════════════════════════════════════════════════════════════════════",
+  "data_reset": {
+    "title": "🔄 ChoreOps: Tietojen nollaus",
+    "message": "Järjestelmätiedot on nollattu"
+  },
+  "data_reset_global": {
+    "title": "🔄 ChoreOps: Täysi nollaus",
+    "message": "Kaikki järjestelmätiedot on palautettu oletusasetuksiin"
+  },
+  "data_reset_assignee": {
+    "title": "🔄 ChoreOps: Vastuuhenkilön nollaus",
+    "message": "Tietojen nollaus kohteelle {assignee_name}"
+  },
+  "data_reset_item_type": {
+    "title": "🔄 Korjaustyöt: {item_type} Palauta",
+    "message": "Kaikki {item_type} tiedot on nollattu"
+  },
+  "data_reset_item": {
+    "title": "🔄 ChoreOps: Esineen nollaus",
+    "message": "{item_type} '{item_name}' on nollattu"
+  },
+  "_comment_actions_section": "════════════════════════════════════════════════════════════════════════════════════════",
+  "_comment_actions_desc": "ILMOITUSPAINIKKEET: Pehmeämpi ja kannustavampi kieli",
+  "_comment_actions_footer": "════════════════════════════════════════════════════════════════════════════════════════",
+  "actions": {
+    "approve": "✅ Hyväksy",
+    "claim": "✋ Tein sen!",
+    "complete": "✅ Valmis",
+    "disapprove": "↩️ Hylkää",
+    "remind_30": "⏰ Muistutus 30 minuutin kuluttua",
+    "skip": "⏭️ Ohita"
+  },
+  "chore_standby_needed": {
+    "title": "🫲 Valmiustila pyydetty",
+    "message": "{primary_name}:n tehtävä {chore_name} on myöhässä! Lunasta se nyt ansaitaksesi {points} {points_label}"
+  }
+}
