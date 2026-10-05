@@ -1,0 +1,8 @@
+[
+  {
+    "daysFromHidingToDeleting": 1,
+    "daysFromStartingToCancelingUnfinishedLargeFiles": 1,
+    "daysFromUploadingToHiding": 30,
+    "fileNamePrefix": "backups/"
+  }
+]
