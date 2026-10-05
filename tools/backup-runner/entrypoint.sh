@@ -52,7 +52,7 @@ chmod 600 /run/secrets/env_vars
 # ------------------------------------------------------------------------------
 # 2. Dynamic Crontab Configuration
 # ------------------------------------------------------------------------------
-CRON_SCHEDULE="${CRON_SCHEDULE:-0 16 * * *}"
+CRON_SCHEDULE="${BACKUP_CRON_SCHEDULE:-${BACKUP_CRON:-${CRON_SCHEDULE:-0 16 * * *}}}"
 mkdir -p /etc/crontabs
 echo "${CRON_SCHEDULE} /bin/bash /app/backup-engine.sh >> /proc/1/fd/1 2>&1" > /etc/crontabs/root
 chmod 600 /etc/crontabs/root
