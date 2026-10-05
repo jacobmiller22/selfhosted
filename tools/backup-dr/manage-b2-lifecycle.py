@@ -14,6 +14,7 @@ Zero external dependencies: uses Python 3 standard library (urllib.request, json
 import argparse
 import base64
 from collections import defaultdict
+import concurrent.futures
 from datetime import datetime, timezone
 import json
 import os
@@ -435,10 +436,12 @@ def cmd_prune(args):
         print(f"    python3 {__file__} prune --execute")
         return
 
-    print(f"\n[+] Executing deletion of {len(to_delete)} versions...")
+    print(f"\n[+] Executing parallel deletion of {len(to_delete)} versions across 16 workers...")
     deleted_count = 0
     reclaimed_bytes = 0
-    for idx, (v, reason) in enumerate(to_delete, 1):
+
+    def delete_version(item):
+        v, _ = item
         del_payload = {"fileName": v["fileName"], "fileId": v["fileId"]}
         req = urllib.request.Request(
             f"{api_url}/b2api/v2/b2_delete_file_version",
@@ -447,12 +450,19 @@ def cmd_prune(args):
         )
         try:
             with urllib.request.urlopen(req) as resp:
-                deleted_count += 1
-                reclaimed_bytes += v["contentLength"]
-                if idx % 50 == 0 or idx == len(to_delete):
-                    print(f"  [{idx}/{len(to_delete)}] Deleted {deleted_count} versions ({reclaimed_bytes / (1024**2):.1f} MB reclaimed)...")
+                return True, v["contentLength"]
         except urllib.error.HTTPError as e:
-            print(f"  [-] Failed to delete {v['fileName']} ({v['fileId']}): {e.read().decode('utf-8')}", file=sys.stderr)
+            return False, 0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        futures = {executor.submit(delete_version, item): item for item in to_delete}
+        for idx, fut in enumerate(concurrent.futures.as_completed(futures), 1):
+            success, bytes_freed = fut.result()
+            if success:
+                deleted_count += 1
+                reclaimed_bytes += bytes_freed
+            if idx % 100 == 0 or idx == len(to_delete):
+                print(f"  [{idx}/{len(to_delete)}] Processed {idx} versions ({reclaimed_bytes / (1024**2):.1f} MB reclaimed)...")
 
     print(f"\n✅ Pruning complete! Deleted {deleted_count} versions, reclaimed {reclaimed_bytes / (1024**3):.3f} GB ({reclaimed_bytes / (1024**2):.1f} MB).")
 
