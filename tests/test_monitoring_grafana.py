@@ -328,16 +328,17 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
         self.assertIn("sqlite", self.data.get("tags", []))
         self.assertIn("budget", self.data.get("tags", []))
 
-    def test_all_six_sections_present(self):
+    def test_all_seven_sections_present(self):
         row_titles = [p.get("title") for p in self.data.get("panels", []) if p.get("type") == "row"]
-        self.assertEqual(len(row_titles), 6, f"Expected 6 section rows, found: {row_titles}")
+        self.assertEqual(len(row_titles), 7, f"Expected 7 section rows, found: {row_titles}")
         expected_sections = [
             "Executive Financial Health",
             "Cash Flow Dynamics",
             "Statistical Anomaly",
             "Merchant & Payee Intelligence",
             "Predictive Forecasting",
-            "Hierarchical Category Decomposition"
+            "Hierarchical Category Decomposition",
+            "Investment Portfolio & Brokerage Growth"
         ]
         for expected in expected_sections:
             self.assertTrue(
@@ -356,7 +357,7 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
 
     def test_markdown_guidance_cards_present(self):
         text_panels = [p for p in self.data.get("panels", []) if p.get("type") == "text"]
-        self.assertEqual(len(text_panels), 6, f"Expected 6 guidance markdown panels (1 per section), found {len(text_panels)}")
+        self.assertEqual(len(text_panels), 7, f"Expected 7 guidance markdown panels (1 per section), found {len(text_panels)}")
         for tp in text_panels:
             content = tp.get("options", {}).get("content", "")
             self.assertIn("How to Read", content, f"Guidance panel '{tp.get('title')}' should explain how to read the metrics")
@@ -465,6 +466,7 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
                 category TEXT,
                 description TEXT,
                 imported_description TEXT,
+                notes TEXT,
                 transferred_id TEXT,
                 tombstone INTEGER DEFAULT 0
             );

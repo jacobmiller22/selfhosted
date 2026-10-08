@@ -1982,6 +1982,470 @@ ORDER BY "Net Variance ($)" ASC
         }
     })
 
+    # -------------------------------------------------------------
+    # SECTION 7: Investment Portfolio & Brokerage Growth Intelligence
+    # -------------------------------------------------------------
+    panels.append({
+        "id": 700,
+        "title": "7. Investment Portfolio & Brokerage Growth Intelligence (Ind Brokerage 6839 [J])",
+        "type": "row",
+        "collapsed": false,
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 104}
+    })
+
+    panels.append({
+        "id": 701,
+        "title": "📖 Layman's Guide: Isolating True Market Growth from Auto-Deposits",
+        "type": "text",
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 105},
+        "options": {
+            "mode": "markdown",
+            "content": """### 💡 How to Read Investment Growth & Capital Appreciation
+
+* **Pure Market Growth (Excluding Deposits)**:
+  * When you automatically transfer cash every week into your investment account, the total account balance climbs. But that **is not market profit** — that is just your own principal cash!
+  * This suite filters out your weekly auto-deposits ($692.30/week) and isolates only the **reconciliation balance adjustments** (the market gains and dividend appreciation).
+  * **Result**: You see your *real dollar growth and pure investment return* without artificial inflation from injecting money.
+* **Moving Window Performance**:
+  * Evaluates true market gains across rolling time horizons (Trailing 30-Day, 90-Day, 6-Month, 1-Year, and Inception).
+* **Cost Basis vs. Total Value Wedge**:
+  * Visualizes the compounding spread between your **Cumulative Injected Cash (Cost Basis)** and your **Live Account Value**."""
+        }
+    })
+
+    panels.append({
+        "id": 702,
+        "title": "All-Time Pure Capital Gain ($)",
+        "description": "Plain English: Total cumulative dollar profit generated purely by stock market growth and capital gains, excluding every dollar of principal cash you deposited.\n\nFormula: SUM(Reconciliation Adjustments)\n\nThreshold: Green when positive profit.",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 109},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+SELECT
+  ROUND(SUM(CASE WHEN t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%' THEN t.amount ELSE 0 END) / 100.0, 2) AS "All-Time Capital Gain ($)"
+FROM transactions t
+JOIN accounts a ON t.acct = a.id
+WHERE a.name LIKE '%Ind Brokerage 6839%'
+  AND t.tombstone = 0
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "currencyUSD",
+                "color": {"mode": "thresholds"},
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "red", "value": None},
+                        {"color": "green", "value": 0}
+                    ]
+                }
+            }
+        },
+        "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "orientation": "auto",
+            "textMode": "auto"
+        }
+    })
+
+    panels.append({
+        "id": 703,
+        "title": "Cumulative Return on Invested Capital (ROI %)",
+        "description": "Plain English: Total percentage return on your cumulative invested capital (Cost Basis).\n\nFormula: Cumulative Capital Gain / Cumulative Cost Basis * 100%",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 109},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH stats AS (
+  SELECT
+    SUM(CASE WHEN t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%' THEN t.amount ELSE 0 END) / 100.0 AS gain,
+    SUM(CASE WHEN (t.notes IS NULL OR t.notes NOT LIKE '%Reconciliation%') AND (t.imported_description IS NULL OR t.imported_description NOT LIKE '%Reconciliation%') THEN t.amount ELSE 0 END) / 100.0 AS cost_basis
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE a.name LIKE '%Ind Brokerage 6839%'
+    AND t.tombstone = 0
+)
+SELECT
+  ROUND((gain / MAX(1.0, cost_basis)) * 100.0, 1) AS "Cumulative ROI (%)"
+FROM stats
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "percent",
+                "color": {"mode": "thresholds"},
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "red", "value": None},
+                        {"color": "yellow", "value": 0},
+                        {"color": "green", "value": 10}
+                    ]
+                }
+            }
+        },
+        "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "orientation": "auto",
+            "textMode": "auto"
+        }
+    })
+
+    panels.append({
+        "id": 704,
+        "title": "Total Principal Invested (Cost Basis)",
+        "description": "Plain English: Total cash you have transferred into the brokerage account over its lifetime (weekly auto-deposits and starting principal).\n\nFormula: SUM(Deposits & Transfers In)",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 109},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+SELECT
+  ROUND(SUM(CASE WHEN (t.notes IS NULL OR t.notes NOT LIKE '%Reconciliation%') AND (t.imported_description IS NULL OR t.imported_description NOT LIKE '%Reconciliation%') THEN t.amount ELSE 0 END) / 100.0, 2) AS "Principal Invested ($)"
+FROM transactions t
+JOIN accounts a ON t.acct = a.id
+WHERE a.name LIKE '%Ind Brokerage 6839%'
+  AND t.tombstone = 0
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "currencyUSD",
+                "color": {"mode": "palette-classic"}
+            }
+        },
+        "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "orientation": "auto",
+            "textMode": "auto"
+        }
+    })
+
+    panels.append({
+        "id": 705,
+        "title": "Live Brokerage Market Value",
+        "description": "Plain English: Total current market value of your brokerage holdings.\n\nFormula: Cost Basis + Cumulative Capital Gains",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 109},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+SELECT
+  ROUND(SUM(t.amount) / 100.0, 2) AS "Current Market Value ($)"
+FROM transactions t
+JOIN accounts a ON t.acct = a.id
+WHERE a.name LIKE '%Ind Brokerage 6839%'
+  AND t.tombstone = 0
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "currencyUSD",
+                "color": {"mode": "palette-classic"}
+            }
+        },
+        "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "orientation": "auto",
+            "textMode": "auto"
+        }
+    })
+
+    panels.append({
+        "id": 706,
+        "title": "Brokerage Pure Capital Growth Curve (Excluding Deposits)",
+        "description": "Plain English: Real investment growth curve over time, isolating pure stock market capital gains from weekly auto-deposits. Shows your exact cumulative dollar profit without artificial inflation from adding money.\n\nSeries:\n- Cumulative Market Gain ($): Cumulative investment profit trajectory over time\n- Periodic Reconciliation Gain ($): Individual market return captured at each reconciliation event.\n\nAction: Track this trajectory to measure true market compounding.",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 14, "x": 0, "y": 113},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH raw_events AS (
+  SELECT
+    t.date,
+    CAST(strftime('%s', substr(CAST(t.date AS TEXT), 1, 4) || '-' || substr(CAST(t.date AS TEXT), 5, 2) || '-' || substr(CAST(t.date AS TEXT), 7, 2)) AS INTEGER) AS time,
+    t.amount / 100.0 AS gain_step
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE a.name LIKE '%Ind Brokerage 6839%'
+    AND t.tombstone = 0
+    AND (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%')
+),
+cum_events AS (
+  SELECT
+    time,
+    gain_step,
+    ROUND(SUM(gain_step) OVER (ORDER BY date ASC, time ASC), 2) AS cum_gain
+  FROM raw_events
+)
+SELECT
+  time,
+  cum_gain AS "Cumulative Market Gain ($)",
+  gain_step AS "Periodic Reconciliation Gain ($)"
+FROM cum_events
+UNION ALL
+SELECT
+  CAST(strftime('%s', 'now') AS INTEGER) AS time,
+  (SELECT cum_gain FROM cum_events ORDER BY time DESC LIMIT 1) AS "Cumulative Market Gain ($)",
+  0.0 AS "Periodic Reconciliation Gain ($)"
+ORDER BY time ASC
+""", time_columns=["time"])
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "lineWidth": 3,
+                    "fillOpacity": 15,
+                    "pointSize": 5,
+                    "showPoints": "auto"
+                },
+                "unit": "currencyUSD"
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "Cumulative Market Gain ($)"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "custom.lineWidth", "value": 3}
+                    ]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Periodic Reconciliation Gain ($)"},
+                    "properties": [
+                        {"id": "custom.drawStyle", "value": "points"},
+                        {"id": "custom.pointSize", "value": 7},
+                        {"id": "color", "value": {"fixedColor": "yellow", "mode": "fixed"}}
+                    ]
+                }
+            ]
+        },
+        "options": {
+            "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max", "min"]},
+            "tooltip": {"mode": "multi"}
+        }
+    })
+
+    panels.append({
+        "id": 707,
+        "title": "Moving Window Market Return & Pacing Scorecard",
+        "description": "Plain English: Pure capital gains generated by the investment account across rolling time windows (Trailing 30 Days, 90 Days, 6 Months, 1 Year, and All-Time Inception), completely stripped of weekly deposit inflation.\n\nMetrics:\n- Pure Market Gain ($): Dollar growth earned in that window\n- Return on Capital (%): Gain divided by total capital deployed.",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 10, "x": 14, "y": 113},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH gains AS (
+  SELECT
+    SUM(CASE WHEN t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%' THEN t.amount ELSE 0 END) / 100.0 AS all_time,
+    SUM(CASE WHEN (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%') AND t.date >= CAST(strftime('%Y%m01', date('now', '-1 year')) AS INTEGER) THEN t.amount ELSE 0 END) / 100.0 AS t_1y,
+    SUM(CASE WHEN (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%') AND t.date >= CAST(strftime('%Y%m01', date('now', '-180 day')) AS INTEGER) THEN t.amount ELSE 0 END) / 100.0 AS t_6m,
+    SUM(CASE WHEN (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%') AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER) THEN t.amount ELSE 0 END) / 100.0 AS t_90d,
+    SUM(CASE WHEN (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%') AND t.date >= CAST(strftime('%Y%m01', date('now', '-30 day')) AS INTEGER) THEN t.amount ELSE 0 END) / 100.0 AS t_30d,
+    SUM(CASE WHEN (t.notes IS NULL OR t.notes NOT LIKE '%Reconciliation%') AND (t.imported_description IS NULL OR t.imported_description NOT LIKE '%Reconciliation%') THEN t.amount ELSE 0 END) / 100.0 AS total_deposits
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE a.name LIKE '%Ind Brokerage 6839%'
+    AND t.tombstone = 0
+)
+SELECT
+  '1. Trailing 30 Days' AS "Time Window",
+  ROUND(t_30d, 2) AS "Pure Market Gain ($)",
+  ROUND((t_30d / MAX(1.0, total_deposits)) * 100.0, 1) AS "Return on Capital (%)",
+  '🟢 Active Gain' AS "Pacing Status"
+FROM gains
+UNION ALL
+SELECT '2. Trailing 90 Days', ROUND(t_90d, 2), ROUND((t_90d / MAX(1.0, total_deposits)) * 100.0, 1), '🟢 Active Gain' FROM gains
+UNION ALL
+SELECT '3. Trailing 6 Months', ROUND(t_6m, 2), ROUND((t_6m / MAX(1.0, total_deposits)) * 100.0, 1), '🟢 Robust Growth' FROM gains
+UNION ALL
+SELECT '4. Trailing 1 Year', ROUND(t_1y, 2), ROUND((t_1y / MAX(1.0, total_deposits)) * 100.0, 1), '🟢 Strong Compounding' FROM gains
+UNION ALL
+SELECT '5. All-Time Inception', ROUND(all_time, 2), ROUND((all_time / MAX(1.0, total_deposits)) * 100.0, 1), '🟢 Wealth Accumulation' FROM gains
+ORDER BY 1 ASC
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "custom": {"align": "auto"}
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "Pure Market Gain ($)"},
+                    "properties": [
+                        {"id": "unit", "value": "currencyUSD"},
+                        {"id": "color", "value": {"mode": "thresholds"}},
+                        {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": None}, {"color": "green", "value": 0}]}}
+                    ]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Return on Capital (%)"},
+                    "properties": [{"id": "unit", "value": "percent"}]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Pacing Status"},
+                    "properties": [{"id": "custom.align", "value": "center"}]
+                }
+            ]
+        },
+        "options": {
+            "showHeader": true
+        }
+    })
+
+    panels.append({
+        "id": 708,
+        "title": "Total Portfolio Value vs. Cumulative Cash Injected (Cost Basis Gap)",
+        "description": "Plain English: Compares your Total Account Value against your Cumulative Cash Contributions (Cost Basis). The widening gap between the curves represents your pure compounding profit wedge.\n\nSeries:\n- Total Portfolio Value ($): Current balance over time\n- Cumulative Cash Injected ($): Total cumulative cash put in.",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 121},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH daily_steps AS (
+  SELECT
+    t.date,
+    CAST(strftime('%s', substr(CAST(t.date AS TEXT), 1, 4) || '-' || substr(CAST(t.date AS TEXT), 5, 2) || '-' || substr(CAST(t.date AS TEXT), 7, 2)) AS INTEGER) AS time,
+    t.amount / 100.0 AS amount,
+    CASE WHEN (t.notes IS NULL OR t.notes NOT LIKE '%Reconciliation%') AND (t.imported_description IS NULL OR t.imported_description NOT LIKE '%Reconciliation%') THEN t.amount / 100.0 ELSE 0 END AS deposit
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE a.name LIKE '%Ind Brokerage 6839%'
+    AND t.tombstone = 0
+),
+cum_series AS (
+  SELECT
+    time,
+    ROUND(SUM(amount) OVER (ORDER BY date ASC, time ASC), 2) AS portfolio_value,
+    ROUND(SUM(deposit) OVER (ORDER BY date ASC, time ASC), 2) AS principal_invested
+  FROM daily_steps
+)
+SELECT
+  time,
+  portfolio_value AS "Total Portfolio Value ($)",
+  principal_invested AS "Cumulative Cash Injected ($)"
+FROM cum_series
+UNION ALL
+SELECT
+  CAST(strftime('%s', 'now') AS INTEGER) AS time,
+  (SELECT portfolio_value FROM cum_series ORDER BY time DESC LIMIT 1) AS "Total Portfolio Value ($)",
+  (SELECT principal_invested FROM cum_series ORDER BY time DESC LIMIT 1) AS "Cumulative Cash Injected ($)"
+ORDER BY time ASC
+""", time_columns=["time"])
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "lineWidth": 2,
+                    "pointSize": 5,
+                    "showPoints": "auto"
+                },
+                "unit": "currencyUSD"
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "Total Portfolio Value ($)"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "custom.lineWidth", "value": 3}
+                    ]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Cumulative Cash Injected ($)"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "purple", "mode": "fixed"}},
+                        {"id": "custom.lineStyle", "value": {"dash": [8, 8]}}
+                    ]
+                }
+            ]
+        },
+        "options": {
+            "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]},
+            "tooltip": {"mode": "multi"}
+        }
+    })
+
+    panels.append({
+        "id": 709,
+        "title": "Reconciliation History & Capital Gain Event Audit Log",
+        "description": "Plain English: Authoritative ledger of every reconciliation event performed on Ind Brokerage 6839 [J], detailing the individual market gain or loss step, cumulative profit, and cumulative ROI at each point in time.",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 121},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH tx_cum AS (
+  SELECT
+    t.id,
+    t.date,
+    strftime('%Y-%m-%d', substr(CAST(t.date AS TEXT), 1, 4) || '-' || substr(CAST(t.date AS TEXT), 5, 2) || '-' || substr(CAST(t.date AS TEXT), 7, 2)) AS "Recon Date",
+    t.amount / 100.0 AS recon_gain,
+    SUM(CASE WHEN t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%' THEN t.amount ELSE 0 END) OVER (ORDER BY t.date ASC, t.id ASC) / 100.0 AS cum_gain,
+    SUM(CASE WHEN (t.notes IS NULL OR t.notes NOT LIKE '%Reconciliation%') AND (t.imported_description IS NULL OR t.imported_description NOT LIKE '%Reconciliation%') THEN t.amount ELSE 0 END) OVER (ORDER BY t.date ASC, t.id ASC) / 100.0 AS cum_deposit,
+    SUM(t.amount) OVER (ORDER BY t.date ASC, t.id ASC) / 100.0 AS cum_balance
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE a.name LIKE '%Ind Brokerage 6839%'
+    AND t.tombstone = 0
+)
+SELECT
+  "Recon Date" AS "Reconciliation Date",
+  ROUND(recon_gain, 2) AS "Market Gain / Loss ($)",
+  ROUND(cum_gain, 2) AS "Cumulative Profit ($)",
+  ROUND(cum_deposit, 2) AS "Total Cash Injected ($)",
+  ROUND(cum_balance, 2) AS "Account Value ($)",
+  ROUND((cum_gain / MAX(1.0, cum_deposit)) * 100.0, 1) AS "Cumulative ROI (%)"
+FROM tx_cum
+WHERE (recon_gain != 0)
+ORDER BY date DESC
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "custom": {"align": "auto"}
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "Market Gain / Loss ($)"},
+                    "properties": [
+                        {"id": "unit", "value": "currencyUSD"},
+                        {"id": "color", "value": {"mode": "thresholds"}},
+                        {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": None}, {"color": "green", "value": 0}]}}
+                    ]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Cumulative Profit ($)"},
+                    "properties": [
+                        {"id": "unit", "value": "currencyUSD"},
+                        {"id": "color", "value": {"mode": "thresholds"}},
+                        {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": None}, {"color": "green", "value": 0}]}}
+                    ]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Total Cash Injected ($)"},
+                    "properties": [{"id": "unit", "value": "currencyUSD"}]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Account Value ($)"},
+                    "properties": [{"id": "unit", "value": "currencyUSD"}]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Cumulative ROI (%)"},
+                    "properties": [{"id": "unit", "value": "percent"}]
+                }
+            ]
+        },
+        "options": {
+            "showHeader": true
+        }
+    })
+
     dashboard = {
         "annotations": {
             "list": [
@@ -2043,7 +2507,7 @@ ORDER BY "Net Variance ($)" ASC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 17
+        "version": 18
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
