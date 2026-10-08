@@ -27,6 +27,47 @@ if [ -n "$RUNNING_CONTAINER" ]; then
     echo "Replicating snapshot to actual-analytics-data volume..."
     docker cp "$RUNNING_CONTAINER:/app/export/db.sqlite" - | docker run --rm -i -v actual-analytics-data:/data alpine sh -c "tar -xf - -C /data && chmod 644 /data/db.sqlite"
     echo "✓ Replicated database to actual-analytics-data volume."
+
+    echo "Provisioning authoritative v_account_categories view..."
+    docker run --rm -u root -v actual-analytics-data:/data keinos/sqlite3 sqlite3 /data/db.sqlite "
+      DROP VIEW IF EXISTS v_account_categories;
+      CREATE VIEW v_account_categories AS
+      SELECT
+        a.id,
+        a.name,
+        CASE
+          WHEN a.name LIKE '%[P]%' OR a.name LIKE '%GTI%' THEN 'Paige'
+          WHEN a.name LIKE '%[J]%' OR a.name LIKE '%Tacoma%' THEN 'Jacob'
+          ELSE 'Joint / Household'
+        END AS owner,
+        CASE
+          WHEN a.closed = 1 THEN 'Paid Off / Closed'
+          WHEN a.name LIKE '%Card%' THEN 'Credit Card Float'
+          WHEN a.name LIKE '%Loan%' THEN 'Installment Loans'
+          WHEN a.name = 'Mortgage' THEN 'Mortgage Debt'
+          WHEN a.name = 'House' OR a.name LIKE '%Equity%' THEN 'Real Estate'
+          WHEN a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' OR a.name LIKE '%Vehicle%' OR a.name LIKE '%Auto%' THEN 'Vehicles'
+          WHEN a.name LIKE '%401k%' OR a.name LIKE '%IRA%' OR a.name LIKE '%Ret Plan%' OR a.name LIKE '%Savings Plan%' OR a.name LIKE '%HSA%' THEN 'Retirement & Tax-Advantaged'
+          WHEN a.name LIKE '%Brokerage%' OR a.name LIKE '%Stock%' THEN 'Taxable Investments'
+          WHEN a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%' OR a.name LIKE '%Venmo%' OR a.name LIKE '%LSA%' THEN 'Liquid Cash & Reserves'
+          ELSE 'Other Assets'
+        END AS category,
+        CASE
+          WHEN a.name LIKE '%Card%' OR a.name LIKE '%Loan%' OR a.name = 'Mortgage' THEN 'Liability'
+          ELSE 'Asset'
+        END AS balance_sheet_side,
+        CASE
+          WHEN a.closed = 0 AND (a.name LIKE '%Card%' OR a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%' OR a.name LIKE '%Venmo%' OR a.name LIKE '%LSA%')
+               AND a.name NOT LIKE '%Loan%' AND a.name NOT LIKE '%Mortgage%' AND a.name NOT LIKE '%House%' AND a.name NOT LIKE '%Tacoma%' AND a.name NOT LIKE '%GTI%' AND a.name NOT LIKE '%Vehicle%' AND a.name NOT LIKE '%401k%' AND a.name NOT LIKE '%IRA%' AND a.name NOT LIKE '%Ret Plan%' AND a.name NOT LIKE '%Savings Plan%' AND a.name NOT LIKE '%Brokerage%' AND a.name NOT LIKE '%Stock%' AND a.name NOT LIKE '%HSA%'
+          THEN 1
+          ELSE 0
+        END AS is_liquid,
+        a.closed AS is_closed,
+        a.offbudget,
+        a.tombstone
+      FROM accounts a;
+    " || true
+    echo "✓ Provisioned v_account_categories view."
 else
     echo "⚠️ Auto-categorizer container not detected. Checking volume directly..."
 fi
