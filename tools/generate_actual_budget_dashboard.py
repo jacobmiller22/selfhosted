@@ -112,34 +112,18 @@ WHERE t.tombstone = 0
     panels.append({
         "id": 102,
         "title": "Liquid Cash in Hand (Deployable Reserves)",
-        "description": "Plain English: How much cash you can instantly deploy right now without selling investments or touching retirement lockups. Sum of checking, joint savings, and cash minus credit card float.\n\nFormula: Liquid Cash = SUM(Checking + Savings + Cash - Credit Float)",
+        "description": "Plain English: How much cash you can instantly deploy right now without selling investments or touching retirement lockups. Sourced directly from live bank-synced account balances across all on-budget accounts (checking, credit card float) plus the off-budget joint savings account.\n\nFormula: Liquid Cash = SUM(Current Balance of On-Budget Accounts + Savings Joint)",
         "type": "stat",
         "gridPos": {"h": 5, "w": 4, "x": 4, "y": 5},
         "datasource": DS,
         "targets": [
             sql_target("A", """
 SELECT
-  ROUND(SUM(t.amount) / 100.0, 2) AS "Liquid Cash in Hand"
-FROM transactions t
-JOIN accounts a ON t.acct = a.id
-WHERE t.tombstone = 0
-  AND a.tombstone = 0
+  ROUND(SUM(COALESCE(a.balance_current, 0)) / 100.0, 2) AS "Liquid Cash in Hand"
+FROM accounts a
+WHERE a.tombstone = 0
   AND a.closed = 0
-  AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
-  AND a.name NOT LIKE '%Loan%'
-  AND a.name NOT LIKE '%Equity%'
-  AND a.name NOT LIKE '%House%'
-  AND a.name NOT LIKE '%Mortgage%'
-  AND a.name NOT LIKE '%Tacoma%'
-  AND a.name NOT LIKE '%GTI%'
-  AND a.name NOT LIKE '%Vehicle%'
-  AND a.name NOT LIKE '%401k%'
-  AND a.name NOT LIKE '%IRA%'
-  AND a.name NOT LIKE '%Ret Plan%'
-  AND a.name NOT LIKE '%Savings Plan%'
-  AND a.name NOT LIKE '%Brokerage%'
-  AND a.name NOT LIKE '%Stock%'
-  AND a.name NOT LIKE '%HSA%'
+  AND (a.offbudget = 0 OR a.name = 'Savings Joint')
 """)
         ],
         "fieldConfig": {
@@ -173,27 +157,11 @@ WHERE t.tombstone = 0
         "targets": [
             sql_target("A", """
 WITH liquid AS (
-  SELECT SUM(t.amount) / 100.0 AS bal
-  FROM transactions t
-  JOIN accounts a ON t.acct = a.id
-  WHERE t.tombstone = 0
-    AND a.tombstone = 0
+  SELECT SUM(COALESCE(a.balance_current, 0)) / 100.0 AS bal
+  FROM accounts a
+  WHERE a.tombstone = 0
     AND a.closed = 0
-    AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
-    AND a.name NOT LIKE '%Loan%'
-    AND a.name NOT LIKE '%Equity%'
-    AND a.name NOT LIKE '%House%'
-    AND a.name NOT LIKE '%Mortgage%'
-    AND a.name NOT LIKE '%Tacoma%'
-    AND a.name NOT LIKE '%GTI%'
-    AND a.name NOT LIKE '%Vehicle%'
-    AND a.name NOT LIKE '%401k%'
-    AND a.name NOT LIKE '%IRA%'
-    AND a.name NOT LIKE '%Ret Plan%'
-    AND a.name NOT LIKE '%Savings Plan%'
-    AND a.name NOT LIKE '%Brokerage%'
-    AND a.name NOT LIKE '%Stock%'
-    AND a.name NOT LIKE '%HSA%'
+    AND (a.offbudget = 0 OR a.name = 'Savings Joint')
 ),
 operating_burn AS (
   SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn
@@ -252,27 +220,11 @@ FROM liquid, operating_burn
         "targets": [
             sql_target("A", """
 WITH liquid AS (
-  SELECT SUM(t.amount) / 100.0 AS bal
-  FROM transactions t
-  JOIN accounts a ON t.acct = a.id
-  WHERE t.tombstone = 0
-    AND a.tombstone = 0
+  SELECT SUM(COALESCE(a.balance_current, 0)) / 100.0 AS bal
+  FROM accounts a
+  WHERE a.tombstone = 0
     AND a.closed = 0
-    AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
-    AND a.name NOT LIKE '%Loan%'
-    AND a.name NOT LIKE '%Equity%'
-    AND a.name NOT LIKE '%House%'
-    AND a.name NOT LIKE '%Mortgage%'
-    AND a.name NOT LIKE '%Tacoma%'
-    AND a.name NOT LIKE '%GTI%'
-    AND a.name NOT LIKE '%Vehicle%'
-    AND a.name NOT LIKE '%401k%'
-    AND a.name NOT LIKE '%IRA%'
-    AND a.name NOT LIKE '%Ret Plan%'
-    AND a.name NOT LIKE '%Savings Plan%'
-    AND a.name NOT LIKE '%Brokerage%'
-    AND a.name NOT LIKE '%Stock%'
-    AND a.name NOT LIKE '%HSA%'
+    AND (a.offbudget = 0 OR a.name = 'Savings Joint')
 ),
 operating_burn AS (
   SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn
@@ -348,27 +300,11 @@ FROM liquid, operating_burn, incomes
         "targets": [
             sql_target("A", """
 WITH liquid AS (
-  SELECT SUM(t.amount) / 100.0 AS bal
-  FROM transactions t
-  JOIN accounts a ON t.acct = a.id
-  WHERE t.tombstone = 0
-    AND a.tombstone = 0
+  SELECT SUM(COALESCE(a.balance_current, 0)) / 100.0 AS bal
+  FROM accounts a
+  WHERE a.tombstone = 0
     AND a.closed = 0
-    AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
-    AND a.name NOT LIKE '%Loan%'
-    AND a.name NOT LIKE '%Equity%'
-    AND a.name NOT LIKE '%House%'
-    AND a.name NOT LIKE '%Mortgage%'
-    AND a.name NOT LIKE '%Tacoma%'
-    AND a.name NOT LIKE '%GTI%'
-    AND a.name NOT LIKE '%Vehicle%'
-    AND a.name NOT LIKE '%401k%'
-    AND a.name NOT LIKE '%IRA%'
-    AND a.name NOT LIKE '%Ret Plan%'
-    AND a.name NOT LIKE '%Savings Plan%'
-    AND a.name NOT LIKE '%Brokerage%'
-    AND a.name NOT LIKE '%Stock%'
-    AND a.name NOT LIKE '%HSA%'
+    AND (a.offbudget = 0 OR a.name = 'Savings Joint')
 ),
 operating_burn AS (
   SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn
@@ -509,7 +445,7 @@ SELECT
     WHEN a.name LIKE '%401k%' OR a.name LIKE '%IRA%' OR a.name LIKE '%Ret Plan%' OR a.name LIKE '%Savings Plan%' OR a.name LIKE '%HSA%' THEN '📈 Retirement & Tax-Advantaged'
     WHEN a.name LIKE '%Brokerage%' OR a.name LIKE '%Stock%' THEN '📊 Taxable Investments'
     WHEN a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' OR a.name LIKE '%Vehicle%' OR a.name LIKE '%Auto%' THEN '🚗 Vehicles'
-    WHEN a.name LIKE '%Card%' OR a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%' OR a.name LIKE '%Venmo%' OR a.name LIKE '%LSA%' THEN '💵 Liquid Cash & Bank Reserves'
+    WHEN a.offbudget = 0 OR a.name = 'Savings Joint' THEN '💵 Liquid Cash & Bank Reserves'
     ELSE '📦 Other Assets'
   END AS "Asset Class",
   ROUND(SUM(t.amount) / 100.0, 2) AS "Balance ($)"
@@ -649,27 +585,11 @@ ORDER BY 2 DESC
             sql_target("A", """
 WITH 
 liquid AS (
-  SELECT SUM(t.amount) / 100.0 AS bal
-  FROM transactions t
-  JOIN accounts a ON t.acct = a.id
-  WHERE t.tombstone = 0
-    AND a.tombstone = 0
+  SELECT SUM(COALESCE(a.balance_current, 0)) / 100.0 AS bal
+  FROM accounts a
+  WHERE a.tombstone = 0
     AND a.closed = 0
-    AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
-    AND a.name NOT LIKE '%Loan%'
-    AND a.name NOT LIKE '%Equity%'
-    AND a.name NOT LIKE '%House%'
-    AND a.name NOT LIKE '%Mortgage%'
-    AND a.name NOT LIKE '%Tacoma%'
-    AND a.name NOT LIKE '%GTI%'
-    AND a.name NOT LIKE '%Vehicle%'
-    AND a.name NOT LIKE '%401k%'
-    AND a.name NOT LIKE '%IRA%'
-    AND a.name NOT LIKE '%Ret Plan%'
-    AND a.name NOT LIKE '%Savings Plan%'
-    AND a.name NOT LIKE '%Brokerage%'
-    AND a.name NOT LIKE '%Stock%'
-    AND a.name NOT LIKE '%HSA%'
+    AND (a.offbudget = 0 OR a.name = 'Savings Joint')
 ),
 operating_burn AS (
   SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn
@@ -919,7 +839,7 @@ SELECT
     WHEN a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' OR a.name LIKE '%Vehicle%' OR a.name LIKE '%Auto%' THEN '🚗 Vehicles'
     WHEN a.name LIKE '%401k%' OR a.name LIKE '%IRA%' OR a.name LIKE '%Ret Plan%' OR a.name LIKE '%Savings Plan%' OR a.name LIKE '%HSA%' THEN '📈 Retirement & Tax-Advantaged'
     WHEN a.name LIKE '%Brokerage%' OR a.name LIKE '%Stock%' THEN '📊 Taxable Investments'
-    WHEN a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%' OR a.name LIKE '%Venmo%' OR a.name LIKE '%LSA%' THEN '💵 Liquid Cash & Reserves'
+    WHEN a.offbudget = 0 OR a.name = 'Savings Joint' THEN '💵 Liquid Cash & Reserves'
     ELSE '📦 Other Assets'
   END AS "Category",
   CASE
@@ -930,15 +850,17 @@ SELECT
     WHEN a.closed = 1 THEN '⚪ Closed / Paid'
     ELSE '🟢 Active'
   END AS "Status",
-  ROUND(COALESCE(SUM(t.amount), 0) / 100.0, 2) AS "Balance ($)",
+  ROUND(COALESCE(a.balance_current, SUM(t.amount), 0) / 100.0, 2) AS "Balance ($)",
   CASE
     WHEN a.closed = 1 THEN '❌ Excluded (Paid/Closed)'
-    WHEN a.name LIKE '%Card%' THEN '⚠️ Deducted as Float'
+    WHEN a.name LIKE '%Card%' AND a.offbudget = 0 THEN '⚠️ Deducted as Float'
     WHEN a.name LIKE '%Loan%' OR a.name = 'Mortgage' THEN '❌ Excluded (Debt)'
     WHEN a.name = 'House' OR a.name LIKE '%Equity%' OR a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' THEN '❌ Excluded (Illiquid Fixed)'
     WHEN a.name LIKE '%401k%' OR a.name LIKE '%IRA%' OR a.name LIKE '%Ret Plan%' OR a.name LIKE '%Savings Plan%' OR a.name LIKE '%HSA%' THEN '❌ Excluded (Retirement)'
     WHEN a.name LIKE '%Brokerage%' OR a.name LIKE '%Stock%' THEN '❌ Excluded (Investments)'
-    ELSE '✅ Included (Liquid Reserve)'
+    WHEN a.offbudget = 1 AND a.name != 'Savings Joint' THEN '❌ Excluded (Off-Budget)'
+    WHEN a.offbudget = 0 OR a.name = 'Savings Joint' THEN '✅ Included (Liquid Reserve)'
+    ELSE '❌ Excluded'
   END AS "Liquid Runway Role"
 FROM accounts a
 LEFT JOIN transactions t ON t.acct = a.id AND t.tombstone = 0
@@ -2052,7 +1974,7 @@ ORDER BY "Net Variance ($)" ASC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 14
+        "version": 15
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)

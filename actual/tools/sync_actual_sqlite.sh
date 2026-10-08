@@ -49,7 +49,7 @@ if [ -n "$RUNNING_CONTAINER" ]; then
           WHEN a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' OR a.name LIKE '%Vehicle%' OR a.name LIKE '%Auto%' THEN 'Vehicles'
           WHEN a.name LIKE '%401k%' OR a.name LIKE '%IRA%' OR a.name LIKE '%Ret Plan%' OR a.name LIKE '%Savings Plan%' OR a.name LIKE '%HSA%' THEN 'Retirement & Tax-Advantaged'
           WHEN a.name LIKE '%Brokerage%' OR a.name LIKE '%Stock%' THEN 'Taxable Investments'
-          WHEN a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%' OR a.name LIKE '%Venmo%' OR a.name LIKE '%LSA%' THEN 'Liquid Cash & Reserves'
+          WHEN a.offbudget = 0 OR a.name = 'Savings Joint' THEN 'Liquid Cash & Reserves'
           ELSE 'Other Assets'
         END AS category,
         CASE
@@ -57,8 +57,7 @@ if [ -n "$RUNNING_CONTAINER" ]; then
           ELSE 'Asset'
         END AS balance_sheet_side,
         CASE
-          WHEN a.closed = 0 AND (a.name LIKE '%Card%' OR a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%' OR a.name LIKE '%Venmo%' OR a.name LIKE '%LSA%')
-               AND a.name NOT LIKE '%Loan%' AND a.name NOT LIKE '%Mortgage%' AND a.name NOT LIKE '%House%' AND a.name NOT LIKE '%Tacoma%' AND a.name NOT LIKE '%GTI%' AND a.name NOT LIKE '%Vehicle%' AND a.name NOT LIKE '%401k%' AND a.name NOT LIKE '%IRA%' AND a.name NOT LIKE '%Ret Plan%' AND a.name NOT LIKE '%Savings Plan%' AND a.name NOT LIKE '%Brokerage%' AND a.name NOT LIKE '%Stock%' AND a.name NOT LIKE '%HSA%'
+          WHEN a.closed = 0 AND (a.offbudget = 0 OR a.name = 'Savings Joint')
           THEN 1
           ELSE 0
         END AS is_liquid,

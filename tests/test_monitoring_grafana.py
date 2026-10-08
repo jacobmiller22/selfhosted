@@ -433,7 +433,8 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
                 name TEXT,
                 closed INTEGER DEFAULT 0,
                 offbudget INTEGER DEFAULT 0,
-                tombstone INTEGER DEFAULT 0
+                tombstone INTEGER DEFAULT 0,
+                balance_current INTEGER DEFAULT 0
             );
             CREATE TABLE category_groups (
                 id TEXT PRIMARY KEY,
