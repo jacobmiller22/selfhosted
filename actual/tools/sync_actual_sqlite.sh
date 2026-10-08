@@ -36,7 +36,7 @@ if [ -n "$RUNNING_CONTAINER" ]; then
         a.id,
         a.name,
         CASE
-          WHEN a.name LIKE '%[P]%' OR a.name LIKE '%GTI%' THEN 'Paige'
+          WHEN a.name LIKE '%[P]%' OR a.name LIKE '%GTI%' THEN 'Priyanka'
           WHEN a.name LIKE '%[J]%' OR a.name LIKE '%Tacoma%' THEN 'Jacob'
           ELSE 'Joint / Household'
         END AS owner,

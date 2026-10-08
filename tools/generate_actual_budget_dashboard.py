@@ -60,9 +60,9 @@ def make_dashboard():
 * **Total Net Worth**: *"What is your overall wealth across all assets and debts?"* Sum of all real estate home equity, 401(k), brokerage, IRAs, and bank balances minus all loans and credit cards.
 * **Liquid Cash in Hand**: *"How much cash could you deploy right now without selling investments or touching retirement?"* Sums checking, high-yield savings, and cash minus current credit card float.
 * **Dynamic Runway Scenarios (Months)**:
-  * **Zero Income (Emergency Buffer)**: *"If all household income stopped today, how many months can you pay normal living bills?"* 🟢 **>6 months** = Safe emergency cushion.
-  * **If Paige Income Stops (Jacob Alone)**: *"If Paige takes leave while Jacob continues working, how many months until liquid cash reserves deplete?"* 🟢 **>24 months** = Robust security moat.
-  * **If Jacob Income Stops (Paige Alone)**: *"If Jacob's income stops while Paige continues working, how many months until liquid cash reserves deplete?"* 🟢 **>12 months** = Safe cushion.
+  * **Worst-Case: If Both Lose Jobs (Zero Income)**: *"If both Jacob and Priyanka lose all income today, how many months can combined liquid reserves cover full household living expenses with $0 coming in?"* 🟢 **>6 months** = Safe emergency cushion.
+  * **If Priyanka Loses Job (Jacob Working)**: *"If Priyanka's income stops while Jacob continues working, how many months will liquid cash reserves last to cover the net household living shortfall?"* 🟢 **>24 months** = Robust security moat.
+  * **If Jacob Loses Job (Priyanka Working)**: *"If Jacob's income stops while Priyanka continues working, how many months will liquid cash reserves last to cover the net household living shortfall?"* 🟢 **>12 months** = Safe cushion.
 * **Monthly Savings Rate (Trailing 30D)**: *"Out of every dollar earned over the rolling 30 days, how many cents stayed in your pocket rather than getting consumed?"* 🟢 **≥25%** = Strong wealth building. (Uses rolling 30-day window to eliminate early-month paycheck timing skew).
 * **Asset Allocation**: Distribution of your total wealth between Real Estate Equity, Retirement (401k/IRA/HSA), Taxable Brokerage, Vehicles, and Liquid Cash Reserves.
 * **Global Account Directory**: Authoritative classification matrix of all 34+ household accounts with live balances, balance sheet side, ownership, and segregation of paid-off/closed accounts.
@@ -149,8 +149,8 @@ WHERE a.tombstone = 0
 
     panels.append({
         "id": 103,
-        "title": "Dynamic Runway: Zero Income (Buffer)",
-        "description": "Plain English: If all household income stopped today, how many months can you cover your normal living overhead (housing, utilities, groceries, bills, pets) before running out of liquid cash reserves?\n\nThresholds: 🟢 >6 months is safe emergency cushion, 🟡 3–6 months is cautious, 🔴 <3 months is emergency mode.\n\nFormula: Runway (Months) = Liquid Cash / Trailing 90-Day Monthly Operating Living Burn\n\nNote: Cleanly excludes internal savings transfers, investment contributions, and paid-off/closed accounts.",
+        "title": "Dynamic Runway: If Both Lose Jobs (Worst-Case Buffer)",
+        "description": "Plain English: If both Jacob and Priyanka were to lose all household income today, how many months can you cover your full living overhead (housing, groceries, utilities, bills, pets) before running out of liquid cash reserves with $0.00 coming in?\n\nThresholds: 🟢 >6 months is safe emergency cushion, 🟡 3–6 months is cautious, 🔴 <3 months is emergency mode.\n\nFormula: Runway (Months) = Liquid Cash / Trailing 90-Day Monthly Operating Living Burn\n\nNote: Cleanly excludes internal savings transfers, investment contributions, and paid-off/closed accounts.",
         "type": "gauge",
         "gridPos": {"h": 5, "w": 4, "x": 8, "y": 5},
         "datasource": DS,
@@ -212,8 +212,8 @@ FROM liquid, operating_burn
 
     panels.append({
         "id": 110,
-        "title": "Dynamic Runway: If P Stops (J Alone)",
-        "description": "Plain English: If Paige's income were to stop today (e.g. career break, sabbatical, family leave) while Jacob's income continues uninterrupted, how many months would your liquid cash reserves last to cover the net monthly living shortfall?\n\nThresholds: 🟢 >24 months is a massive security moat, 🟡 12–24 months is healthy cushion, 🔴 <12 months is tight margin.\n\nFormula: Liquid Cash / MAX(0.01, Trailing 90-Day Living Burn - Jacob's Monthly Income)",
+        "title": "Dynamic Runway: If Priyanka Loses Job (Jacob Working)",
+        "description": "Plain English: If Priyanka's income were to stop today while Jacob's income continues uninterrupted, how many months will liquid cash reserves last to cover the net household living shortfall?\n\nThresholds: 🟢 >24 months is a massive security moat, 🟡 12–24 months is healthy cushion, 🔴 <12 months is tight margin.\n\nFormula: Liquid Cash / MAX(0.01, Trailing 90-Day Living Burn - Jacob's Monthly Income)",
         "type": "gauge",
         "gridPos": {"h": 5, "w": 4, "x": 12, "y": 5},
         "datasource": DS,
@@ -292,8 +292,8 @@ FROM liquid, operating_burn, incomes
 
     panels.append({
         "id": 111,
-        "title": "Dynamic Runway: If J Stops (P Alone)",
-        "description": "Plain English: If Jacob's income were to stop today while Paige's income continues uninterrupted, how many months would your liquid cash reserves last to cover the net monthly living shortfall?\n\nThresholds: 🟢 >12 months is safe, 🟡 6–12 months is caution, 🔴 <6 months is emergency mode.\n\nFormula: Liquid Cash / MAX(0.01, Trailing 90-Day Living Burn - Paige's Monthly Income)",
+        "title": "Dynamic Runway: If Jacob Loses Job (Priyanka Working)",
+        "description": "Plain English: If Jacob's income were to stop today while Priyanka's income continues uninterrupted, how many months will liquid cash reserves last to cover the net household living shortfall?\n\nThresholds: 🟢 >12 months is safe, 🟡 6–12 months is caution, 🔴 <6 months is emergency mode.\n\nFormula: Liquid Cash / MAX(0.01, Trailing 90-Day Living Burn - Priyanka's Monthly Income)",
         "type": "gauge",
         "gridPos": {"h": 5, "w": 4, "x": 16, "y": 5},
         "datasource": DS,
@@ -486,7 +486,7 @@ SELECT
   CASE
     WHEN g.name = 'Investments and Savings' THEN '💰 Wealth Building & Savings'
     WHEN c.name LIKE '%Tax%' OR g.name LIKE '%Tax%' OR g.name = 'One-Time' THEN '🏛️ Taxes & Sinking Funds'
-    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Bills [P]', 'Gas', 'Gas [J]', 'Gas [P]', 'Car Maintenance', 'Car Maintenance [J]', 'Car Maintenance [P]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
          OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed') THEN '🛡️ Core Living Needs'
     ELSE '🎯 Discretionary & Lifestyle'
   END AS "Budget Pillar",
@@ -521,7 +521,7 @@ ORDER BY 2 DESC
     panels.append({
         "id": 105,
         "title": "Needs vs. Wants: Trailing 30-Day Living Expense Split",
-        "description": "Plain English: 3-way breakdown of your trailing 30-day operating spend across:\n1. 🛡️ Core Living Needs: Essential survival overhead (housing, utilities/bills, groceries, dog care, transportation)\n2. 🎯 Discretionary (Wants): Lifestyle & fun choices (dining, entertainment, shopping, subscriptions)\n3. 🏛️ Taxes & Statutory: Non-controllable obligations (personal property taxes, tax prep/settlements)\n\nNote: Slices your $5.9k/mo living outlays only; cleanly excludes internal account transfers, brokerage/equity investments, and one-off capital purchases.",
+        "description": "Plain English: 3-way breakdown of your trailing 30-day operating spend across:\n1. 🛡️ Core Living Needs: Essential survival overhead (housing, utilities/bills, groceries, dog care, transportation)\n2. 🎯 Discretionary (Wants): Lifestyle & fun choices (dining, entertainment, shopping, subscriptions)\n3. 🏛️ Taxes & Statutory: Non-controllable obligations (personal property taxes, tax prep/settlements)\n\nNote: Slices your living outlays only; cleanly excludes internal account transfers, brokerage/equity investments, and one-off capital purchases.",
         "type": "piechart",
         "gridPos": {"h": 7, "w": 8, "x": 16, "y": 10},
         "datasource": DS,
@@ -530,7 +530,7 @@ ORDER BY 2 DESC
 SELECT
   CASE
     WHEN c.name LIKE '%Tax%' OR g.name LIKE '%Tax%' THEN '🏛️ Taxes & Statutory'
-    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Bills [P]', 'Gas', 'Gas [J]', 'Gas [P]', 'Car Maintenance', 'Car Maintenance [J]', 'Car Maintenance [P]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
          OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed')
          THEN '🛡️ Core Living Needs'
     ELSE '🎯 Discretionary (Wants)'
@@ -592,7 +592,9 @@ liquid AS (
     AND (a.offbudget = 0 OR a.name = 'Savings Joint')
 ),
 operating_burn AS (
-  SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn
+  SELECT 
+    MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn,
+    MAX(1.0, (ABS(SUM(CASE WHEN g.name = 'Fun' THEN t.amount * 0.75 ELSE t.amount END))) / 100.0 / 3.0) AS cutback_burn
   FROM transactions t
   JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
@@ -627,15 +629,24 @@ incomes AS (
 ),
 runway_calc AS (
   SELECT
-    ROUND(liquid.bal / operating_burn.monthly_burn, 1) AS runway_zero,
+    ROUND(liquid.bal / operating_burn.monthly_burn, 1) AS runway_zero_base,
+    ROUND(liquid.bal / operating_burn.cutback_burn, 1) AS runway_zero_cut,
     CASE
       WHEN operating_burn.monthly_burn - incomes.j_income <= 0 THEN 120.0
       ELSE ROUND(liquid.bal / (operating_burn.monthly_burn - incomes.j_income), 1)
-    END AS runway_p_stops,
+    END AS runway_p_stops_base,
+    CASE
+      WHEN operating_burn.cutback_burn - incomes.j_income <= 0 THEN 120.0
+      ELSE ROUND(liquid.bal / (operating_burn.cutback_burn - incomes.j_income), 1)
+    END AS runway_p_stops_cut,
     CASE
       WHEN operating_burn.monthly_burn - incomes.p_income <= 0 THEN 120.0
       ELSE ROUND(liquid.bal / (operating_burn.monthly_burn - incomes.p_income), 1)
-    END AS runway_j_stops
+    END AS runway_j_stops_base,
+    CASE
+      WHEN operating_burn.cutback_burn - incomes.p_income <= 0 THEN 120.0
+      ELSE ROUND(liquid.bal / (operating_burn.cutback_burn - incomes.p_income), 1)
+    END AS runway_j_stops_cut
   FROM liquid, operating_burn, incomes
 ),
 t30_flow AS (
@@ -668,11 +679,11 @@ savings_rate AS (
 budget_alloc AS (
   SELECT
     SUM(CASE WHEN g.name = 'Investments and Savings' THEN b.amount ELSE 0 END) / 100.0 AS savings_b,
-    SUM(CASE WHEN (c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+    SUM(CASE WHEN (c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Bills [P]', 'Gas', 'Gas [J]', 'Gas [P]', 'Car Maintenance', 'Car Maintenance [J]', 'Car Maintenance [P]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
                    OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed'))
                   AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%') THEN b.amount ELSE 0 END) / 100.0 AS needs_b,
     SUM(CASE WHEN g.name = 'Fun' OR (g.name NOT IN ('Investments and Savings', 'One-Time', 'Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed')
-                                     AND c.name NOT IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+                                     AND c.name NOT IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Bills [P]', 'Gas', 'Gas [J]', 'Gas [P]', 'Car Maintenance', 'Car Maintenance [J]', 'Car Maintenance [P]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
                                      AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%')) THEN b.amount ELSE 0 END) / 100.0 AS wants_b,
     SUM(b.amount) / 100.0 AS total_b
   FROM zero_budgets b
@@ -715,27 +726,51 @@ days_calc AS (
     CAST(strftime('%d', date(strftime('%Y-%m-01', 'now'), '+1 month', '-1 day')) AS REAL) AS days_in_month
 )
 SELECT 
-  'Dynamic Runway: Zero Income (Panel 103)' AS "Visual / Dimension",
-  printf('%.1f mo', runway_calc.runway_zero) AS "Current Performance",
+  'Runway: Both Lose Jobs - Baseline (Panel 103)' AS "Visual / Dimension",
+  printf('%.1f mo', runway_calc.runway_zero_base) AS "Current Performance",
   '≥ 6.0 mo' AS "Benchmark Target",
-  printf('+%.1f mo cushion', runway_calc.runway_zero - 6.0) AS "Buffer / Variance",
-  CASE WHEN runway_calc.runway_zero >= 6.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_zero >= 3.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END AS "Status Indicator"
+  printf('+%.1f mo cushion', runway_calc.runway_zero_base - 6.0) AS "Buffer / Variance",
+  CASE WHEN runway_calc.runway_zero_base >= 6.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_zero_base >= 3.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END AS "Status Indicator"
 FROM runway_calc
 UNION ALL
 SELECT 
-  'Runway: If P Stops / J Alone (Panel 110)',
-  CASE WHEN runway_calc.runway_p_stops >= 120.0 THEN '≥ 10 yrs (Surplus)' ELSE printf('%.1f mo', runway_calc.runway_p_stops) END,
+  'Runway: Both Lose Jobs - 25% Fun Cutback',
+  printf('%.1f mo', runway_calc.runway_zero_cut),
+  '≥ 6.0 mo',
+  printf('+%.1f mo cushion', runway_calc.runway_zero_cut - 6.0),
+  CASE WHEN runway_calc.runway_zero_cut >= 6.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_zero_cut >= 3.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
+FROM runway_calc
+UNION ALL
+SELECT 
+  'Runway: If Priyanka Loses Job - Baseline (Panel 110)',
+  CASE WHEN runway_calc.runway_p_stops_base >= 120.0 THEN '≥ 10 yrs (Surplus)' ELSE printf('%.1f mo', runway_calc.runway_p_stops_base) END,
   '≥ 24.0 mo',
-  CASE WHEN runway_calc.runway_p_stops >= 24.0 THEN printf('+%.1f mo moat', runway_calc.runway_p_stops - 24.0) ELSE printf('%.1f mo gap', runway_calc.runway_p_stops - 24.0) END,
-  CASE WHEN runway_calc.runway_p_stops >= 24.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_p_stops >= 12.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
+  CASE WHEN runway_calc.runway_p_stops_base >= 24.0 THEN printf('+%.1f mo moat', runway_calc.runway_p_stops_base - 24.0) ELSE printf('%.1f mo gap', runway_calc.runway_p_stops_base - 24.0) END,
+  CASE WHEN runway_calc.runway_p_stops_base >= 24.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_p_stops_base >= 12.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
 FROM runway_calc
 UNION ALL
 SELECT 
-  'Runway: If J Stops / P Alone (Panel 111)',
-  printf('%.1f mo', runway_calc.runway_j_stops),
+  'Runway: If Priyanka Loses Job - 25% Fun Cutback',
+  CASE WHEN runway_calc.runway_p_stops_cut >= 120.0 THEN '≥ 10 yrs (Surplus)' ELSE printf('%.1f mo', runway_calc.runway_p_stops_cut) END,
+  '≥ 24.0 mo',
+  CASE WHEN runway_calc.runway_p_stops_cut >= 24.0 THEN printf('+%.1f mo moat', runway_calc.runway_p_stops_cut - 24.0) ELSE printf('%.1f mo gap', runway_calc.runway_p_stops_cut - 24.0) END,
+  CASE WHEN runway_calc.runway_p_stops_cut >= 24.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_p_stops_cut >= 12.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
+FROM runway_calc
+UNION ALL
+SELECT 
+  'Runway: If Jacob Loses Job - Baseline (Panel 111)',
+  printf('%.1f mo', runway_calc.runway_j_stops_base),
   '≥ 12.0 mo',
-  CASE WHEN runway_calc.runway_j_stops >= 12.0 THEN printf('+%.1f mo moat', runway_calc.runway_j_stops - 12.0) ELSE printf('%.1f mo gap', runway_calc.runway_j_stops - 12.0) END,
-  CASE WHEN runway_calc.runway_j_stops >= 12.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_j_stops >= 6.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
+  CASE WHEN runway_calc.runway_j_stops_base >= 12.0 THEN printf('+%.1f mo moat', runway_calc.runway_j_stops_base - 12.0) ELSE printf('%.1f mo gap', runway_calc.runway_j_stops_base - 12.0) END,
+  CASE WHEN runway_calc.runway_j_stops_base >= 12.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_j_stops_base >= 6.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
+FROM runway_calc
+UNION ALL
+SELECT 
+  'Runway: If Jacob Loses Job - 25% Fun Cutback',
+  printf('%.1f mo', runway_calc.runway_j_stops_cut),
+  '≥ 12.0 mo',
+  CASE WHEN runway_calc.runway_j_stops_cut >= 12.0 THEN printf('+%.1f mo moat', runway_calc.runway_j_stops_cut - 12.0) ELSE printf('%.1f mo gap', runway_calc.runway_j_stops_cut - 12.0) END,
+  CASE WHEN runway_calc.runway_j_stops_cut >= 12.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_j_stops_cut >= 6.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
 FROM runway_calc
 UNION ALL
 SELECT 
@@ -817,7 +852,7 @@ SELECT
     panels.append({
         "id": 112,
         "title": "🏛️ Global Account Directory & Strict Classification Matrix",
-        "description": "Plain English: Authoritative directory of all financial accounts in your household portfolio, classifying every account into its strict balance sheet category (Liquid Cash, Credit Card Float, Real Estate, Debt, Vehicles, Retirement, Taxable Investments), designating ownership (Jacob, Paige, Joint), and verifying that paid-off/closed accounts are segregated and excluded from liquid reserves.\n\nAction: Use this matrix to audit account classifications, verify live balances, and ensure zero untracked accounts.",
+        "description": "Plain English: Authoritative directory of all financial accounts in your household portfolio, classifying every account into its strict balance sheet category (Liquid Cash, Credit Card Float, Real Estate, Debt, Vehicles, Retirement, Taxable Investments), designating ownership (Jacob, Priyanka, Joint), and verifying that paid-off/closed accounts are segregated and excluded from liquid reserves.\n\nAction: Use this matrix to audit account classifications, verify live balances, and ensure zero untracked accounts.",
         "type": "table",
         "gridPos": {"h": 8, "w": 24, "x": 0, "y": 25},
         "datasource": DS,
@@ -826,7 +861,7 @@ SELECT
 SELECT
   a.name AS "Account",
   CASE
-    WHEN a.name LIKE '%[P]%' OR a.name LIKE '%GTI%' THEN 'Paige'
+    WHEN a.name LIKE '%[P]%' OR a.name LIKE '%GTI%' THEN 'Priyanka'
     WHEN a.name LIKE '%[J]%' OR a.name LIKE '%Tacoma%' THEN 'Jacob'
     ELSE 'Joint / Household'
   END AS "Owner",
@@ -935,10 +970,14 @@ current_m AS (
     CAST(substr(CAST(t.date AS TEXT), 7, 2) AS INTEGER) AS day_num,
     ABS(SUM(t.amount)) / 100.0 AS daily_spend
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -953,10 +992,14 @@ prior_3m AS (
     CAST(substr(CAST(t.date AS TEXT), 7, 2) AS INTEGER) AS day_num,
     (ABS(SUM(t.amount)) / 100.0) / 3.0 AS avg_daily_spend
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1097,10 +1140,14 @@ SELECT
   END AS "Period of Month",
   ROUND(ABS(SUM(t.amount)) / 100.0, 2) AS "Total Spend ($)"
 FROM transactions t
+JOIN accounts a ON t.acct = a.id
 JOIN categories c ON t.category = c.id
 JOIN category_groups g ON c.cat_group = g.id
 LEFT JOIN payees p ON t.description = p.id
 WHERE t.tombstone = 0
+  AND a.tombstone = 0
+  AND a.closed = 0
+  AND a.offbudget = 0
   AND (t.isParent IS NULL OR t.isParent = 0)
   AND t.transferred_id IS NULL
   AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1255,10 +1302,14 @@ SELECT
   c.name AS "Category",
   ROUND(SQRT(MAX(0.01, AVG((ABS(t.amount)/100.0)*(ABS(t.amount)/100.0)) - (AVG(ABS(t.amount)/100.0)*AVG(ABS(t.amount)/100.0)))) / MAX(1.0, AVG(ABS(t.amount)/100.0)), 2) AS "Volatility Index (CV)"
 FROM transactions t
+JOIN accounts a ON t.acct = a.id
 JOIN categories c ON t.category = c.id
 JOIN category_groups g ON c.cat_group = g.id
 LEFT JOIN payees p ON t.description = p.id
 WHERE t.tombstone = 0
+  AND a.tombstone = 0
+  AND a.closed = 0
+  AND a.offbudget = 0
   AND (t.isParent IS NULL OR t.isParent = 0)
   AND t.transferred_id IS NULL
   AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1343,6 +1394,9 @@ WITH payee_spend AS (
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1408,10 +1462,14 @@ WITH recurring AS (
       ORDER BY t.date ASC
     ) AS prev_date
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1600,13 +1658,11 @@ LIMIT 15
         "targets": [
             sql_target("A", """
 WITH curr_bal AS (
-  SELECT SUM(t.amount) / 100.0 AS bal
-  FROM transactions t
-  JOIN accounts a ON t.acct = a.id
-  WHERE t.tombstone = 0
+  SELECT SUM(COALESCE(a.balance_current, 0)) / 100.0 AS bal
+  FROM accounts a
+  WHERE a.tombstone = 0
     AND a.closed = 0
-    AND a.tombstone = 0
-    AND a.name LIKE '%Checking%'
+    AND a.offbudget = 0
 ),
 checking_flows AS (
   SELECT
@@ -1617,11 +1673,12 @@ checking_flows AS (
   WHERE t.tombstone = 0
     AND a.closed = 0
     AND a.tombstone = 0
+    AND a.offbudget = 0
     AND a.name LIKE '%Checking%'
     AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
 )
 SELECT
-  'Today (Current Balance)' AS "Time Horizon",
+  'Today (Net Checking Liquidity)' AS "Time Horizon",
   ROUND(bal, 2) AS "Projected Balance ($)",
   '🟢 Live Balance' AS "Status"
 FROM curr_bal
@@ -1680,10 +1737,14 @@ WITH mtd_spend AS (
     ABS(SUM(t.amount)) / 100.0 AS spent,
     (ABS(SUM(t.amount)) / 100.0) / MAX(1, CAST(strftime('%d', 'now') AS INTEGER)) AS daily_burn
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1808,10 +1869,14 @@ SELECT
   c.name AS "Category",
   ROUND(ABS(SUM(t.amount)) / 100.0, 2) AS "Expense Amount ($)"
 FROM transactions t
+JOIN accounts a ON t.acct = a.id
 JOIN categories c ON t.category = c.id
 JOIN category_groups g ON c.cat_group = g.id
 LEFT JOIN payees p ON t.description = p.id
 WHERE t.tombstone = 0
+  AND a.tombstone = 0
+  AND a.closed = 0
+  AND a.offbudget = 0
   AND (t.isParent IS NULL OR t.isParent = 0)
   AND t.transferred_id IS NULL
   AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1857,9 +1922,13 @@ actuals AS (
     c.cat_group,
     ABS(SUM(t.amount)) / 100.0 AS actual_amt
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1974,7 +2043,7 @@ ORDER BY "Net Variance ($)" ASC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 15
+        "version": 16
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
