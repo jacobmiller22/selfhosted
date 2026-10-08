@@ -29,7 +29,7 @@ if [ -n "$RUNNING_CONTAINER" ]; then
     echo "✓ Replicated database to actual-analytics-data volume."
 
     echo "Provisioning authoritative v_account_categories view..."
-    docker run --rm -u root -v actual-analytics-data:/data keinos/sqlite3 sqlite3 /data/db.sqlite "
+    docker run --rm -u root -i -v actual-analytics-data:/data keinos/sqlite3 sqlite3 /data/db.sqlite << 'EOF' || true
       DROP VIEW IF EXISTS v_account_categories;
       CREATE VIEW v_account_categories AS
       SELECT
@@ -66,7 +66,7 @@ if [ -n "$RUNNING_CONTAINER" ]; then
         a.offbudget,
         a.tombstone
       FROM accounts a;
-    " || true
+EOF
     echo "✓ Provisioned v_account_categories view."
 else
     echo "⚠️ Auto-categorizer container not detected. Checking volume directly..."

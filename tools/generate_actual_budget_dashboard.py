@@ -80,11 +80,9 @@ def make_dashboard():
         "targets": [
             sql_target("A", """
 SELECT
-  ROUND(SUM(t.amount) / 100.0, 2) AS "Total Net Worth"
-FROM transactions t
-JOIN accounts a ON t.acct = a.id
-WHERE t.tombstone = 0
-  AND a.tombstone = 0
+  ROUND(SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0, 2) AS "Total Net Worth"
+FROM accounts a
+WHERE a.tombstone = 0
   AND a.closed = 0
 """)
         ],
@@ -119,7 +117,7 @@ WHERE t.tombstone = 0
         "targets": [
             sql_target("A", """
 SELECT
-  ROUND(SUM(COALESCE(a.balance_current, 0)) / 100.0, 2) AS "Liquid Cash in Hand"
+  ROUND(SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0, 2) AS "Liquid Cash in Hand"
 FROM accounts a
 WHERE a.tombstone = 0
   AND a.closed = 0
@@ -157,7 +155,7 @@ WHERE a.tombstone = 0
         "targets": [
             sql_target("A", """
 WITH liquid AS (
-  SELECT SUM(COALESCE(a.balance_current, 0)) / 100.0 AS bal
+  SELECT SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0 AS bal
   FROM accounts a
   WHERE a.tombstone = 0
     AND a.closed = 0
@@ -220,7 +218,7 @@ FROM liquid, operating_burn
         "targets": [
             sql_target("A", """
 WITH liquid AS (
-  SELECT SUM(COALESCE(a.balance_current, 0)) / 100.0 AS bal
+  SELECT SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0 AS bal
   FROM accounts a
   WHERE a.tombstone = 0
     AND a.closed = 0
@@ -301,7 +299,7 @@ FROM liquid, operating_burn, incomes
         "targets": [
             sql_target("A", """
 WITH liquid AS (
-  SELECT SUM(COALESCE(a.balance_current, 0)) / 100.0 AS bal
+  SELECT SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0 AS bal
   FROM accounts a
   WHERE a.tombstone = 0
     AND a.closed = 0
@@ -400,6 +398,7 @@ WITH t30 AS (
     AND a.tombstone = 0
     AND a.closed = 0
     AND a.offbudget = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.date >= CAST(strftime('%Y%m%d', date('now', '-30 day')) AS INTEGER)
     AND t.category IS NOT NULL
 )
@@ -450,14 +449,12 @@ SELECT
     WHEN a.offbudget = 0 OR a.name = 'Savings Joint' THEN '💵 Liquid Cash & Bank Reserves'
     ELSE '📦 Other Assets'
   END AS "Asset Class",
-  ROUND(SUM(t.amount) / 100.0, 2) AS "Balance ($)"
-FROM transactions t
-JOIN accounts a ON t.acct = a.id
-WHERE t.tombstone = 0
-  AND a.tombstone = 0
+  ROUND(SUM(COALESCE(a.balance_current, (SELECT SUM(t2.amount) FROM transactions t2 WHERE t2.acct = a.id AND t2.tombstone = 0 AND (t2.isParent IS NULL OR t2.isParent = 0)), 0)) / 100.0, 2) AS "Balance ($)"
+FROM accounts a
+WHERE a.tombstone = 0
   AND a.closed = 0
 GROUP BY 1
-HAVING SUM(t.amount) > 0
+HAVING "Balance ($)" > 0
 ORDER BY 2 DESC
 """)
         ],
@@ -586,7 +583,7 @@ ORDER BY 2 DESC
             sql_target("A", """
 WITH 
 liquid AS (
-  SELECT SUM(COALESCE(a.balance_current, 0)) / 100.0 AS bal
+  SELECT SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0 AS bal
   FROM accounts a
   WHERE a.tombstone = 0
     AND a.closed = 0
@@ -670,6 +667,7 @@ t30_flow AS (
     AND a.tombstone = 0
     AND a.closed = 0
     AND a.offbudget = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.date >= CAST(strftime('%Y%m%d', date('now', '-30 day')) AS INTEGER)
     AND t.category IS NOT NULL
 ),
@@ -901,7 +899,7 @@ SELECT
     ELSE '❌ Excluded'
   END AS "Liquid Runway Role"
 FROM accounts a
-LEFT JOIN transactions t ON t.acct = a.id AND t.tombstone = 0
+LEFT JOIN transactions t ON t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)
 WHERE a.tombstone = 0
 GROUP BY a.id
 ORDER BY a.closed ASC, "Category" ASC, a.name ASC
@@ -2032,6 +2030,7 @@ FROM transactions t
 JOIN accounts a ON t.acct = a.id
 WHERE a.name LIKE '%Ind Brokerage 6839%'
   AND t.tombstone = 0
+  AND (t.isParent IS NULL OR t.isParent = 0)
 """)
         ],
         "fieldConfig": {
@@ -2071,6 +2070,7 @@ WITH stats AS (
   JOIN accounts a ON t.acct = a.id
   WHERE a.name LIKE '%Ind Brokerage 6839%'
     AND t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
 )
 SELECT
   ROUND((gain / MAX(1.0, cost_basis)) * 100.0, 1) AS "Cumulative ROI (%)"
@@ -2113,6 +2113,7 @@ FROM transactions t
 JOIN accounts a ON t.acct = a.id
 WHERE a.name LIKE '%Ind Brokerage 6839%'
   AND t.tombstone = 0
+  AND (t.isParent IS NULL OR t.isParent = 0)
 """)
         ],
         "fieldConfig": {
@@ -2143,6 +2144,7 @@ FROM transactions t
 JOIN accounts a ON t.acct = a.id
 WHERE a.name LIKE '%Ind Brokerage 6839%'
   AND t.tombstone = 0
+  AND (t.isParent IS NULL OR t.isParent = 0)
 """)
         ],
         "fieldConfig": {
@@ -2176,6 +2178,7 @@ WITH raw_events AS (
   JOIN accounts a ON t.acct = a.id
   WHERE a.name LIKE '%Ind Brokerage 6839%'
     AND t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
     AND (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%')
 ),
 cum_events AS (
@@ -2255,6 +2258,7 @@ WITH gains AS (
   JOIN accounts a ON t.acct = a.id
   WHERE a.name LIKE '%Ind Brokerage 6839%'
     AND t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
 )
 SELECT
   '1. Trailing 30 Days' AS "Time Window",
@@ -2320,6 +2324,7 @@ WITH daily_steps AS (
   JOIN accounts a ON t.acct = a.id
   WHERE a.name LIKE '%Ind Brokerage 6839%'
     AND t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
 ),
 cum_series AS (
   SELECT
@@ -2397,6 +2402,7 @@ WITH tx_cum AS (
   JOIN accounts a ON t.acct = a.id
   WHERE a.name LIKE '%Ind Brokerage 6839%'
     AND t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
 )
 SELECT
   "Recon Date" AS "Reconciliation Date",
@@ -2511,7 +2517,7 @@ ORDER BY date DESC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 19
+        "version": 20
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
