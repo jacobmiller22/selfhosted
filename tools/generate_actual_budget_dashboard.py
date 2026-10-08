@@ -254,6 +254,7 @@ incomes AS (
   WHERE t.tombstone = 0
     AND a.tombstone = 0
     AND a.closed = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
     AND c.is_income = 1
     AND t.amount > 0
     AND t.transferred_id IS NULL
@@ -334,6 +335,7 @@ incomes AS (
   WHERE t.tombstone = 0
     AND a.tombstone = 0
     AND a.closed = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
     AND c.is_income = 1
     AND t.amount > 0
     AND t.transferred_id IS NULL
@@ -621,6 +623,7 @@ incomes AS (
   WHERE t.tombstone = 0
     AND a.tombstone = 0
     AND a.closed = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
     AND c.is_income = 1
     AND t.amount > 0
     AND t.transferred_id IS NULL
@@ -1674,6 +1677,7 @@ checking_flows AS (
     AND a.closed = 0
     AND a.tombstone = 0
     AND a.offbudget = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
     AND a.name LIKE '%Checking%'
     AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
 )
@@ -2507,7 +2511,7 @@ ORDER BY date DESC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 18
+        "version": 19
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
