@@ -59,12 +59,13 @@ def make_dashboard():
 
 * **Total Net Worth**: *"What is your overall wealth across all assets and debts?"* Sum of all real estate home equity, 401(k), brokerage, IRAs, and bank balances minus all loans and credit cards.
 * **Liquid Cash in Hand**: *"How much cash could you deploy right now without selling investments or touching retirement?"* Sums checking, high-yield savings, and cash minus current credit card float.
-* **Financial Runway (Months)**: *"If all income stopped today, how many months can you pay your normal living bills before running out of liquid cash?"*
-  * **Thresholds**: 🟢 **>6 months** = Safe emergency cushion. 🟡 **3–6 months** = Caution / tight margin. 🔴 **<3 months** = Emergency mode.
-  * *Note: Calculates true living burn, excluding internal savings transfers, investment contributions, and one-off capital purchases.*
-* **Monthly Savings Rate (%)**: *"Out of every take-home dollar this month, how many cents stay in your pocket (saved or invested in brokerage/home equity) rather than getting consumed?"*
-  * **Thresholds**: 🟢 **≥25%** = Strong wealth building. 🟡 **10–25%** = Moderate. 🔴 **<10%** = Living paycheck-to-paycheck.
-* **Asset Allocation**: Distribution of your total wealth between Real Estate Equity, Retirement (401k/IRA/HSA), Taxable Brokerage, and Liquid Cash Reserves.
+* **Dynamic Runway Scenarios (Months)**:
+  * **Worst-Case: If Both Lose Jobs (Zero Income)**: *"If both Jacob and Priyanka lose all income today, how many months can combined liquid reserves cover full household living expenses with $0 coming in?"* 🟢 **>6 months** = Safe emergency cushion.
+  * **If Priyanka Loses Job (Jacob Working)**: *"If Priyanka's income stops while Jacob continues working, how many months will liquid cash reserves last to cover the net household living shortfall?"* 🟢 **>24 months** = Robust security moat.
+  * **If Jacob Loses Job (Priyanka Working)**: *"If Jacob's income stops while Priyanka continues working, how many months will liquid cash reserves last to cover the net household living shortfall?"* 🟢 **>12 months** = Safe cushion.
+* **Monthly Savings Rate (Trailing 30D)**: *"Out of every dollar earned over the rolling 30 days, how many cents stayed in your pocket rather than getting consumed?"* 🟢 **≥25%** = Strong wealth building. (Uses rolling 30-day window to eliminate early-month paycheck timing skew).
+* **Asset Allocation**: Distribution of your total wealth between Real Estate Equity (net of mortgage), Retirement (401k/IRA/HSA), Taxable Brokerage, Vehicle Equity (Tacoma + VW GTI net of South State car loan), and Liquid Cash Reserves (net of credit card float).
+* **Global Account Directory**: Authoritative classification matrix of all 34+ household accounts with live balances, balance sheet side, ownership, and segregation of paid-off/closed accounts.
 * **Needs vs Wants (50/30/20 Rule)**: Non-discretionary survival bills (housing, utilities, groceries, insurance) should stay under **50–60%** of living expenses. Discretionary (restaurants, entertainment, shopping) is your buffer to cut in tough months."""
         }
     })
@@ -74,16 +75,14 @@ def make_dashboard():
         "title": "Total Net Worth (Full Balance Sheet)",
         "description": "Plain English: Your entire financial net worth: sum of all cash, home equity, 401(k), brokerage, and retirement accounts minus all loans and credit card float.\n\nFormula: Total Net Worth = SUM(All Open Asset Accounts) - SUM(All Liabilities)",
         "type": "stat",
-        "gridPos": {"h": 5, "w": 6, "x": 0, "y": 5},
+        "gridPos": {"h": 5, "w": 4, "x": 0, "y": 5},
         "datasource": DS,
         "targets": [
             sql_target("A", """
 SELECT
-  ROUND(SUM(t.amount) / 100.0, 2) AS "Total Net Worth"
-FROM transactions t
-JOIN accounts a ON t.acct = a.id
-WHERE t.tombstone = 0
-  AND a.tombstone = 0
+  ROUND(SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0, 2) AS "Total Net Worth"
+FROM accounts a
+WHERE a.tombstone = 0
   AND a.closed = 0
 """)
         ],
@@ -111,29 +110,18 @@ WHERE t.tombstone = 0
     panels.append({
         "id": 102,
         "title": "Liquid Cash in Hand (Deployable Reserves)",
-        "description": "Plain English: How much cash you can instantly deploy right now without selling investments or touching retirement lockups. Sum of checking, joint savings, and cash minus credit card float.\n\nFormula: Liquid Cash = SUM(Checking + Savings + Cash - Credit Float)",
+        "description": "Plain English: How much cash you can instantly deploy right now without selling investments or touching retirement lockups. Sourced directly from live bank-synced account balances across all on-budget accounts (checking, credit card float) plus the off-budget joint savings account.\n\nFormula: Liquid Cash = SUM(Current Balance of On-Budget Accounts + Savings Joint)",
         "type": "stat",
-        "gridPos": {"h": 5, "w": 6, "x": 6, "y": 5},
+        "gridPos": {"h": 5, "w": 4, "x": 4, "y": 5},
         "datasource": DS,
         "targets": [
             sql_target("A", """
 SELECT
-  ROUND(SUM(t.amount) / 100.0, 2) AS "Liquid Cash in Hand"
-FROM transactions t
-JOIN accounts a ON t.acct = a.id
-WHERE t.tombstone = 0
-  AND a.tombstone = 0
+  ROUND(SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0, 2) AS "Liquid Cash in Hand"
+FROM accounts a
+WHERE a.tombstone = 0
   AND a.closed = 0
-  AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
-  AND a.name NOT LIKE '%Loan%'
-  AND a.name NOT LIKE '%Equity%'
-  AND a.name NOT LIKE '%401k%'
-  AND a.name NOT LIKE '%IRA%'
-  AND a.name NOT LIKE '%Ret Plan%'
-  AND a.name NOT LIKE '%Savings Plan%'
-  AND a.name NOT LIKE '%Brokerage%'
-  AND a.name NOT LIKE '%Stock%'
-  AND a.name NOT LIKE '%HSA%'
+  AND (a.offbudget = 0 OR a.name = 'Savings Joint')
 """)
         ],
         "fieldConfig": {
@@ -159,38 +147,31 @@ WHERE t.tombstone = 0
 
     panels.append({
         "id": 103,
-        "title": "Dynamic Financial Runway (Living Burn)",
-        "description": "Plain English: If all income stopped today, how many months can you cover your normal living overhead (housing, utilities, groceries, bills, pets) before running out of liquid cash?\n\nThresholds: 🟢 >6 months is safe emergency cushion, 🟡 3–6 months is cautious, 🔴 <3 months is emergency mode.\n\nFormula: Runway (Months) = Liquid Cash / Trailing 90-Day Monthly Operating Living Burn\n\nNote: Cleanly excludes internal savings transfers, investment contributions, and one-off capital purchases.",
+        "title": "Dynamic Runway: If Both Lose Jobs (Worst-Case Buffer)",
+        "description": "Plain English: If both Jacob and Priyanka were to lose all household income today, how many months can you cover your full living overhead (housing, groceries, utilities, bills, pets) before running out of liquid cash reserves with $0.00 coming in?\n\nThresholds: 🟢 >6 months is safe emergency cushion, 🟡 3–6 months is cautious, 🔴 <3 months is emergency mode.\n\nFormula: Runway (Months) = Liquid Cash / Trailing 90-Day Monthly Operating Living Burn\n\nNote: Cleanly excludes internal savings transfers, investment contributions, and paid-off/closed accounts.",
         "type": "gauge",
-        "gridPos": {"h": 5, "w": 6, "x": 12, "y": 5},
+        "gridPos": {"h": 5, "w": 4, "x": 8, "y": 5},
         "datasource": DS,
         "targets": [
             sql_target("A", """
 WITH liquid AS (
-  SELECT SUM(t.amount) / 100.0 AS bal
-  FROM transactions t
-  JOIN accounts a ON t.acct = a.id
-  WHERE t.tombstone = 0
-    AND a.tombstone = 0
+  SELECT SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0 AS bal
+  FROM accounts a
+  WHERE a.tombstone = 0
     AND a.closed = 0
-    AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
-    AND a.name NOT LIKE '%Loan%'
-    AND a.name NOT LIKE '%Equity%'
-    AND a.name NOT LIKE '%401k%'
-    AND a.name NOT LIKE '%IRA%'
-    AND a.name NOT LIKE '%Ret Plan%'
-    AND a.name NOT LIKE '%Savings Plan%'
-    AND a.name NOT LIKE '%Brokerage%'
-    AND a.name NOT LIKE '%Stock%'
-    AND a.name NOT LIKE '%HSA%'
+    AND (a.offbudget = 0 OR a.name = 'Savings Joint')
 ),
 operating_burn AS (
   SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -228,15 +209,177 @@ FROM liquid, operating_burn
     })
 
     panels.append({
-        "id": 104,
-        "title": "Monthly Savings & Retention Rate (%)",
-        "description": "Plain English: Out of every dollar deposited into your accounts this month, how many cents stay in your pocket (saved or invested in brokerage/home equity) rather than getting consumed?\n\nThresholds: 🟢 ≥25% is strong wealth accumulation, 🟡 10–25% is moderate, 🔴 <10% is tight.\n\nFormula: Savings Rate = ((Net Income - Operating Living Expenses) / Net Income) * 100%",
-        "type": "stat",
-        "gridPos": {"h": 5, "w": 6, "x": 18, "y": 5},
+        "id": 110,
+        "title": "Dynamic Runway: If Priyanka Loses Job (Jacob Working)",
+        "description": "Plain English: If Priyanka's income were to stop today while Jacob's income continues uninterrupted, how many months will liquid cash reserves last to cover the net household living shortfall?\n\nThresholds: 🟢 >24 months is a massive security moat, 🟡 12–24 months is healthy cushion, 🔴 <12 months is tight margin.\n\nFormula: Liquid Cash / MAX(0.01, Trailing 90-Day Living Burn - Jacob's Monthly Income)",
+        "type": "gauge",
+        "gridPos": {"h": 5, "w": 4, "x": 12, "y": 5},
         "datasource": DS,
         "targets": [
             sql_target("A", """
-WITH mtd AS (
+WITH liquid AS (
+  SELECT SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0 AS bal
+  FROM accounts a
+  WHERE a.tombstone = 0
+    AND a.closed = 0
+    AND (a.offbudget = 0 OR a.name = 'Savings Joint')
+),
+operating_burn AS (
+  SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  JOIN categories c ON t.category = c.id
+  JOIN category_groups g ON c.cat_group = g.id
+  LEFT JOIN payees p ON t.description = p.id
+  WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+    AND t.transferred_id IS NULL
+    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
+    AND c.is_income = 0
+    AND t.amount < 0
+    AND g.name NOT IN ('Investments and Savings', 'One-Time')
+    AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
+),
+incomes AS (
+  SELECT
+    COALESCE(SUM(CASE WHEN c.name LIKE '%[J]%' THEN t.amount ELSE 0 END) / 100.0 / 3.0, 0.0) AS j_income
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  JOIN categories c ON t.category = c.id
+  WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+    AND c.is_income = 1
+    AND t.amount > 0
+    AND t.transferred_id IS NULL
+    AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
+)
+SELECT
+  CASE
+    WHEN operating_burn.monthly_burn - incomes.j_income <= 0 THEN 120.0
+    ELSE ROUND(liquid.bal / (operating_burn.monthly_burn - incomes.j_income), 1)
+  END AS "Runway (Months)"
+FROM liquid, operating_burn, incomes
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "min": 0,
+                "max": 120,
+                "unit": "suffix: mo",
+                "color": {"mode": "thresholds"},
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "red", "value": None},
+                        {"color": "yellow", "value": 12.0},
+                        {"color": "green", "value": 24.0}
+                    ]
+                }
+            }
+        },
+        "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "showThresholdLabels": true,
+            "showThresholdMarkers": true
+        }
+    })
+
+    panels.append({
+        "id": 111,
+        "title": "Dynamic Runway: If Jacob Loses Job (Priyanka Working)",
+        "description": "Plain English: If Jacob's income were to stop today while Priyanka's income continues uninterrupted, how many months will liquid cash reserves last to cover the net household living shortfall?\n\nThresholds: 🟢 >12 months is safe, 🟡 6–12 months is caution, 🔴 <6 months is emergency mode.\n\nFormula: Liquid Cash / MAX(0.01, Trailing 90-Day Living Burn - Priyanka's Monthly Income)",
+        "type": "gauge",
+        "gridPos": {"h": 5, "w": 4, "x": 16, "y": 5},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH liquid AS (
+  SELECT SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0 AS bal
+  FROM accounts a
+  WHERE a.tombstone = 0
+    AND a.closed = 0
+    AND (a.offbudget = 0 OR a.name = 'Savings Joint')
+),
+operating_burn AS (
+  SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  JOIN categories c ON t.category = c.id
+  JOIN category_groups g ON c.cat_group = g.id
+  LEFT JOIN payees p ON t.description = p.id
+  WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+    AND t.transferred_id IS NULL
+    AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
+    AND c.is_income = 0
+    AND t.amount < 0
+    AND g.name NOT IN ('Investments and Savings', 'One-Time')
+    AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
+),
+incomes AS (
+  SELECT
+    COALESCE(SUM(CASE WHEN c.name LIKE '%[P]%' THEN t.amount ELSE 0 END) / 100.0 / 3.0, 0.0) AS p_income
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  JOIN categories c ON t.category = c.id
+  WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+    AND c.is_income = 1
+    AND t.amount > 0
+    AND t.transferred_id IS NULL
+    AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
+)
+SELECT
+  CASE
+    WHEN operating_burn.monthly_burn - incomes.p_income <= 0 THEN 120.0
+    ELSE ROUND(liquid.bal / (operating_burn.monthly_burn - incomes.p_income), 1)
+  END AS "Runway (Months)"
+FROM liquid, operating_burn, incomes
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "min": 0,
+                "max": 60,
+                "unit": "suffix: mo",
+                "color": {"mode": "thresholds"},
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "red", "value": None},
+                        {"color": "yellow", "value": 6.0},
+                        {"color": "green", "value": 12.0}
+                    ]
+                }
+            }
+        },
+        "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "showThresholdLabels": true,
+            "showThresholdMarkers": true
+        }
+    })
+
+    panels.append({
+        "id": 104,
+        "title": "Monthly Savings & Retention Rate (T-30D)",
+        "description": "Plain English: Out of every dollar deposited into your accounts over the trailing 30 days, how many cents stay in your pocket (saved or invested in brokerage/home equity) rather than getting consumed?\n\nThresholds: 🟢 ≥25% is strong wealth accumulation, 🟡 10–25% is moderate, 🔴 <10% is tight.\n\nFormula: Savings Rate = ((Net Income - Operating Living Expenses) / Net Income) * 100% (Trailing 30-Day Rolling Window)\n\nNote: Uses a rolling 30-day window to eliminate artificial 0% early-month paycheck timing skew.",
+        "type": "stat",
+        "gridPos": {"h": 5, "w": 4, "x": 20, "y": 5},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH t30 AS (
   SELECT
     COALESCE(SUM(CASE WHEN c.is_income = 1 AND t.amount > 0 AND t.transferred_id IS NULL THEN t.amount ELSE 0 END) / 100.0, 0.0) AS income,
     COALESCE(ABS(SUM(CASE
@@ -247,11 +390,16 @@ WITH mtd AS (
         AND g.name NOT IN ('Investments and Savings', 'One-Time')
       THEN t.amount ELSE 0 END)) / 100.0, 0.0) AS operating_expenses
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   LEFT JOIN categories c ON t.category = c.id
   LEFT JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
-    AND t.date >= CAST(strftime('%Y%m01', 'now') AS INTEGER)
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+    AND t.date >= CAST(strftime('%Y%m%d', date('now', '-30 day')) AS INTEGER)
     AND t.category IS NOT NULL
 )
 SELECT
@@ -259,7 +407,7 @@ SELECT
     WHEN income <= 0 THEN 0.0
     ELSE ROUND(((income - operating_expenses) / income) * 100.0, 1)
   END AS "Savings Rate (%)"
-FROM mtd
+FROM t30
 """)
         ],
         "fieldConfig": {
@@ -286,7 +434,7 @@ FROM mtd
     panels.append({
         "id": 107,
         "title": "Asset Class Allocation (Full Balance Sheet)",
-        "description": "Plain English: How your entire net worth is distributed across primary asset classes: Real Estate Equity, Retirement & Tax-Advantaged (401k, IRAs, HSA), Taxable Brokerage Investments, and Liquid Cash Reserves.\n\nFormula: SUM(Open Asset Balances) grouped by Asset Class\n\nAction: Maintain a balanced asset portfolio aligned with long-term financial independence goals.",
+        "description": "Plain English: How your entire net worth is distributed across primary asset classes: Real Estate Equity (House minus Mortgage), Retirement & Tax-Advantaged (401k, IRAs, HSA), Taxable Brokerage Investments, Vehicle Equity (Tacoma + VW GTI minus South State auto loan), and Liquid Cash Reserves (net of credit card float).\n\nFormula: SUM(Open Asset Balances) grouped by Asset Class\n\nAction: Maintain a balanced asset portfolio aligned with long-term financial independence goals.",
         "type": "piechart",
         "gridPos": {"h": 7, "w": 8, "x": 0, "y": 10},
         "datasource": DS,
@@ -294,22 +442,19 @@ FROM mtd
             sql_target("A", """
 SELECT
   CASE
-    WHEN a.name LIKE '%Equity%' THEN '🏡 Real Estate Equity'
+    WHEN a.name LIKE '%Equity%' OR a.name = 'House' OR a.name = 'Mortgage' THEN '🏡 Real Estate Equity'
     WHEN a.name LIKE '%401k%' OR a.name LIKE '%IRA%' OR a.name LIKE '%Ret Plan%' OR a.name LIKE '%Savings Plan%' OR a.name LIKE '%HSA%' THEN '📈 Retirement & Tax-Advantaged'
     WHEN a.name LIKE '%Brokerage%' OR a.name LIKE '%Stock%' THEN '📊 Taxable Investments'
-    WHEN a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%' OR a.name LIKE '%Venmo%' OR a.name LIKE '%LSA%' THEN '💵 Liquid Cash & Bank Reserves'
+    WHEN a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' OR a.name LIKE '%Vehicle%' OR a.name LIKE '%Auto%' OR a.name LIKE '%South State Loan%' THEN '🚗 Vehicle Equity'
+    WHEN a.offbudget = 0 OR a.name = 'Savings Joint' THEN '💵 Liquid Cash & Bank Reserves'
     ELSE '📦 Other Assets'
   END AS "Asset Class",
-  ROUND(SUM(t.amount) / 100.0, 2) AS "Balance ($)"
-FROM transactions t
-JOIN accounts a ON t.acct = a.id
-WHERE t.tombstone = 0
-  AND a.tombstone = 0
+  ROUND(SUM(COALESCE(a.balance_current, (SELECT SUM(t2.amount) FROM transactions t2 WHERE t2.acct = a.id AND t2.tombstone = 0 AND (t2.isParent IS NULL OR t2.isParent = 0)), 0)) / 100.0, 2) AS "Balance ($)"
+FROM accounts a
+WHERE a.tombstone = 0
   AND a.closed = 0
-  AND a.name NOT LIKE '%Loan%'
-  AND a.name NOT LIKE '%Card%'
 GROUP BY 1
-HAVING SUM(t.amount) > 0
+HAVING "Balance ($)" > 0
 ORDER BY 2 DESC
 """)
         ],
@@ -339,7 +484,7 @@ SELECT
   CASE
     WHEN g.name = 'Investments and Savings' THEN '💰 Wealth Building & Savings'
     WHEN c.name LIKE '%Tax%' OR g.name LIKE '%Tax%' OR g.name = 'One-Time' THEN '🏛️ Taxes & Sinking Funds'
-    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Bills [P]', 'Gas', 'Gas [J]', 'Gas [P]', 'Car Maintenance', 'Car Maintenance [J]', 'Car Maintenance [P]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
          OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed') THEN '🛡️ Core Living Needs'
     ELSE '🎯 Discretionary & Lifestyle'
   END AS "Budget Pillar",
@@ -374,7 +519,7 @@ ORDER BY 2 DESC
     panels.append({
         "id": 105,
         "title": "Needs vs. Wants: Trailing 30-Day Living Expense Split",
-        "description": "Plain English: 3-way breakdown of your trailing 30-day operating spend across:\n1. 🛡️ Core Living Needs: Essential survival overhead (housing, utilities/bills, groceries, dog care, transportation)\n2. 🎯 Discretionary (Wants): Lifestyle & fun choices (dining, entertainment, shopping, subscriptions)\n3. 🏛️ Taxes & Statutory: Non-controllable obligations (personal property taxes, tax prep/settlements)\n\nNote: Slices your $5.9k/mo living outlays only; cleanly excludes internal account transfers, brokerage/equity investments, and one-off capital purchases.",
+        "description": "Plain English: 3-way breakdown of your trailing 30-day operating spend across:\n1. 🛡️ Core Living Needs: Essential survival overhead (housing, utilities/bills, groceries, dog care, transportation)\n2. 🎯 Discretionary (Wants): Lifestyle & fun choices (dining, entertainment, shopping, subscriptions)\n3. 🏛️ Taxes & Statutory: Non-controllable obligations (personal property taxes, tax prep/settlements)\n\nNote: Slices your living outlays only; cleanly excludes internal account transfers, brokerage/equity investments, and one-off capital purchases.",
         "type": "piechart",
         "gridPos": {"h": 7, "w": 8, "x": 16, "y": 10},
         "datasource": DS,
@@ -383,17 +528,21 @@ ORDER BY 2 DESC
 SELECT
   CASE
     WHEN c.name LIKE '%Tax%' OR g.name LIKE '%Tax%' THEN '🏛️ Taxes & Statutory'
-    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+    WHEN c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Bills [P]', 'Gas', 'Gas [J]', 'Gas [P]', 'Car Maintenance', 'Car Maintenance [J]', 'Car Maintenance [P]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
          OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed')
          THEN '🛡️ Core Living Needs'
     ELSE '🎯 Discretionary (Wants)'
   END AS "Expense Type",
   ROUND(ABS(SUM(t.amount)) / 100.0, 2) AS "Amount ($)"
 FROM transactions t
+JOIN accounts a ON t.acct = a.id
 JOIN categories c ON t.category = c.id
 JOIN category_groups g ON c.cat_group = g.id
 LEFT JOIN payees p ON t.description = p.id
 WHERE t.tombstone = 0
+  AND a.tombstone = 0
+  AND a.closed = 0
+  AND a.offbudget = 0
   AND (t.isParent IS NULL OR t.isParent = 0)
   AND t.transferred_id IS NULL
   AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -434,30 +583,25 @@ ORDER BY 2 DESC
             sql_target("A", """
 WITH 
 liquid AS (
-  SELECT SUM(t.amount) / 100.0 AS bal
-  FROM transactions t
-  JOIN accounts a ON t.acct = a.id
-  WHERE t.tombstone = 0
-    AND a.tombstone = 0
+  SELECT SUM(COALESCE(a.balance_current, (SELECT SUM(t.amount) FROM transactions t WHERE t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)), 0)) / 100.0 AS bal
+  FROM accounts a
+  WHERE a.tombstone = 0
     AND a.closed = 0
-    AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
-    AND a.name NOT LIKE '%Loan%'
-    AND a.name NOT LIKE '%Equity%'
-    AND a.name NOT LIKE '%401k%'
-    AND a.name NOT LIKE '%IRA%'
-    AND a.name NOT LIKE '%Ret Plan%'
-    AND a.name NOT LIKE '%Savings Plan%'
-    AND a.name NOT LIKE '%Brokerage%'
-    AND a.name NOT LIKE '%Stock%'
-    AND a.name NOT LIKE '%HSA%'
+    AND (a.offbudget = 0 OR a.name = 'Savings Joint')
 ),
 operating_burn AS (
-  SELECT MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn
+  SELECT 
+    MAX(1.0, ABS(SUM(t.amount)) / 100.0 / 3.0) AS monthly_burn,
+    MAX(1.0, (ABS(SUM(CASE WHEN g.name = 'Fun' THEN t.amount * 0.75 ELSE t.amount END))) / 100.0 / 3.0) AS cutback_burn
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -466,11 +610,45 @@ operating_burn AS (
     AND g.name NOT IN ('Investments and Savings', 'One-Time')
     AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
 ),
-runway_calc AS (
-  SELECT ROUND(liquid.bal / operating_burn.monthly_burn, 1) AS runway_mo
-  FROM liquid, operating_burn
+incomes AS (
+  SELECT
+    COALESCE(SUM(CASE WHEN c.name LIKE '%[J]%' THEN t.amount ELSE 0 END) / 100.0 / 3.0, 0.0) AS j_income,
+    COALESCE(SUM(CASE WHEN c.name LIKE '%[P]%' THEN t.amount ELSE 0 END) / 100.0 / 3.0, 0.0) AS p_income
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  JOIN categories c ON t.category = c.id
+  WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+    AND c.is_income = 1
+    AND t.amount > 0
+    AND t.transferred_id IS NULL
+    AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
 ),
-mtd_flow AS (
+runway_calc AS (
+  SELECT
+    ROUND(liquid.bal / operating_burn.monthly_burn, 1) AS runway_zero_base,
+    ROUND(liquid.bal / operating_burn.cutback_burn, 1) AS runway_zero_cut,
+    CASE
+      WHEN operating_burn.monthly_burn - incomes.j_income <= 0 THEN 120.0
+      ELSE ROUND(liquid.bal / (operating_burn.monthly_burn - incomes.j_income), 1)
+    END AS runway_p_stops_base,
+    CASE
+      WHEN operating_burn.cutback_burn - incomes.j_income <= 0 THEN 120.0
+      ELSE ROUND(liquid.bal / (operating_burn.cutback_burn - incomes.j_income), 1)
+    END AS runway_p_stops_cut,
+    CASE
+      WHEN operating_burn.monthly_burn - incomes.p_income <= 0 THEN 120.0
+      ELSE ROUND(liquid.bal / (operating_burn.monthly_burn - incomes.p_income), 1)
+    END AS runway_j_stops_base,
+    CASE
+      WHEN operating_burn.cutback_burn - incomes.p_income <= 0 THEN 120.0
+      ELSE ROUND(liquid.bal / (operating_burn.cutback_burn - incomes.p_income), 1)
+    END AS runway_j_stops_cut
+  FROM liquid, operating_burn, incomes
+),
+t30_flow AS (
   SELECT
     COALESCE(SUM(CASE WHEN c.is_income = 1 AND t.amount > 0 AND t.transferred_id IS NULL THEN t.amount ELSE 0 END) / 100.0, 0.0) AS income,
     COALESCE(ABS(SUM(CASE
@@ -481,26 +659,31 @@ mtd_flow AS (
         AND g.name NOT IN ('Investments and Savings', 'One-Time')
       THEN t.amount ELSE 0 END)) / 100.0, 0.0) AS operating_expenses
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   LEFT JOIN categories c ON t.category = c.id
   LEFT JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
-    AND t.date >= CAST(strftime('%Y%m01', 'now') AS INTEGER)
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+    AND t.date >= CAST(strftime('%Y%m%d', date('now', '-30 day')) AS INTEGER)
     AND t.category IS NOT NULL
 ),
 savings_rate AS (
   SELECT 
     CASE WHEN income <= 0 THEN 0.0 ELSE ROUND(((income - operating_expenses) / income) * 100.0, 1) END AS rate
-  FROM mtd_flow
+  FROM t30_flow
 ),
 budget_alloc AS (
   SELECT
     SUM(CASE WHEN g.name = 'Investments and Savings' THEN b.amount ELSE 0 END) / 100.0 AS savings_b,
-    SUM(CASE WHEN (c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+    SUM(CASE WHEN (c.name IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Bills [P]', 'Gas', 'Gas [J]', 'Gas [P]', 'Car Maintenance', 'Car Maintenance [J]', 'Car Maintenance [P]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
                    OR g.name IN ('Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed'))
                   AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%') THEN b.amount ELSE 0 END) / 100.0 AS needs_b,
     SUM(CASE WHEN g.name = 'Fun' OR (g.name NOT IN ('Investments and Savings', 'One-Time', 'Bills', 'Utilities', 'Housing', 'Debt', 'Essential', 'Fixed')
-                                     AND c.name NOT IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Gas', 'Gas [J]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
+                                     AND c.name NOT IN ('Housing', 'Groceries', 'Food', 'Bills', 'Bills [J]', 'Bills [P]', 'Gas', 'Gas [J]', 'Gas [P]', 'Car Maintenance', 'Car Maintenance [J]', 'Car Maintenance [P]', 'Work Lunch', 'Work Lunch [J]', 'Work Lunch [P]', 'Dog')
                                      AND NOT (c.name LIKE '%Tax%' OR g.name LIKE '%Tax%')) THEN b.amount ELSE 0 END) / 100.0 AS wants_b,
     SUM(b.amount) / 100.0 AS total_b
   FROM zero_budgets b
@@ -512,10 +695,14 @@ budget_alloc AS (
 mtd_spend AS (
   SELECT ABS(SUM(t.amount)) / 100.0 AS actual_mtd
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -539,15 +726,55 @@ days_calc AS (
     CAST(strftime('%d', date(strftime('%Y-%m-01', 'now'), '+1 month', '-1 day')) AS REAL) AS days_in_month
 )
 SELECT 
-  'Dynamic Runway (Panel 103)' AS "Visual / Dimension",
-  printf('%.1f mo', runway_calc.runway_mo) AS "Current Performance",
+  'Runway: Both Lose Jobs - Baseline (Panel 103)' AS "Visual / Dimension",
+  printf('%.1f mo', runway_calc.runway_zero_base) AS "Current Performance",
   '≥ 6.0 mo' AS "Benchmark Target",
-  printf('+%.1f mo cushion', runway_calc.runway_mo - 6.0) AS "Buffer / Variance",
-  CASE WHEN runway_calc.runway_mo >= 6.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_mo >= 3.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END AS "Status Indicator"
+  printf('+%.1f mo cushion', runway_calc.runway_zero_base - 6.0) AS "Buffer / Variance",
+  CASE WHEN runway_calc.runway_zero_base >= 6.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_zero_base >= 3.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END AS "Status Indicator"
 FROM runway_calc
 UNION ALL
 SELECT 
-  'Savings Rate (Panel 104)',
+  'Runway: Both Lose Jobs - 25% Fun Cutback',
+  printf('%.1f mo', runway_calc.runway_zero_cut),
+  '≥ 6.0 mo',
+  printf('+%.1f mo cushion', runway_calc.runway_zero_cut - 6.0),
+  CASE WHEN runway_calc.runway_zero_cut >= 6.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_zero_cut >= 3.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
+FROM runway_calc
+UNION ALL
+SELECT 
+  'Runway: If Priyanka Loses Job - Baseline (Panel 110)',
+  CASE WHEN runway_calc.runway_p_stops_base >= 120.0 THEN '≥ 10 yrs (Surplus)' ELSE printf('%.1f mo', runway_calc.runway_p_stops_base) END,
+  '≥ 24.0 mo',
+  CASE WHEN runway_calc.runway_p_stops_base >= 24.0 THEN printf('+%.1f mo moat', runway_calc.runway_p_stops_base - 24.0) ELSE printf('%.1f mo gap', runway_calc.runway_p_stops_base - 24.0) END,
+  CASE WHEN runway_calc.runway_p_stops_base >= 24.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_p_stops_base >= 12.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
+FROM runway_calc
+UNION ALL
+SELECT 
+  'Runway: If Priyanka Loses Job - 25% Fun Cutback',
+  CASE WHEN runway_calc.runway_p_stops_cut >= 120.0 THEN '≥ 10 yrs (Surplus)' ELSE printf('%.1f mo', runway_calc.runway_p_stops_cut) END,
+  '≥ 24.0 mo',
+  CASE WHEN runway_calc.runway_p_stops_cut >= 24.0 THEN printf('+%.1f mo moat', runway_calc.runway_p_stops_cut - 24.0) ELSE printf('%.1f mo gap', runway_calc.runway_p_stops_cut - 24.0) END,
+  CASE WHEN runway_calc.runway_p_stops_cut >= 24.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_p_stops_cut >= 12.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
+FROM runway_calc
+UNION ALL
+SELECT 
+  'Runway: If Jacob Loses Job - Baseline (Panel 111)',
+  printf('%.1f mo', runway_calc.runway_j_stops_base),
+  '≥ 12.0 mo',
+  CASE WHEN runway_calc.runway_j_stops_base >= 12.0 THEN printf('+%.1f mo moat', runway_calc.runway_j_stops_base - 12.0) ELSE printf('%.1f mo gap', runway_calc.runway_j_stops_base - 12.0) END,
+  CASE WHEN runway_calc.runway_j_stops_base >= 12.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_j_stops_base >= 6.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
+FROM runway_calc
+UNION ALL
+SELECT 
+  'Runway: If Jacob Loses Job - 25% Fun Cutback',
+  printf('%.1f mo', runway_calc.runway_j_stops_cut),
+  '≥ 12.0 mo',
+  CASE WHEN runway_calc.runway_j_stops_cut >= 12.0 THEN printf('+%.1f mo moat', runway_calc.runway_j_stops_cut - 12.0) ELSE printf('%.1f mo gap', runway_calc.runway_j_stops_cut - 12.0) END,
+  CASE WHEN runway_calc.runway_j_stops_cut >= 12.0 THEN '🟢 OPTIMAL' WHEN runway_calc.runway_j_stops_cut >= 6.0 THEN '🟡 CAUTION' ELSE '🔴 CRITICAL' END
+FROM runway_calc
+UNION ALL
+SELECT 
+  'Savings Rate (T-30D) (Panel 104)',
   printf('%.1f%%', savings_rate.rate),
   '≥ 25.0%',
   printf('%+.1f%% vs target', savings_rate.rate - 25.0),
@@ -622,6 +849,78 @@ SELECT
         }
     })
 
+    panels.append({
+        "id": 112,
+        "title": "🏛️ Global Account Directory & Strict Classification Matrix",
+        "description": "Plain English: Authoritative directory of all financial accounts in your household portfolio, classifying every account into its strict balance sheet category (Liquid Cash, Credit Card Float, Real Estate, Debt, Vehicles, Retirement, Taxable Investments), designating ownership (Jacob, Priyanka, Joint), and verifying that paid-off/closed accounts are segregated and excluded from liquid reserves.\n\nAction: Use this matrix to audit account classifications, verify live balances, and ensure zero untracked accounts.",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 25},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+SELECT
+  a.name AS "Account",
+  CASE
+    WHEN a.name LIKE '%[P]%' OR a.name LIKE '%GTI%' THEN 'Priyanka'
+    WHEN a.name LIKE '%[J]%' OR a.name LIKE '%Tacoma%' THEN 'Jacob'
+    ELSE 'Joint / Household'
+  END AS "Owner",
+  CASE
+    WHEN a.closed = 1 THEN '⚪ Paid Off / Closed'
+    WHEN a.name LIKE '%Card%' THEN '💳 Credit Card Float'
+    WHEN a.name LIKE '%South State Loan%' THEN '🚗 Auto Loan (VW GTI)'
+    WHEN a.name LIKE '%Loan%' THEN '🏛️ Installment Loans'
+    WHEN a.name = 'Mortgage' THEN '🏡 Mortgage Debt'
+    WHEN a.name = 'House' OR a.name LIKE '%Equity%' THEN '🏡 Real Estate'
+    WHEN a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' OR a.name LIKE '%Vehicle%' OR a.name LIKE '%Auto%' THEN '🚗 Vehicles'
+    WHEN a.name LIKE '%401k%' OR a.name LIKE '%IRA%' OR a.name LIKE '%Ret Plan%' OR a.name LIKE '%Savings Plan%' OR a.name LIKE '%HSA%' THEN '📈 Retirement & Tax-Advantaged'
+    WHEN a.name LIKE '%Brokerage%' OR a.name LIKE '%Stock%' THEN '📊 Taxable Investments'
+    WHEN a.offbudget = 0 OR a.name = 'Savings Joint' THEN '💵 Liquid Cash & Reserves'
+    ELSE '📦 Other Assets'
+  END AS "Category",
+  CASE
+    WHEN a.name LIKE '%Card%' OR a.name LIKE '%Loan%' OR a.name = 'Mortgage' THEN 'Liability'
+    ELSE 'Asset'
+  END AS "Side",
+  CASE
+    WHEN a.closed = 1 THEN '⚪ Closed / Paid'
+    ELSE '🟢 Active'
+  END AS "Status",
+  ROUND(COALESCE(a.balance_current, SUM(t.amount), 0) / 100.0, 2) AS "Balance ($)",
+  CASE
+    WHEN a.closed = 1 THEN '❌ Excluded (Paid/Closed)'
+    WHEN a.name LIKE '%Card%' AND a.offbudget = 0 THEN '⚠️ Deducted as Float'
+    WHEN a.name LIKE '%Loan%' OR a.name = 'Mortgage' THEN '❌ Excluded (Debt)'
+    WHEN a.name = 'House' OR a.name LIKE '%Equity%' OR a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' THEN '❌ Excluded (Illiquid Fixed)'
+    WHEN a.name LIKE '%401k%' OR a.name LIKE '%IRA%' OR a.name LIKE '%Ret Plan%' OR a.name LIKE '%Savings Plan%' OR a.name LIKE '%HSA%' THEN '❌ Excluded (Retirement)'
+    WHEN a.name LIKE '%Brokerage%' OR a.name LIKE '%Stock%' THEN '❌ Excluded (Investments)'
+    WHEN a.offbudget = 1 AND a.name != 'Savings Joint' THEN '❌ Excluded (Off-Budget)'
+    WHEN a.offbudget = 0 OR a.name = 'Savings Joint' THEN '✅ Included (Liquid Reserve)'
+    ELSE '❌ Excluded'
+  END AS "Liquid Runway Role"
+FROM accounts a
+LEFT JOIN transactions t ON t.acct = a.id AND t.tombstone = 0 AND (t.isParent IS NULL OR t.isParent = 0)
+WHERE a.tombstone = 0
+GROUP BY a.id
+ORDER BY a.closed ASC, "Category" ASC, a.name ASC
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "custom": {"align": "auto"}
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "Balance ($)"},
+                    "properties": [{"id": "unit", "value": "currencyUSD"}]
+                }
+            ]
+        },
+        "options": {
+            "showHeader": true
+        }
+    })
+
     # -------------------------------------------------------------
     # SECTION 2: Cash Flow Dynamics & Spend Velocity
     # -------------------------------------------------------------
@@ -630,14 +929,14 @@ SELECT
         "title": "2. Cash Flow Dynamics & Spend Velocity",
         "type": "row",
         "collapsed": false,
-        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 25}
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 33}
     })
 
     panels.append({
         "id": 201,
         "title": "📖 Layman's Guide: Spend Velocity & Cash Flow Dynamics",
         "type": "text",
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 26},
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 34},
         "options": {
             "mode": "markdown",
             "content": """### 💡 How to Read Spend Velocity & Cash Flow Dynamics
@@ -656,7 +955,7 @@ SELECT
         "title": "Cumulative Month-to-Date Spend Velocity Curve",
         "description": "Plain English: Monthly spending speedometer: are you burning cash too fast early in the month? If the curve climbs steeply in the first 10 days, you are on pace to run out of money before the end of the month.\n\nSeries:\n- Current Month Cumulative Spend ($)\n- 3-Month Trailing Average Pace ($)\n- Budget Pace Ceiling Envelope ($)\n\nAction: If Current Month line crosses above the Budget Envelope, pause discretionary purchases.",
         "type": "timeseries",
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 38},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -672,10 +971,14 @@ current_m AS (
     CAST(substr(CAST(t.date AS TEXT), 7, 2) AS INTEGER) AS day_num,
     ABS(SUM(t.amount)) / 100.0 AS daily_spend
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -690,10 +993,14 @@ prior_3m AS (
     CAST(substr(CAST(t.date AS TEXT), 7, 2) AS INTEGER) AS day_num,
     (ABS(SUM(t.amount)) / 100.0) / 3.0 AS avg_daily_spend
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -766,7 +1073,7 @@ ORDER BY d ASC
         "title": "Money Flow: Category Groups to Payees",
         "description": "Plain English: A visual river of your money showing where cash drains into specific category buckets and merchants over the trailing 60 days.\n\nAction: Examine large drains to identify targets for recurring bill renegotiation.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 30},
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -781,6 +1088,9 @@ LEFT JOIN categories c ON t.category = c.id
 LEFT JOIN category_groups g ON c.cat_group = g.id
 LEFT JOIN payees p ON t.description = p.id
 WHERE t.tombstone = 0
+  AND a.tombstone = 0
+  AND a.closed = 0
+  AND a.offbudget = 0
   AND (t.isParent IS NULL OR t.isParent = 0)
   AND t.transferred_id IS NULL
   AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -809,7 +1119,7 @@ LIMIT 25
         "title": "Temporal Spend Heatmap (Day of Week vs Month Period)",
         "description": "Plain English: A calendar map showing your personal danger zones. Are you blowing your budget on Friday nights? Do bill clusters on the 1st or 15th catch you off guard?\n\nAction: Adjust discretionary weekend budgets if Friday/Saturday spend dominates.",
         "type": "table",
-        "gridPos": {"h": 7, "w": 24, "x": 0, "y": 38},
+        "gridPos": {"h": 7, "w": 24, "x": 0, "y": 46},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -831,10 +1141,14 @@ SELECT
   END AS "Period of Month",
   ROUND(ABS(SUM(t.amount)) / 100.0, 2) AS "Total Spend ($)"
 FROM transactions t
+JOIN accounts a ON t.acct = a.id
 JOIN categories c ON t.category = c.id
 JOIN category_groups g ON c.cat_group = g.id
 LEFT JOIN payees p ON t.description = p.id
 WHERE t.tombstone = 0
+  AND a.tombstone = 0
+  AND a.closed = 0
+  AND a.offbudget = 0
   AND (t.isParent IS NULL OR t.isParent = 0)
   AND t.transferred_id IS NULL
   AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -865,14 +1179,14 @@ ORDER BY 3 DESC
         "title": "3. Statistical Anomaly & Outlier Detection Engine",
         "type": "row",
         "collapsed": false,
-        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 45}
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 53}
     })
 
     panels.append({
         "id": 301,
         "title": "📖 Layman's Guide: Statistical Anomaly Radar & Volatility Index",
         "type": "text",
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 46},
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 54},
         "options": {
             "mode": "markdown",
             "content": """### 💡 How to Read Anomaly Detection & Volatility Scores
@@ -893,7 +1207,7 @@ ORDER BY 3 DESC
         "title": "Transaction Z-Score Outlier Radar (Whoa, What Was That?!)",
         "description": "Plain English: The 'Whoa, what was that?!' detector. This automatically hunts down weird charges that are way higher than what you normally spend in that category — like an unexpected $300 car repair, an accidental double charge, or a crazy restaurant bill.\n\nFormula: Z = (Amount - Mean_category) / StdDev_category\n\nThresholds:\n- 🔴 Extreme Outlier: Z >= 3.5 (over 3.5 standard deviations above normal)\n- 🟠 Significant Anomaly: Z >= 2.5\n- 🟡 Moderate Spike: Z >= 2.0\n\nAction: Verify payee for double-billing or fraud.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 14, "x": 0, "y": 50},
+        "gridPos": {"h": 8, "w": 14, "x": 0, "y": 58},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -904,10 +1218,14 @@ WITH stats AS (
     SQRT(MAX(1.0, AVG((ABS(t.amount)/100.0) * (ABS(t.amount)/100.0)) - (AVG(ABS(t.amount)/100.0) * AVG(ABS(t.amount)/100.0)))) AS std_amt,
     COUNT(*) AS tx_count
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -931,11 +1249,15 @@ SELECT
     ELSE '🟡 Moderate Spike'
   END AS "Anomaly Level"
 FROM transactions t
+JOIN accounts a ON t.acct = a.id
 JOIN categories c ON t.category = c.id
 JOIN category_groups g ON c.cat_group = g.id
 JOIN stats s ON t.category = s.category
 LEFT JOIN payees p ON t.description = p.id
 WHERE t.tombstone = 0
+  AND a.tombstone = 0
+  AND a.closed = 0
+  AND a.offbudget = 0
   AND (t.isParent IS NULL OR t.isParent = 0)
   AND t.transferred_id IS NULL
   AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -973,7 +1295,7 @@ LIMIT 20
         "title": "Category Spend Volatility Index (Predictability Score)",
         "description": "Plain English: The Predictability Score. Some bills are robotic and predictable (like your Netflix subscription or rent). Other categories go wild from month to month (like medical or home repair). High scores here show the categories that constantly wreck your budget predictability.\n\nFormula: CV = StdDev / Mean (Coefficient of Variation)\n\nThresholds: High CV (>1.0) means highly volatile and erratic spending.\n\nAction: Set up dedicated sinking funds or higher cash cushions for categories with high volatility scores.",
         "type": "bargauge",
-        "gridPos": {"h": 8, "w": 10, "x": 14, "y": 50},
+        "gridPos": {"h": 8, "w": 10, "x": 14, "y": 58},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -981,10 +1303,14 @@ SELECT
   c.name AS "Category",
   ROUND(SQRT(MAX(0.01, AVG((ABS(t.amount)/100.0)*(ABS(t.amount)/100.0)) - (AVG(ABS(t.amount)/100.0)*AVG(ABS(t.amount)/100.0)))) / MAX(1.0, AVG(ABS(t.amount)/100.0)), 2) AS "Volatility Index (CV)"
 FROM transactions t
+JOIN accounts a ON t.acct = a.id
 JOIN categories c ON t.category = c.id
 JOIN category_groups g ON c.cat_group = g.id
 LEFT JOIN payees p ON t.description = p.id
 WHERE t.tombstone = 0
+  AND a.tombstone = 0
+  AND a.closed = 0
+  AND a.offbudget = 0
   AND (t.isParent IS NULL OR t.isParent = 0)
   AND t.transferred_id IS NULL
   AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1027,14 +1353,14 @@ LIMIT 12
         "title": "4. Merchant & Payee Intelligence",
         "type": "row",
         "collapsed": false,
-        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 58}
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 66}
     })
 
     panels.append({
         "id": 401,
         "title": "📖 Layman's Guide: Merchant Intelligence & Price Creep",
         "type": "text",
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 59},
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 67},
         "options": {
             "mode": "markdown",
             "content": r"""### 💡 How to Read Merchant & Payee Intelligence
@@ -1055,7 +1381,7 @@ LIMIT 12
         "title": "Pareto 80/20 Top Merchants (80% of Budget)",
         "description": "Plain English: The 80/20 rule: You probably spend 80% of all your money at just a tiny handful of merchants (e.g. Amazon, Grocery Store, Landlord). This panel shows you the exact top places taking almost all your cash.\n\nFormula: Trailing 90-day spend per merchant and percentage of total spend.\n\nAction: Negotiate recurring rates or shop for bulk discounts at top-ranked merchants.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 8, "x": 0, "y": 63},
+        "gridPos": {"h": 8, "w": 8, "x": 0, "y": 71},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1069,6 +1395,9 @@ WITH payee_spend AS (
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1115,7 +1444,7 @@ LIMIT 12
         "title": "Subscription & Price Creep Tracker",
         "description": "Plain English: The Stealth Price Hike Detector. Did your internet bill sneak up by $15? Did Spotify quietly bump their monthly price? This compares consecutive recurring bills and flags whenever a subscription got more expensive.\n\nFormula: Delta = Current_Charge - Previous_Charge where Delta >= $1.00\n\nAction: Cancel subscriptions you no longer use, or call retention departments to restore promotional rates.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 8, "x": 8, "y": 63},
+        "gridPos": {"h": 8, "w": 8, "x": 8, "y": 71},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1134,10 +1463,14 @@ WITH recurring AS (
       ORDER BY t.date ASC
     ) AS prev_date
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1229,7 +1562,7 @@ LIMIT 10
         "title": "Merchant Frequency vs Ticket Size Matrix",
         "description": "Plain English: Are you dying from 1,000 tiny papercuts (like buying $6 coffees 25 times a month) or from a few giant blows (like $500 gear splurges)? This separates your spending habits into frequency vs cost.\n\nProfiles:\n- ☕ Papercut Habit (High frequency, ticket <= $25)\n- ⚡ Heavy Regular (High frequency, ticket > $100)\n- 💣 Heavy Splurge / Giant Blow (Low frequency, ticket > $200)\n\nAction: Target papercuts for daily habit shifts; budget upfront for large single splurges.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 63},
+        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 71},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1250,6 +1583,9 @@ JOIN categories c ON t.category = c.id
 JOIN category_groups g ON c.cat_group = g.id
 LEFT JOIN payees p ON t.description = p.id
 WHERE t.tombstone = 0
+  AND a.tombstone = 0
+  AND a.closed = 0
+  AND a.offbudget = 0
   AND (t.isParent IS NULL OR t.isParent = 0)
   AND t.transferred_id IS NULL
   AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1291,14 +1627,14 @@ LIMIT 15
         "title": "5. Predictive Forecasting & Balance Projections",
         "type": "row",
         "collapsed": false,
-        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 71}
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 79}
     })
 
     panels.append({
         "id": 501,
         "title": "📖 Layman's Guide: Cash Flow Forecast & Budget Exhaustion",
         "type": "text",
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 72},
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 80},
         "options": {
             "mode": "markdown",
             "content": r"""### 💡 How to Read Predictive Forecasts & Balance Projections
@@ -1318,18 +1654,16 @@ LIMIT 15
         "title": "30/60/90-Day Projected Checking Cash Flow",
         "description": "Plain English: A crystal ball for your checking account. By projecting recent monthly cash burn and income into the future, it shows your projected bank balance so you never bounce a check or get hit with an overdraft fee.\n\nThresholds:\n- 🟢 Safe Cushion (> $2,000)\n- 🟡 Tight Margin ($500 - $2,000)\n- 🔴 Overdraft Danger (< $500)\n\nAction: If the 30-day projection enters yellow or red, transfer cash from savings immediately.",
         "type": "table",
-        "gridPos": {"h": 7, "w": 12, "x": 0, "y": 76},
+        "gridPos": {"h": 7, "w": 12, "x": 0, "y": 84},
         "datasource": DS,
         "targets": [
             sql_target("A", """
 WITH curr_bal AS (
-  SELECT SUM(t.amount) / 100.0 AS bal
-  FROM transactions t
-  JOIN accounts a ON t.acct = a.id
-  WHERE t.tombstone = 0
+  SELECT SUM(COALESCE(a.balance_current, 0)) / 100.0 AS bal
+  FROM accounts a
+  WHERE a.tombstone = 0
     AND a.closed = 0
-    AND a.tombstone = 0
-    AND a.name LIKE '%Checking%'
+    AND a.offbudget = 0
 ),
 checking_flows AS (
   SELECT
@@ -1340,11 +1674,13 @@ checking_flows AS (
   WHERE t.tombstone = 0
     AND a.closed = 0
     AND a.tombstone = 0
+    AND a.offbudget = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
     AND a.name LIKE '%Checking%'
     AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER)
 )
 SELECT
-  'Today (Current Balance)' AS "Time Horizon",
+  'Today (Net Checking Liquidity)' AS "Time Horizon",
   ROUND(bal, 2) AS "Projected Balance ($)",
   '🟢 Live Balance' AS "Status"
 FROM curr_bal
@@ -1393,7 +1729,7 @@ FROM curr_bal, checking_flows
         "title": "Category Budget Exhaustion Forecaster (The Gas Tank Gauge)",
         "description": "Plain English: The 'Gas Tank' gauge. If you keep spending money at your current daily rate, this tells you the exact calendar day of the month your category budget hits $0.00.\n\nFormula: Exhaustion_Day = Spent_MTD / Daily_Burn + (Remaining_Buffer / Daily_Burn)\n\nAction: If exhaustion date is earlier than month-end, throttle back daily spend in that category.",
         "type": "table",
-        "gridPos": {"h": 7, "w": 12, "x": 12, "y": 76},
+        "gridPos": {"h": 7, "w": 12, "x": 12, "y": 84},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1403,10 +1739,14 @@ WITH mtd_spend AS (
     ABS(SUM(t.amount)) / 100.0 AS spent,
     (ABS(SUM(t.amount)) / 100.0) / MAX(1, CAST(strftime('%d', 'now') AS INTEGER)) AS daily_burn
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   JOIN category_groups g ON c.cat_group = g.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1495,14 +1835,14 @@ LIMIT 10
         "title": "6. Hierarchical Category Decomposition & Budget Variance",
         "type": "row",
         "collapsed": false,
-        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 83}
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 91}
     })
 
     panels.append({
         "id": 601,
         "title": "📖 Layman's Guide: Category Decomposition & Variance Scorecard",
         "type": "text",
-        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 84},
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 92},
         "options": {
             "mode": "markdown",
             "content": """### 💡 How to Read Category Decomposition & Budget Variance
@@ -1522,7 +1862,7 @@ LIMIT 10
         "title": "Hierarchical Category Spend: Group -> Category",
         "description": "Plain English: Hierarchical categorical expense breakdown by Category Group -> Category -> Payee over the last 30 days.\n\nAction: Identify top expense clusters within each category group to prioritize savings targets.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 88},
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 96},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1531,10 +1871,14 @@ SELECT
   c.name AS "Category",
   ROUND(ABS(SUM(t.amount)) / 100.0, 2) AS "Expense Amount ($)"
 FROM transactions t
+JOIN accounts a ON t.acct = a.id
 JOIN categories c ON t.category = c.id
 JOIN category_groups g ON c.cat_group = g.id
 LEFT JOIN payees p ON t.description = p.id
 WHERE t.tombstone = 0
+  AND a.tombstone = 0
+  AND a.closed = 0
+  AND a.offbudget = 0
   AND (t.isParent IS NULL OR t.isParent = 0)
   AND t.transferred_id IS NULL
   AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1562,7 +1906,7 @@ ORDER BY 3 DESC
         "title": "Budget vs. Actual Variance Waterfall (Monthly Scorecard)",
         "description": "Plain English: The scorecard at the end of the month: Did you beat your budget or blow it? Green blocks show categories where you saved money (surplus); red blocks show where you bled cash (deficit).\n\nFormula: Net Variance = Budgeted - Actual Spend\n\nThresholds:\n- 🟢 Surplus (Positive Variance): You beat your budget\n- 🔴 Deficit (Negative Variance): You overspent\n\nAction: Rebalance overspent categories with surplus savings from other groups.",
         "type": "table",
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 88},
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 96},
         "datasource": DS,
         "targets": [
             sql_target("A", """
@@ -1580,9 +1924,13 @@ actuals AS (
     c.cat_group,
     ABS(SUM(t.amount)) / 100.0 AS actual_amt
   FROM transactions t
+  JOIN accounts a ON t.acct = a.id
   JOIN categories c ON t.category = c.id
   LEFT JOIN payees p ON t.description = p.id
   WHERE t.tombstone = 0
+    AND a.tombstone = 0
+    AND a.closed = 0
+    AND a.offbudget = 0
     AND (t.isParent IS NULL OR t.isParent = 0)
     AND t.transferred_id IS NULL
     AND (p.transfer_acct IS NULL OR p.transfer_acct = '')
@@ -1628,6 +1976,478 @@ ORDER BY "Net Variance ($)" ASC
                         {"id": "color", "value": {"mode": "thresholds"}},
                         {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": None}, {"color": "green", "value": 0}]}}
                     ]
+                }
+            ]
+        },
+        "options": {
+            "showHeader": true
+        }
+    })
+
+    # -------------------------------------------------------------
+    # SECTION 7: Investment Portfolio & Brokerage Growth Intelligence
+    # -------------------------------------------------------------
+    panels.append({
+        "id": 700,
+        "title": "7. Investment Portfolio & Brokerage Growth Intelligence (Ind Brokerage 6839 [J])",
+        "type": "row",
+        "collapsed": false,
+        "gridPos": {"h": 1, "w": 24, "x": 0, "y": 104}
+    })
+
+    panels.append({
+        "id": 701,
+        "title": "📖 Layman's Guide: Isolating True Market Growth from Auto-Deposits",
+        "type": "text",
+        "gridPos": {"h": 4, "w": 24, "x": 0, "y": 105},
+        "options": {
+            "mode": "markdown",
+            "content": """### 💡 How to Read Investment Growth & Capital Appreciation
+
+* **Pure Market Growth (Excluding Deposits)**:
+  * When you automatically transfer cash every week into your investment account, the total account balance climbs. But that **is not market profit** — that is just your own principal cash!
+  * This suite filters out your weekly auto-deposits ($692.30/week) and isolates only the **reconciliation balance adjustments** (the market gains and dividend appreciation).
+  * **Result**: You see your *real dollar growth and pure investment return* without artificial inflation from injecting money.
+* **Moving Window Performance**:
+  * Evaluates true market gains across rolling time horizons (Trailing 30-Day, 90-Day, 6-Month, 1-Year, and Inception).
+* **Cost Basis vs. Total Value Wedge**:
+  * Visualizes the compounding spread between your **Cumulative Injected Cash (Cost Basis)** and your **Live Account Value**."""
+        }
+    })
+
+    panels.append({
+        "id": 702,
+        "title": "All-Time Pure Capital Gain ($)",
+        "description": "Plain English: Total cumulative dollar profit generated purely by stock market growth and capital gains, excluding every dollar of principal cash you deposited.\n\nFormula: SUM(Reconciliation Adjustments)\n\nThreshold: Green when positive profit.",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 109},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+SELECT
+  ROUND(SUM(CASE WHEN t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%' THEN t.amount ELSE 0 END) / 100.0, 2) AS "All-Time Capital Gain ($)"
+FROM transactions t
+JOIN accounts a ON t.acct = a.id
+WHERE a.name LIKE '%Ind Brokerage 6839%'
+  AND t.tombstone = 0
+  AND (t.isParent IS NULL OR t.isParent = 0)
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "currencyUSD",
+                "color": {"mode": "thresholds"},
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "red", "value": None},
+                        {"color": "green", "value": 0}
+                    ]
+                }
+            }
+        },
+        "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "orientation": "auto",
+            "textMode": "auto"
+        }
+    })
+
+    panels.append({
+        "id": 703,
+        "title": "Cumulative Return on Invested Capital (ROI %)",
+        "description": "Plain English: Total percentage return on your cumulative invested capital (Cost Basis).\n\nFormula: Cumulative Capital Gain / Cumulative Cost Basis * 100%",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 109},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH stats AS (
+  SELECT
+    SUM(CASE WHEN t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%' THEN t.amount ELSE 0 END) / 100.0 AS gain,
+    SUM(CASE WHEN (t.notes IS NULL OR t.notes NOT LIKE '%Reconciliation%') AND (t.imported_description IS NULL OR t.imported_description NOT LIKE '%Reconciliation%') THEN t.amount ELSE 0 END) / 100.0 AS cost_basis
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE a.name LIKE '%Ind Brokerage 6839%'
+    AND t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+)
+SELECT
+  ROUND((gain / MAX(1.0, cost_basis)) * 100.0, 1) AS "Cumulative ROI (%)"
+FROM stats
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "percent",
+                "color": {"mode": "thresholds"},
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "red", "value": None},
+                        {"color": "yellow", "value": 0},
+                        {"color": "green", "value": 10}
+                    ]
+                }
+            }
+        },
+        "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "orientation": "auto",
+            "textMode": "auto"
+        }
+    })
+
+    panels.append({
+        "id": 704,
+        "title": "Total Principal Invested (Cost Basis)",
+        "description": "Plain English: Total cash you have transferred into the brokerage account over its lifetime (weekly auto-deposits and starting principal).\n\nFormula: SUM(Deposits & Transfers In)",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 109},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+SELECT
+  ROUND(SUM(CASE WHEN (t.notes IS NULL OR t.notes NOT LIKE '%Reconciliation%') AND (t.imported_description IS NULL OR t.imported_description NOT LIKE '%Reconciliation%') THEN t.amount ELSE 0 END) / 100.0, 2) AS "Principal Invested ($)"
+FROM transactions t
+JOIN accounts a ON t.acct = a.id
+WHERE a.name LIKE '%Ind Brokerage 6839%'
+  AND t.tombstone = 0
+  AND (t.isParent IS NULL OR t.isParent = 0)
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "currencyUSD",
+                "color": {"mode": "palette-classic"}
+            }
+        },
+        "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "orientation": "auto",
+            "textMode": "auto"
+        }
+    })
+
+    panels.append({
+        "id": 705,
+        "title": "Live Brokerage Market Value",
+        "description": "Plain English: Total current market value of your brokerage holdings.\n\nFormula: Cost Basis + Cumulative Capital Gains",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 109},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+SELECT
+  ROUND(SUM(t.amount) / 100.0, 2) AS "Current Market Value ($)"
+FROM transactions t
+JOIN accounts a ON t.acct = a.id
+WHERE a.name LIKE '%Ind Brokerage 6839%'
+  AND t.tombstone = 0
+  AND (t.isParent IS NULL OR t.isParent = 0)
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "currencyUSD",
+                "color": {"mode": "palette-classic"}
+            }
+        },
+        "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "orientation": "auto",
+            "textMode": "auto"
+        }
+    })
+
+    panels.append({
+        "id": 706,
+        "title": "Brokerage Pure Capital Growth Curve (Excluding Deposits)",
+        "description": "Plain English: Real investment growth curve over time, isolating pure stock market capital gains from weekly auto-deposits. Shows your exact cumulative dollar profit without artificial inflation from adding money.\n\nSeries:\n- Cumulative Market Gain ($): Cumulative investment profit trajectory over time\n- Periodic Reconciliation Gain ($): Individual market return captured at each reconciliation event.\n\nAction: Track this trajectory to measure true market compounding.",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 14, "x": 0, "y": 113},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH raw_events AS (
+  SELECT
+    t.date,
+    CAST(strftime('%s', substr(CAST(t.date AS TEXT), 1, 4) || '-' || substr(CAST(t.date AS TEXT), 5, 2) || '-' || substr(CAST(t.date AS TEXT), 7, 2)) AS INTEGER) AS time,
+    t.amount / 100.0 AS gain_step
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE a.name LIKE '%Ind Brokerage 6839%'
+    AND t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+    AND (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%')
+),
+cum_events AS (
+  SELECT
+    time,
+    gain_step,
+    ROUND(SUM(gain_step) OVER (ORDER BY date ASC, time ASC), 2) AS cum_gain
+  FROM raw_events
+)
+SELECT
+  time,
+  cum_gain AS "Cumulative Market Gain ($)",
+  gain_step AS "Periodic Reconciliation Gain ($)"
+FROM cum_events
+UNION ALL
+SELECT
+  CAST(strftime('%s', 'now') AS INTEGER) AS time,
+  (SELECT cum_gain FROM cum_events ORDER BY time DESC LIMIT 1) AS "Cumulative Market Gain ($)",
+  0.0 AS "Periodic Reconciliation Gain ($)"
+ORDER BY time ASC
+""", time_columns=["time"])
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "lineWidth": 3,
+                    "fillOpacity": 15,
+                    "pointSize": 5,
+                    "showPoints": "auto"
+                },
+                "unit": "currencyUSD"
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "Cumulative Market Gain ($)"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "custom.lineWidth", "value": 3}
+                    ]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Periodic Reconciliation Gain ($)"},
+                    "properties": [
+                        {"id": "custom.drawStyle", "value": "points"},
+                        {"id": "custom.pointSize", "value": 7},
+                        {"id": "color", "value": {"fixedColor": "yellow", "mode": "fixed"}}
+                    ]
+                }
+            ]
+        },
+        "options": {
+            "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max", "min"]},
+            "tooltip": {"mode": "multi"}
+        }
+    })
+
+    panels.append({
+        "id": 707,
+        "title": "Moving Window Market Return & Pacing Scorecard",
+        "description": "Plain English: Pure capital gains generated by the investment account across rolling time windows (Trailing 30 Days, 90 Days, 6 Months, 1 Year, and All-Time Inception), completely stripped of weekly deposit inflation.\n\nMetrics:\n- Pure Market Gain ($): Dollar growth earned in that window\n- Return on Capital (%): Gain divided by total capital deployed.",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 10, "x": 14, "y": 113},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH gains AS (
+  SELECT
+    SUM(CASE WHEN t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%' THEN t.amount ELSE 0 END) / 100.0 AS all_time,
+    SUM(CASE WHEN (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%') AND t.date >= CAST(strftime('%Y%m01', date('now', '-1 year')) AS INTEGER) THEN t.amount ELSE 0 END) / 100.0 AS t_1y,
+    SUM(CASE WHEN (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%') AND t.date >= CAST(strftime('%Y%m01', date('now', '-180 day')) AS INTEGER) THEN t.amount ELSE 0 END) / 100.0 AS t_6m,
+    SUM(CASE WHEN (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%') AND t.date >= CAST(strftime('%Y%m01', date('now', '-90 day')) AS INTEGER) THEN t.amount ELSE 0 END) / 100.0 AS t_90d,
+    SUM(CASE WHEN (t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%') AND t.date >= CAST(strftime('%Y%m01', date('now', '-30 day')) AS INTEGER) THEN t.amount ELSE 0 END) / 100.0 AS t_30d,
+    SUM(CASE WHEN (t.notes IS NULL OR t.notes NOT LIKE '%Reconciliation%') AND (t.imported_description IS NULL OR t.imported_description NOT LIKE '%Reconciliation%') THEN t.amount ELSE 0 END) / 100.0 AS total_deposits
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE a.name LIKE '%Ind Brokerage 6839%'
+    AND t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+)
+SELECT
+  '1. Trailing 30 Days' AS "Time Window",
+  ROUND(t_30d, 2) AS "Pure Market Gain ($)",
+  ROUND((t_30d / MAX(1.0, total_deposits)) * 100.0, 1) AS "Return on Capital (%)",
+  '🟢 Active Gain' AS "Pacing Status"
+FROM gains
+UNION ALL
+SELECT '2. Trailing 90 Days', ROUND(t_90d, 2), ROUND((t_90d / MAX(1.0, total_deposits)) * 100.0, 1), '🟢 Active Gain' FROM gains
+UNION ALL
+SELECT '3. Trailing 6 Months', ROUND(t_6m, 2), ROUND((t_6m / MAX(1.0, total_deposits)) * 100.0, 1), '🟢 Robust Growth' FROM gains
+UNION ALL
+SELECT '4. Trailing 1 Year', ROUND(t_1y, 2), ROUND((t_1y / MAX(1.0, total_deposits)) * 100.0, 1), '🟢 Strong Compounding' FROM gains
+UNION ALL
+SELECT '5. All-Time Inception', ROUND(all_time, 2), ROUND((all_time / MAX(1.0, total_deposits)) * 100.0, 1), '🟢 Wealth Accumulation' FROM gains
+ORDER BY 1 ASC
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "custom": {"align": "auto"}
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "Pure Market Gain ($)"},
+                    "properties": [
+                        {"id": "unit", "value": "currencyUSD"},
+                        {"id": "color", "value": {"mode": "thresholds"}},
+                        {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": None}, {"color": "green", "value": 0}]}}
+                    ]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Return on Capital (%)"},
+                    "properties": [{"id": "unit", "value": "percent"}]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Pacing Status"},
+                    "properties": [{"id": "custom.align", "value": "center"}]
+                }
+            ]
+        },
+        "options": {
+            "showHeader": true
+        }
+    })
+
+    panels.append({
+        "id": 708,
+        "title": "Total Portfolio Value vs. Cumulative Cash Injected (Cost Basis Gap)",
+        "description": "Plain English: Compares your Total Account Value against your Cumulative Cash Contributions (Cost Basis). The widening gap between the curves represents your pure compounding profit wedge.\n\nSeries:\n- Total Portfolio Value ($): Current balance over time\n- Cumulative Cash Injected ($): Total cumulative cash put in.",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 121},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH daily_steps AS (
+  SELECT
+    t.date,
+    CAST(strftime('%s', substr(CAST(t.date AS TEXT), 1, 4) || '-' || substr(CAST(t.date AS TEXT), 5, 2) || '-' || substr(CAST(t.date AS TEXT), 7, 2)) AS INTEGER) AS time,
+    t.amount / 100.0 AS amount,
+    CASE WHEN (t.notes IS NULL OR t.notes NOT LIKE '%Reconciliation%') AND (t.imported_description IS NULL OR t.imported_description NOT LIKE '%Reconciliation%') THEN t.amount / 100.0 ELSE 0 END AS deposit
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE a.name LIKE '%Ind Brokerage 6839%'
+    AND t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+),
+cum_series AS (
+  SELECT
+    time,
+    ROUND(SUM(amount) OVER (ORDER BY date ASC, time ASC), 2) AS portfolio_value,
+    ROUND(SUM(deposit) OVER (ORDER BY date ASC, time ASC), 2) AS principal_invested
+  FROM daily_steps
+)
+SELECT
+  time,
+  portfolio_value AS "Total Portfolio Value ($)",
+  principal_invested AS "Cumulative Cash Injected ($)"
+FROM cum_series
+UNION ALL
+SELECT
+  CAST(strftime('%s', 'now') AS INTEGER) AS time,
+  (SELECT portfolio_value FROM cum_series ORDER BY time DESC LIMIT 1) AS "Total Portfolio Value ($)",
+  (SELECT principal_invested FROM cum_series ORDER BY time DESC LIMIT 1) AS "Cumulative Cash Injected ($)"
+ORDER BY time ASC
+""", time_columns=["time"])
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "custom": {
+                    "drawStyle": "line",
+                    "lineInterpolation": "smooth",
+                    "lineWidth": 2,
+                    "pointSize": 5,
+                    "showPoints": "auto"
+                },
+                "unit": "currencyUSD"
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "Total Portfolio Value ($)"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}},
+                        {"id": "custom.lineWidth", "value": 3}
+                    ]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Cumulative Cash Injected ($)"},
+                    "properties": [
+                        {"id": "color", "value": {"fixedColor": "purple", "mode": "fixed"}},
+                        {"id": "custom.lineStyle", "value": {"dash": [8, 8]}}
+                    ]
+                }
+            ]
+        },
+        "options": {
+            "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"]},
+            "tooltip": {"mode": "multi"}
+        }
+    })
+
+    panels.append({
+        "id": 709,
+        "title": "Reconciliation History & Capital Gain Event Audit Log",
+        "description": "Plain English: Authoritative ledger of every reconciliation event performed on Ind Brokerage 6839 [J], detailing the individual market gain or loss step, cumulative profit, and cumulative ROI at each point in time.",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 121},
+        "datasource": DS,
+        "targets": [
+            sql_target("A", """
+WITH tx_cum AS (
+  SELECT
+    t.id,
+    t.date,
+    strftime('%Y-%m-%d', substr(CAST(t.date AS TEXT), 1, 4) || '-' || substr(CAST(t.date AS TEXT), 5, 2) || '-' || substr(CAST(t.date AS TEXT), 7, 2)) AS "Recon Date",
+    t.amount / 100.0 AS recon_gain,
+    SUM(CASE WHEN t.notes LIKE '%Reconciliation%' OR t.imported_description LIKE '%Reconciliation%' THEN t.amount ELSE 0 END) OVER (ORDER BY t.date ASC, t.id ASC) / 100.0 AS cum_gain,
+    SUM(CASE WHEN (t.notes IS NULL OR t.notes NOT LIKE '%Reconciliation%') AND (t.imported_description IS NULL OR t.imported_description NOT LIKE '%Reconciliation%') THEN t.amount ELSE 0 END) OVER (ORDER BY t.date ASC, t.id ASC) / 100.0 AS cum_deposit,
+    SUM(t.amount) OVER (ORDER BY t.date ASC, t.id ASC) / 100.0 AS cum_balance
+  FROM transactions t
+  JOIN accounts a ON t.acct = a.id
+  WHERE a.name LIKE '%Ind Brokerage 6839%'
+    AND t.tombstone = 0
+    AND (t.isParent IS NULL OR t.isParent = 0)
+)
+SELECT
+  "Recon Date" AS "Reconciliation Date",
+  ROUND(recon_gain, 2) AS "Market Gain / Loss ($)",
+  ROUND(cum_gain, 2) AS "Cumulative Profit ($)",
+  ROUND(cum_deposit, 2) AS "Total Cash Injected ($)",
+  ROUND(cum_balance, 2) AS "Account Value ($)",
+  ROUND((cum_gain / MAX(1.0, cum_deposit)) * 100.0, 1) AS "Cumulative ROI (%)"
+FROM tx_cum
+WHERE (recon_gain != 0)
+ORDER BY date DESC
+""")
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "custom": {"align": "auto"}
+            },
+            "overrides": [
+                {
+                    "matcher": {"id": "byName", "options": "Market Gain / Loss ($)"},
+                    "properties": [
+                        {"id": "unit", "value": "currencyUSD"},
+                        {"id": "color", "value": {"mode": "thresholds"}},
+                        {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": None}, {"color": "green", "value": 0}]}}
+                    ]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Cumulative Profit ($)"},
+                    "properties": [
+                        {"id": "unit", "value": "currencyUSD"},
+                        {"id": "color", "value": {"mode": "thresholds"}},
+                        {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red", "value": None}, {"color": "green", "value": 0}]}}
+                    ]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Total Cash Injected ($)"},
+                    "properties": [{"id": "unit", "value": "currencyUSD"}]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Account Value ($)"},
+                    "properties": [{"id": "unit", "value": "currencyUSD"}]
+                },
+                {
+                    "matcher": {"id": "byName", "options": "Cumulative ROI (%)"},
+                    "properties": [{"id": "unit", "value": "percent"}]
                 }
             ]
         },
@@ -1697,7 +2517,7 @@ ORDER BY "Net Variance ($)" ASC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 12
+        "version": 20
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
