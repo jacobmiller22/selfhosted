@@ -127,6 +127,11 @@ WHERE t.tombstone = 0
   AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
   AND a.name NOT LIKE '%Loan%'
   AND a.name NOT LIKE '%Equity%'
+  AND a.name NOT LIKE '%House%'
+  AND a.name NOT LIKE '%Mortgage%'
+  AND a.name NOT LIKE '%Tacoma%'
+  AND a.name NOT LIKE '%GTI%'
+  AND a.name NOT LIKE '%Vehicle%'
   AND a.name NOT LIKE '%401k%'
   AND a.name NOT LIKE '%IRA%'
   AND a.name NOT LIKE '%Ret Plan%'
@@ -176,6 +181,11 @@ WITH liquid AS (
     AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
     AND a.name NOT LIKE '%Loan%'
     AND a.name NOT LIKE '%Equity%'
+    AND a.name NOT LIKE '%House%'
+    AND a.name NOT LIKE '%Mortgage%'
+    AND a.name NOT LIKE '%Tacoma%'
+    AND a.name NOT LIKE '%GTI%'
+    AND a.name NOT LIKE '%Vehicle%'
     AND a.name NOT LIKE '%401k%'
     AND a.name NOT LIKE '%IRA%'
     AND a.name NOT LIKE '%Ret Plan%'
@@ -286,7 +296,7 @@ FROM mtd
     panels.append({
         "id": 107,
         "title": "Asset Class Allocation (Full Balance Sheet)",
-        "description": "Plain English: How your entire net worth is distributed across primary asset classes: Real Estate Equity, Retirement & Tax-Advantaged (401k, IRAs, HSA), Taxable Brokerage Investments, and Liquid Cash Reserves.\n\nFormula: SUM(Open Asset Balances) grouped by Asset Class\n\nAction: Maintain a balanced asset portfolio aligned with long-term financial independence goals.",
+        "description": "Plain English: How your entire net worth is distributed across primary asset classes: Real Estate Equity, Retirement & Tax-Advantaged (401k, IRAs, HSA), Taxable Brokerage Investments, Vehicles, and Liquid Cash Reserves (net of credit card float).\n\nFormula: SUM(Open Asset Balances) grouped by Asset Class\n\nAction: Maintain a balanced asset portfolio aligned with long-term financial independence goals.",
         "type": "piechart",
         "gridPos": {"h": 7, "w": 8, "x": 0, "y": 10},
         "datasource": DS,
@@ -294,10 +304,11 @@ FROM mtd
             sql_target("A", """
 SELECT
   CASE
-    WHEN a.name LIKE '%Equity%' THEN '🏡 Real Estate Equity'
+    WHEN a.name LIKE '%Equity%' OR a.name = 'House' OR a.name = 'Mortgage' THEN '🏡 Real Estate Equity'
     WHEN a.name LIKE '%401k%' OR a.name LIKE '%IRA%' OR a.name LIKE '%Ret Plan%' OR a.name LIKE '%Savings Plan%' OR a.name LIKE '%HSA%' THEN '📈 Retirement & Tax-Advantaged'
     WHEN a.name LIKE '%Brokerage%' OR a.name LIKE '%Stock%' THEN '📊 Taxable Investments'
-    WHEN a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%' OR a.name LIKE '%Venmo%' OR a.name LIKE '%LSA%' THEN '💵 Liquid Cash & Bank Reserves'
+    WHEN a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' OR a.name LIKE '%Vehicle%' OR a.name LIKE '%Auto%' THEN '🚗 Vehicles'
+    WHEN a.name LIKE '%Card%' OR a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%' OR a.name LIKE '%Venmo%' OR a.name LIKE '%LSA%' THEN '💵 Liquid Cash & Bank Reserves'
     ELSE '📦 Other Assets'
   END AS "Asset Class",
   ROUND(SUM(t.amount) / 100.0, 2) AS "Balance ($)"
@@ -307,7 +318,6 @@ WHERE t.tombstone = 0
   AND a.tombstone = 0
   AND a.closed = 0
   AND a.name NOT LIKE '%Loan%'
-  AND a.name NOT LIKE '%Card%'
 GROUP BY 1
 HAVING SUM(t.amount) > 0
 ORDER BY 2 DESC
@@ -443,6 +453,11 @@ liquid AS (
     AND (a.offbudget = 0 OR a.name LIKE '%Savings%' OR a.name LIKE '%Checking%' OR a.name LIKE '%Cash%')
     AND a.name NOT LIKE '%Loan%'
     AND a.name NOT LIKE '%Equity%'
+    AND a.name NOT LIKE '%House%'
+    AND a.name NOT LIKE '%Mortgage%'
+    AND a.name NOT LIKE '%Tacoma%'
+    AND a.name NOT LIKE '%GTI%'
+    AND a.name NOT LIKE '%Vehicle%'
     AND a.name NOT LIKE '%401k%'
     AND a.name NOT LIKE '%IRA%'
     AND a.name NOT LIKE '%Ret Plan%'
@@ -1697,7 +1712,7 @@ ORDER BY "Net Variance ($)" ASC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 12
+        "version": 13
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)

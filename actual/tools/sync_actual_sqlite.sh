@@ -23,6 +23,10 @@ if [ -n "$RUNNING_CONTAINER" ]; then
       }).catch(err => { console.error(err); process.exit(1); });
     '
     echo "✓ Container snapshot export successful."
+
+    echo "Replicating snapshot to actual-analytics-data volume..."
+    docker cp "$RUNNING_CONTAINER:/app/export/db.sqlite" - | docker run --rm -i -v actual-analytics-data:/data alpine sh -c "tar -xf - -C /data && chmod 644 /data/db.sqlite"
+    echo "✓ Replicated database to actual-analytics-data volume."
 else
     echo "⚠️ Auto-categorizer container not detected. Checking volume directly..."
 fi
