@@ -43,6 +43,7 @@ if [ -n "$RUNNING_CONTAINER" ]; then
         CASE
           WHEN a.closed = 1 THEN 'Paid Off / Closed'
           WHEN a.name LIKE '%Card%' THEN 'Credit Card Float'
+          WHEN a.name LIKE '%South State Loan%' THEN 'Auto Loan (VW GTI)'
           WHEN a.name LIKE '%Loan%' THEN 'Installment Loans'
           WHEN a.name = 'Mortgage' THEN 'Mortgage Debt'
           WHEN a.name = 'House' OR a.name LIKE '%Equity%' THEN 'Real Estate'

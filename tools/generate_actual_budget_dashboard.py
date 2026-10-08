@@ -64,7 +64,7 @@ def make_dashboard():
   * **If Priyanka Loses Job (Jacob Working)**: *"If Priyanka's income stops while Jacob continues working, how many months will liquid cash reserves last to cover the net household living shortfall?"* 🟢 **>24 months** = Robust security moat.
   * **If Jacob Loses Job (Priyanka Working)**: *"If Jacob's income stops while Priyanka continues working, how many months will liquid cash reserves last to cover the net household living shortfall?"* 🟢 **>12 months** = Safe cushion.
 * **Monthly Savings Rate (Trailing 30D)**: *"Out of every dollar earned over the rolling 30 days, how many cents stayed in your pocket rather than getting consumed?"* 🟢 **≥25%** = Strong wealth building. (Uses rolling 30-day window to eliminate early-month paycheck timing skew).
-* **Asset Allocation**: Distribution of your total wealth between Real Estate Equity, Retirement (401k/IRA/HSA), Taxable Brokerage, Vehicles, and Liquid Cash Reserves.
+* **Asset Allocation**: Distribution of your total wealth between Real Estate Equity (net of mortgage), Retirement (401k/IRA/HSA), Taxable Brokerage, Vehicle Equity (Tacoma + VW GTI net of South State car loan), and Liquid Cash Reserves (net of credit card float).
 * **Global Account Directory**: Authoritative classification matrix of all 34+ household accounts with live balances, balance sheet side, ownership, and segregation of paid-off/closed accounts.
 * **Needs vs Wants (50/30/20 Rule)**: Non-discretionary survival bills (housing, utilities, groceries, insurance) should stay under **50–60%** of living expenses. Discretionary (restaurants, entertainment, shopping) is your buffer to cut in tough months."""
         }
@@ -433,7 +433,7 @@ FROM t30
     panels.append({
         "id": 107,
         "title": "Asset Class Allocation (Full Balance Sheet)",
-        "description": "Plain English: How your entire net worth is distributed across primary asset classes: Real Estate Equity, Retirement & Tax-Advantaged (401k, IRAs, HSA), Taxable Brokerage Investments, Vehicles, and Liquid Cash Reserves (net of credit card float).\n\nFormula: SUM(Open Asset Balances) grouped by Asset Class\n\nAction: Maintain a balanced asset portfolio aligned with long-term financial independence goals.",
+        "description": "Plain English: How your entire net worth is distributed across primary asset classes: Real Estate Equity (House minus Mortgage), Retirement & Tax-Advantaged (401k, IRAs, HSA), Taxable Brokerage Investments, Vehicle Equity (Tacoma + VW GTI minus South State auto loan), and Liquid Cash Reserves (net of credit card float).\n\nFormula: SUM(Open Asset Balances) grouped by Asset Class\n\nAction: Maintain a balanced asset portfolio aligned with long-term financial independence goals.",
         "type": "piechart",
         "gridPos": {"h": 7, "w": 8, "x": 0, "y": 10},
         "datasource": DS,
@@ -444,7 +444,7 @@ SELECT
     WHEN a.name LIKE '%Equity%' OR a.name = 'House' OR a.name = 'Mortgage' THEN '🏡 Real Estate Equity'
     WHEN a.name LIKE '%401k%' OR a.name LIKE '%IRA%' OR a.name LIKE '%Ret Plan%' OR a.name LIKE '%Savings Plan%' OR a.name LIKE '%HSA%' THEN '📈 Retirement & Tax-Advantaged'
     WHEN a.name LIKE '%Brokerage%' OR a.name LIKE '%Stock%' THEN '📊 Taxable Investments'
-    WHEN a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' OR a.name LIKE '%Vehicle%' OR a.name LIKE '%Auto%' THEN '🚗 Vehicles'
+    WHEN a.name LIKE '%Tacoma%' OR a.name LIKE '%GTI%' OR a.name LIKE '%Vehicle%' OR a.name LIKE '%Auto%' OR a.name LIKE '%South State Loan%' THEN '🚗 Vehicle Equity'
     WHEN a.offbudget = 0 OR a.name = 'Savings Joint' THEN '💵 Liquid Cash & Bank Reserves'
     ELSE '📦 Other Assets'
   END AS "Asset Class",
@@ -454,7 +454,6 @@ JOIN accounts a ON t.acct = a.id
 WHERE t.tombstone = 0
   AND a.tombstone = 0
   AND a.closed = 0
-  AND a.name NOT LIKE '%Loan%'
 GROUP BY 1
 HAVING SUM(t.amount) > 0
 ORDER BY 2 DESC
@@ -868,6 +867,7 @@ SELECT
   CASE
     WHEN a.closed = 1 THEN '⚪ Paid Off / Closed'
     WHEN a.name LIKE '%Card%' THEN '💳 Credit Card Float'
+    WHEN a.name LIKE '%South State Loan%' THEN '🚗 Auto Loan (VW GTI)'
     WHEN a.name LIKE '%Loan%' THEN '🏛️ Installment Loans'
     WHEN a.name = 'Mortgage' THEN '🏡 Mortgage Debt'
     WHEN a.name = 'House' OR a.name LIKE '%Equity%' THEN '🏡 Real Estate'
@@ -2043,7 +2043,7 @@ ORDER BY "Net Variance ($)" ASC
         "timezone": "browser",
         "title": "Actual Budget Analytics & Advanced Financial Intelligence",
         "uid": "actual-budget-analytics",
-        "version": 16
+        "version": 17
     }
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
