@@ -10,6 +10,7 @@ from skl2onnx.common.data_types import StringTensorType, FloatTensorType
 from sklearn.linear_model import LogisticRegression
 
 from train import train_all_models
+from fetch_data import get_category_persona
 from config import MODELS_DIR, DATA_DIR, BASE_DIR
 
 def compute_hidden_to_active_map(df: pd.DataFrame) -> dict:
@@ -17,6 +18,7 @@ def compute_hidden_to_active_map(df: pd.DataFrame) -> dict:
     mapping = {}
 
     db_path = DATA_DIR / "latest_db.sqlite"
+    cats = {}
     if db_path.exists():
         conn = sqlite3.connect(db_path)
         cats = dict(conn.execute("SELECT id, name FROM categories").fetchall())
@@ -57,11 +59,17 @@ def compute_hidden_to_active_map(df: pd.DataFrame) -> dict:
             hidden_candidates = (cats_all - cats_recent) - set(mapping.keys())
 
             for h_cat in hidden_candidates:
+                h_persona = get_category_persona(cats.get(h_cat, ""))
                 h_payees = df_calc[df_calc["category_id"] == h_cat]["cleaned_payee"].unique()
                 h_payees = [p for p in h_payees if p]
                 if not h_payees:
                     continue
-                matched_active = df_calc[(df_calc["cleaned_payee"].isin(h_payees)) & (df_calc["category_id"].isin(cats_recent))]
+                matched_active = df_calc[(df_calc["cleaned_payee"].isin(h_payees)) & (df_calc["category_id"].isin(cats_recent))].copy()
+                if h_persona == "P":
+                    matched_active = matched_active[~matched_active["category_id"].map(lambda cid: get_category_persona(cats.get(cid, "")) == "J")]
+                elif h_persona == "J":
+                    matched_active = matched_active[~matched_active["category_id"].map(lambda cid: get_category_persona(cats.get(cid, "")) == "P")]
+
                 if not matched_active.empty:
                     best_cat = matched_active.groupby("category_id")["weight"].sum().idxmax()
                     mapping[h_cat] = str(best_cat)
@@ -119,6 +127,18 @@ def export_all():
     category_classes = category_pipeline.classes_.tolist()
     hidden_to_active_map = compute_hidden_to_active_map(df)
 
+    # Compute category persona for each category class
+    db_path = DATA_DIR / "latest_db.sqlite"
+    cats = {}
+    if db_path.exists():
+        conn = sqlite3.connect(db_path)
+        cats = dict(conn.execute("SELECT id, name FROM categories").fetchall())
+
+    category_personas = {
+        cid: get_category_persona(cats.get(cid, ""))
+        for cid in category_classes
+    }
+
     manifest = {
         "timestamp": datetime.now().isoformat(),
         "half_life_days": 180.0,
@@ -129,7 +149,8 @@ def export_all():
             },
             "category_classifier": {
                 "file": "category_classifier.onnx",
-                "classes": category_classes
+                "classes": category_classes,
+                "category_personas": category_personas
             }
         },
         "hidden_to_active_map": hidden_to_active_map
@@ -139,13 +160,14 @@ def export_all():
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
-    print(f"✓ Saved manifest metadata with {len(hidden_to_active_map)} inferred category mappings -> {manifest_path}")
+    print(f"✓ Saved manifest metadata with {len(hidden_to_active_map)} inferred category mappings and {len(category_personas)} category personas -> {manifest_path}")
 
-    # Copy exported models to sidecar models dir and top-level models dir
+    # Copy exported models to sidecar models dir, tools models dir, and top-level models dir
     sidecar_models_dir = BASE_DIR.parent / "src" / "models"
+    tools_models_dir = BASE_DIR.parent.parent / "auto-categorizer-models"
     toplevel_models_dir = BASE_DIR.parent.parent.parent / "auto-categorizer-models"
 
-    for dest_dir in [sidecar_models_dir, toplevel_models_dir]:
+    for dest_dir in [sidecar_models_dir, tools_models_dir, toplevel_models_dir]:
         dest_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy(manifest_path, dest_dir / "model_manifest.json")
         shutil.copy(MODELS_DIR / "payee_resolver.onnx", dest_dir / "payee_resolver.onnx")

@@ -12,7 +12,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 
-from fetch_data import load_dataset
+from fetch_data import load_dataset, get_account_persona, get_category_persona
 from text_cleaner import clean_payee_text
 from config import MODELS_DIR, DATA_DIR
 
@@ -139,6 +139,30 @@ def train_category_classifier(df: pd.DataFrame, half_life_days: float = 180.0):
     df_remapped = remap_historical_categories(df)
 
     df_valid = df_remapped[(df_remapped["is_transfer"] == False) & df_remapped["category_id"].notna() & (df_remapped["category_id"] != "")].copy()
+
+    # Load category lookup to filter out cross-contaminated persona samples
+    db_path = DATA_DIR / "latest_db.sqlite"
+    cat_names = {}
+    if db_path.exists():
+        conn = sqlite3.connect(db_path)
+        cat_names = dict(conn.execute("SELECT id, name FROM categories").fetchall())
+
+    def is_sample_persona_compatible(row):
+        acct_persona = row.get("persona", "Joint")
+        cat_id = row.get("category_id")
+        cat_name = cat_names.get(cat_id, "")
+        cat_persona = get_category_persona(cat_name)
+        if acct_persona == "P" and cat_persona == "J":
+            return False
+        if acct_persona == "J" and cat_persona == "P":
+            return False
+        return True
+
+    clean_mask = df_valid.apply(is_sample_persona_compatible, axis=1)
+    dropped_count = int((~clean_mask).sum())
+    if dropped_count > 0:
+        print(f"🧹 Filtered out {dropped_count} cross-contaminated persona transactions from category training set.")
+    df_valid = df_valid[clean_mask].copy()
 
     # Filter categories with at least 2 samples for stratified evaluation
     counts = df_valid["category_id"].value_counts()

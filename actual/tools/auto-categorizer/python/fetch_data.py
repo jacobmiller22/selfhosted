@@ -1,9 +1,31 @@
 import json
 import random
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 import pandas as pd
 from config import DATA_DIR
+
+def get_account_persona(acct_name: str) -> str:
+    """Classify account into P, J, or Joint based on naming conventions."""
+    if not acct_name or not isinstance(acct_name, str):
+        return "Joint"
+    if re.search(r"\[[Pp]\]", acct_name) or re.search(r"\b(paige|priyanka)\b", acct_name, re.IGNORECASE):
+        return "P"
+    if re.search(r"\[[Jj]\]", acct_name) or re.search(r"\bjacob\b", acct_name, re.IGNORECASE):
+        return "J"
+    return "Joint"
+
+def get_category_persona(cat_name: str) -> str:
+    """Classify category into P, J, or Joint based on naming conventions."""
+    if not cat_name or not isinstance(cat_name, str):
+        return "Joint"
+    if re.search(r"\[[Pp]\]", cat_name):
+        return "P"
+    if re.search(r"\[[Jj]\]", cat_name):
+        return "J"
+    return "Joint"
+
 
 SAMPLE_ACCOUNTS = [
     {"id": "acct_checking", "name": "Primary Checking", "type": "checking"},
@@ -214,14 +236,7 @@ def extract_from_sqlite(db_path: Path) -> pd.DataFrame:
     )
 
     # Account persona
-    def get_persona(acct_id):
-        name = accounts.get(acct_id, "")
-        if "[P]" in name:
-            return "P"
-        if "[J]" in name:
-            return "J"
-        return "Joint"
-    tx_df["persona"] = tx_df["account_id"].apply(get_persona)
+    tx_df["persona"] = tx_df["account_id"].apply(lambda aid: get_account_persona(accounts.get(aid, "")))
 
     tx_df["is_transfer"] = tx_df["transferred_id"].notna() & (tx_df["transferred_id"] != "") & (tx_df["transferred_id"] != "0")
     tx_df["transfer_acct"] = None
@@ -235,17 +250,33 @@ def save_dataset(df: pd.DataFrame, filename: str = "dataset.json") -> Path:
     print(f"✓ Saved {len(df)} transactions to {out_path}")
     return out_path
 
-def load_dataset(filename: str = "dataset.json", db_filename: str = "latest_db.sqlite") -> pd.DataFrame:
+def load_dataset(filename: str = "dataset.json", db_filename: str = "latest_db.sqlite", force_refresh: bool = False) -> pd.DataFrame:
     in_path = DATA_DIR / filename
     db_path = DATA_DIR / db_filename
+
+    # If database exists, refresh dataset if requested, missing, older than sqlite, or lacking personas
+    should_extract = False
+    if db_path.exists():
+        if force_refresh or not in_path.exists():
+            should_extract = True
+        elif in_path.exists():
+            if db_path.stat().st_mtime > in_path.stat().st_mtime:
+                should_extract = True
+            else:
+                existing_df = pd.read_json(in_path, orient="records")
+                if "persona" not in existing_df.columns or existing_df["persona"].isna().all():
+                    should_extract = True
+                else:
+                    return existing_df
+
+        if should_extract:
+            print(f"Loading live production transactions from {db_path}...")
+            df = extract_from_sqlite(db_path)
+            save_dataset(df, filename)
+            return df
+
     if in_path.exists():
         return pd.read_json(in_path, orient="records")
-
-    if db_path.exists():
-        print(f"Loading live production transactions from {db_path}...")
-        df = extract_from_sqlite(db_path)
-        save_dataset(df, filename)
-        return df
 
     print(f"Dataset {in_path} not found. Generating synthetic dataset...")
     df = generate_synthetic_transactions()

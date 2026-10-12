@@ -14,6 +14,7 @@ export interface ModelManifest {
     category_classifier: {
       file: string;
       classes: string[];
+      category_personas?: Record<string, "P" | "J" | "Joint">;
     };
   };
   hidden_to_active_map?: Record<string, string>;
@@ -140,22 +141,59 @@ export class OnnxPredictorEngine {
     const labelTensor = results.label || results[Object.keys(results)[0]];
     const probaTensor = results.probabilities || results[Object.keys(results)[1]];
 
-    const predictedLabel = String((labelTensor.data as any)[0]);
+    const rawPredictedLabel = String((labelTensor.data as any)[0]);
     const probaArray = probaTensor.data as Float32Array;
     const classes = this.manifest.models.category_classifier.classes;
+    const categoryPersonas = this.manifest.models.category_classifier.category_personas || {};
     const probabilities: Record<string, number> = {};
 
+    // Mask out opposite-persona categories:
+    // If account persona is "P", reject any category marked "J"
+    // If account persona is "J", reject any category marked "P"
+    let sumAllowedProba = 0.0;
+    const items: { cls: string; proba: number; isAllowed: boolean }[] = [];
+
     for (let i = 0; i < classes.length; i++) {
-      if (i < probaArray.length) {
-        probabilities[classes[i]] = Number(probaArray[i]);
+      const cls = classes[i];
+      const proba = i < probaArray.length ? Number(probaArray[i]) : 0.0;
+      const catPersona = categoryPersonas[cls] || "Joint";
+
+      const isAllowed = !(
+        (persona === "P" && catPersona === "J") ||
+        (persona === "J" && catPersona === "P")
+      );
+
+      items.push({ cls, proba, isAllowed });
+      if (isAllowed) {
+        sumAllowedProba += proba;
       }
     }
 
-    const confidence = probabilities[predictedLabel] ?? 1.0;
+    let bestLabel = "";
+    let bestProba = -1.0;
+
+    for (const item of items) {
+      if (item.isAllowed) {
+        const normalized = sumAllowedProba > 0 ? item.proba / sumAllowedProba : item.proba;
+        probabilities[item.cls] = normalized;
+        if (normalized > bestProba) {
+          bestProba = normalized;
+          bestLabel = item.cls;
+        }
+      } else {
+        probabilities[item.cls] = 0.0;
+      }
+    }
+
+    if (!bestLabel && classes.length > 0) {
+      const fallbackItem = items.find((it) => it.isAllowed) || items[0];
+      bestLabel = fallbackItem.cls;
+      bestProba = probabilities[bestLabel] || 0.0;
+    }
 
     return {
-      label: predictedLabel,
-      confidence,
+      label: bestLabel || rawPredictedLabel,
+      confidence: bestProba >= 0 ? bestProba : 0.0,
       probabilities
     };
   }
