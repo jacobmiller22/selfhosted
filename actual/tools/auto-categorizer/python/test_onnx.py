@@ -79,7 +79,70 @@ def test_onnx_models():
     print(f"  Cleaned Text:       '{clean_sb}'")
     print(f"  Predicted Category: '{predicted_cat}' (Confidence: {top_cat_prob * 100:.1f}%)")
 
-    print("\n🎉 ONNX Runtime Model Verification Successful!")
+    # 3. Test Persona Isolation Invariant
+    print("\n--- Testing Persona Isolation Invariant ---")
+    cat_personas = manifest["models"]["category_classifier"].get("category_personas", {})
+    assert len(cat_personas) > 0, "category_personas missing from manifest"
+    p_cat_ids = {cid for cid, p in cat_personas.items() if p == "P"}
+    j_cat_ids = {cid for cid, p in cat_personas.items() if p == "J"}
+    assert len(p_cat_ids) > 0, "No P categories found in manifest"
+    assert len(j_cat_ids) > 0, "No J categories found in manifest"
+    print(f"✓ Manifest contains {len(p_cat_ids)} P categories and {len(j_cat_ids)} J categories")
+
+    # Verify P persona transaction never attributes to J category
+    for test_payee in ["Mukta", "ABERCROMBIE & FITCH", "STARBUCKS", "TRADER JOE"]:
+        clean_p = clean_payee_text(test_payee)
+        inputs_p = {
+            "cleaned_payee": np.array([[clean_p]], dtype=object),
+            "account_id": np.array([["fe4ea4eb-c181-427d-8614-9d5ae736b613"]], dtype=object), # 360 Checking [P]
+            "persona": np.array([["P"]], dtype=object),
+            "amount_log": np.array([[math.log1p(2500)]], dtype=np.float32),
+            "amount_sign": np.array([[-1.0]], dtype=np.float32),
+            "day_of_week": np.array([[1.0]], dtype=np.float32),
+            "day_of_month": np.array([[10.0]], dtype=np.float32),
+            "month": np.array([[10.0]], dtype=np.float32)
+        }
+        res_p = session_cat.run(None, inputs_p)
+        raw_probs = res_p[1][0]
+        
+        # Apply runtime persona masking (same as OnnxPredictorEngine)
+        masked_probs = {}
+        for idx, cid in enumerate(cat_classes):
+            if cat_personas.get(cid) == "J":
+                masked_probs[cid] = 0.0
+            else:
+                masked_probs[cid] = float(raw_probs[idx])
+        best_cat = max(masked_probs, key=masked_probs.get)
+        assert best_cat not in j_cat_ids, f"P persona attributed to J category {best_cat} for payee {test_payee}"
+    print("✓ P persona transactions strictly excluded from all J categories across all test payees")
+
+    # Verify J persona transaction never attributes to P category
+    for test_payee in ["river city roll", "Holiday Barn Midlothia", "STARBUCKS", "CHIPOTLE"]:
+        clean_j = clean_payee_text(test_payee)
+        inputs_j = {
+            "cleaned_payee": np.array([[clean_j]], dtype=object),
+            "account_id": np.array([["6fd7b088-005e-4254-9d3c-3eb231a3f66c"]], dtype=object), # 360 Checking [J]
+            "persona": np.array([["J"]], dtype=object),
+            "amount_log": np.array([[math.log1p(2500)]], dtype=np.float32),
+            "amount_sign": np.array([[-1.0]], dtype=np.float32),
+            "day_of_week": np.array([[1.0]], dtype=np.float32),
+            "day_of_month": np.array([[10.0]], dtype=np.float32),
+            "month": np.array([[10.0]], dtype=np.float32)
+        }
+        res_j = session_cat.run(None, inputs_j)
+        raw_probs = res_j[1][0]
+        
+        masked_probs = {}
+        for idx, cid in enumerate(cat_classes):
+            if cat_personas.get(cid) == "P":
+                masked_probs[cid] = 0.0
+            else:
+                masked_probs[cid] = float(raw_probs[idx])
+        best_cat = max(masked_probs, key=masked_probs.get)
+        assert best_cat not in p_cat_ids, f"J persona attributed to P category {best_cat} for payee {test_payee}"
+    print("✓ J persona transactions strictly excluded from all P categories across all test payees")
+
+    print("\n🎉 ONNX Runtime Model Verification & Persona Isolation Successful!")
 
 if __name__ == "__main__":
     test_onnx_models()

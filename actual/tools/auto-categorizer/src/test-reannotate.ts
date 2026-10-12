@@ -65,4 +65,56 @@ assert(isCategoryPersonaCompatible("Groceries", "P") === true, "Joint category c
 assert(isCategoryPersonaCompatible("Groceries", "Joint") === true, "Joint category compatible with Joint");
 console.log("✓ Persona compatibility checks verified");
 
+// Test 6: Account persona extraction
+import { getAccountPersona, resolveCategoryId } from "./index.js";
+assert(getAccountPersona("360 Checking [P]") === "P", "360 Checking [P] must be P");
+assert(getAccountPersona("Venture Card [P]") === "P", "Venture Card [P] must be P");
+assert(getAccountPersona("Paige Personal Account") === "P", "Paige Personal Account must be P");
+assert(getAccountPersona("360 Checking [J]") === "J", "360 Checking [J] must be J");
+assert(getAccountPersona("Quicksilver Card [J]") === "J", "Quicksilver Card [J] must be J");
+assert(getAccountPersona("Jacob Primary Account") === "J", "Jacob Primary Account must be J");
+assert(getAccountPersona("Savings Joint") === "Joint", "Savings Joint must be Joint");
+console.log("✓ Account persona extraction verified across P, J, and Joint accounts");
+
+// Test 7: Strict persona enforcement in resolveCategoryId
+const mockCategories = [
+  { id: "cat_fun_j", name: "Fun [J]", hidden: false, tombstone: false },
+  { id: "cat_fun_p", name: "Fun [P]", hidden: false, tombstone: false },
+  { id: "cat_groc", name: "Groceries", hidden: false, tombstone: false }
+];
+
+// Incompatible top prediction must be bypassed for P account
+const pPrediction = {
+  label: "cat_fun_j",
+  confidence: 0.95,
+  probabilities: {
+    cat_fun_j: 0.95,
+    cat_fun_p: 0.04,
+    cat_groc: 0.01
+  }
+};
+const pResolved = resolveCategoryId(pPrediction, mockCategories, undefined, "P");
+assert(pResolved === "cat_fun_p", `P persona must resolve to cat_fun_p, got: ${pResolved}`);
+assert(pResolved !== "cat_fun_j", "P persona must NEVER resolve to cat_fun_j");
+
+// Incompatible top prediction must be bypassed for J account
+const jPrediction = {
+  label: "cat_fun_p",
+  confidence: 0.92,
+  probabilities: {
+    cat_fun_p: 0.92,
+    cat_fun_j: 0.05,
+    cat_groc: 0.03
+  }
+};
+const jResolved = resolveCategoryId(jPrediction, mockCategories, undefined, "J");
+assert(jResolved === "cat_fun_j", `J persona must resolve to cat_fun_j, got: ${jResolved}`);
+assert(jResolved !== "cat_fun_p", "J persona must NEVER resolve to cat_fun_p");
+
+// Direct string prediction incompatible with persona must return null or fallback, never incompatible category
+const pDirectStringResolved = resolveCategoryId("cat_fun_j", mockCategories, undefined, "P");
+assert(pDirectStringResolved !== "cat_fun_j", "Direct string cat_fun_j must never be returned for P persona");
+
+console.log("✓ Strict persona enforcement in resolveCategoryId verified");
+
 console.log("\n🎉 All Re-annotation Unit Tests Passed!");

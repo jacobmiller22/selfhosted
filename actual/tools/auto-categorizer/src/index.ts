@@ -236,10 +236,20 @@ export function buildHiddenToActiveMap(
 }
 
 export function getAccountPersona(accountName: string): "P" | "J" | "Joint" {
-  if (accountName.includes("[P]") || accountName.toLowerCase().includes("priyanka") || accountName.toLowerCase().includes("personal")) {
+  if (
+    accountName.includes("[P]") ||
+    accountName.includes("[p]") ||
+    accountName.toLowerCase().includes("priyanka") ||
+    accountName.toLowerCase().includes("paige") ||
+    accountName.toLowerCase().includes("personal")
+  ) {
     return "P";
   }
-  if (accountName.includes("[J]") || accountName.toLowerCase().includes("jacob")) {
+  if (
+    accountName.includes("[J]") ||
+    accountName.includes("[j]") ||
+    accountName.toLowerCase().includes("jacob")
+  ) {
     return "J";
   }
   return "Joint";
@@ -247,8 +257,8 @@ export function getAccountPersona(accountName: string): "P" | "J" | "Joint" {
 
 export function isCategoryPersonaCompatible(categoryName: string, persona?: "P" | "J" | "Joint"): boolean {
   if (!persona || persona === "Joint") return true;
-  if (persona === "P" && categoryName.includes("[J]")) return false;
-  if (persona === "J" && categoryName.includes("[P]")) return false;
+  if (persona === "P" && (categoryName.includes("[J]") || categoryName.includes("[j]"))) return false;
+  if (persona === "J" && (categoryName.includes("[P]") || categoryName.includes("[p]"))) return false;
   return true;
 }
 
@@ -299,23 +309,23 @@ export function resolveCategoryId(
   }
 
   if (predLabel === "cat_income") {
-    const incomeCat = activeCategories.find((c) => c.is_income);
+    const incomeCat = activeCategories.find((c) => c.is_income && isCategoryPersonaCompatible(c.name, persona));
     if (incomeCat) return incomeCat.id;
   }
   if (predLabel === "cat_groceries") {
-    const grocCat = activeCategories.find((c) => c.name.toLowerCase().includes("grocer"));
+    const grocCat = activeCategories.find((c) => c.name.toLowerCase().includes("grocer") && isCategoryPersonaCompatible(c.name, persona));
     if (grocCat) return grocCat.id;
   }
   if (predLabel === "cat_subscriptions") {
-    const subCat = activeCategories.find((c) => c.name.toLowerCase().includes("subscript"));
+    const subCat = activeCategories.find((c) => c.name.toLowerCase().includes("subscript") && isCategoryPersonaCompatible(c.name, persona));
     if (subCat) return subCat.id;
   }
   if (predLabel === "cat_utilities" || predLabel === "cat_bills") {
-    const utilCat = activeCategories.find((c) => c.name.toLowerCase().includes("bill") || c.name.toLowerCase().includes("util"));
+    const utilCat = activeCategories.find((c) => (c.name.toLowerCase().includes("bill") || c.name.toLowerCase().includes("util")) && isCategoryPersonaCompatible(c.name, persona));
     if (utilCat) return utilCat.id;
   }
   if (predLabel === "cat_dining") {
-    const diningCat = activeCategories.find((c) => c.name.toLowerCase().includes("dining") || c.name.toLowerCase().includes("food"));
+    const diningCat = activeCategories.find((c) => (c.name.toLowerCase().includes("dining") || c.name.toLowerCase().includes("food")) && isCategoryPersonaCompatible(c.name, persona));
     if (diningCat) return diningCat.id;
   }
 
@@ -330,9 +340,10 @@ export function resolveCategoryId(
   const nameMatch = activeCategories.find((c) => {
     const activeName = c.name.toLowerCase();
     return (
-      activeName === cleanLabel ||
-      activeName.includes(cleanLabel) ||
-      cleanLabel.includes(activeName)
+      isCategoryPersonaCompatible(c.name, persona) &&
+      (activeName === cleanLabel ||
+        activeName.includes(cleanLabel) ||
+        cleanLabel.includes(activeName))
     );
   });
   if (nameMatch) return nameMatch.id;
@@ -473,9 +484,10 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
       }
 
       const resolvedCatId = resolveCategoryId(catPred, categories, hiddenToActiveMap, persona);
-      const catName = categories.find((c) => c.id === resolvedCatId)?.name || catPred.label;
+      const matchedCat = resolvedCatId ? categories.find((c) => c.id === resolvedCatId) : undefined;
+      const catName = matchedCat?.name;
 
-      if (catPred.confidence >= CONFIDENCE_THRESHOLD && resolvedCatId) {
+      if (catPred.confidence >= CONFIDENCE_THRESHOLD && resolvedCatId && catName && isCategoryPersonaCompatible(catName, persona)) {
         updates.category = resolvedCatId;
         proposedAssignments.push({
           txId: tx.id,
@@ -493,7 +505,7 @@ export async function runAutoCategorizerSync(overrideDryRun?: boolean): Promise<
         } else {
           console.log(`  ✅ [LIVE AUTO-ASSIGNED] "${rawPayee}" -> Category: ${catName} (${(catPred.confidence * 100).toFixed(1)}%)`);
         }
-      } else {
+      } else if (resolvedCatId && catName && isCategoryPersonaCompatible(catName, persona)) {
         updates.notes = `[ML Suggested Category: ${catName} (${(catPred.confidence * 100).toFixed(0)}%)]`;
         proposedSuggestions.push({
           txId: tx.id,
@@ -656,12 +668,15 @@ export async function runReannotation(options?: ReannotationOptions): Promise<Re
 
       const catPred = await predictor.predictCategory(rawPayee, tx.account, tx.amount, tx.date, persona);
       const resolvedCatId = resolveCategoryId(catPred, categories, hiddenToActiveMap, persona);
-      const catName = (resolvedCatId ? catNameMap.get(resolvedCatId) : undefined)
-        || catNameMap.get(catPred.label)
-        || catPred.label;
+      const catName = resolvedCatId ? catNameMap.get(resolvedCatId) : undefined;
+
+      // Skip annotation if no persona-compatible category was resolved
+      if (!resolvedCatId || !catName || !isCategoryPersonaCompatible(catName, persona)) {
+        continue;
+      }
 
       const confPercent = (catPred.confidence * 100).toFixed(0);
-      const isHighConf = catPred.confidence >= CONFIDENCE_THRESHOLD && !!resolvedCatId;
+      const isHighConf = catPred.confidence >= CONFIDENCE_THRESHOLD;
       const noteTag = isHighConf
         ? `[ML Recommended Category: ${catName} (${confPercent}%)]`
         : `[ML Suggested Category: ${catName} (${confPercent}%)]`;
