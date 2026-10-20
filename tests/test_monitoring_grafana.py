@@ -431,6 +431,7 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
             (114, "Monthly Spend: Amortized Total"),
             (115, "Yearly Spend: Core Living"),
             (116, "Yearly Spend: Amortized Total"),
+            (117, "Yearly Spend: Excl. Mortgage"),
         ]:
             panel = panels.get(pid)
             self.assertIsNotNone(panel, f"Panel {pid} must exist")
@@ -438,9 +439,20 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
             self.assertIn(expected_title_substr, panel.get("title", ""))
             sql = panel["targets"][0]["rawSql"]
             self.assertIn("transferred_id IS NULL", sql)
-            self.assertIn("House Equity", sql)
+            if pid in (113, 114, 115, 116):
+                self.assertIn("House Equity", sql)
+            else:
+                self.assertIn("Mortgage", sql)
             self.assertIn("anchor", sql)
             self.assertEqual(panel["fieldConfig"]["defaults"]["unit"], "currencyUSD")
+
+        panel_117_sql = panels[117]["targets"][0]["rawSql"]
+        for expected_metric in [
+            "Lifestyle Run-Rate",
+            "TTM Lifestyle (No Mtg/Rent)",
+            "FIRE w/ Amort CapEx",
+        ]:
+            self.assertIn(expected_metric, panel_117_sql)
 
     def test_savings_rate_all_three_forms_panel_104(self):
         panels = {p.get("id"): p for p in self.data.get("panels", [])}
