@@ -46,12 +46,12 @@ class TestGrafanaCompose(unittest.TestCase):
         grafana = services.get("grafana", {})
 
         # Strict resource bounds
-        self.assertEqual(grafana.get("mem_limit"), "120m")
+        self.assertEqual(grafana.get("mem_limit"), "256m")
         self.assertEqual(float(grafana.get("cpus")), 0.25)
 
         deploy_res = grafana.get("deploy", {}).get("resources", {})
         limits = deploy_res.get("limits", {})
-        self.assertEqual(limits.get("memory"), "120M")
+        self.assertEqual(limits.get("memory"), "256M")
         self.assertEqual(float(limits.get("cpus")), 0.25)
 
         reservations = deploy_res.get("reservations", {})
@@ -77,6 +77,7 @@ class TestGrafanaCompose(unittest.TestCase):
         self.assertIn("GF_SERVER_ROOT_URL", env_map)
         self.assertIn("https://monitoring.cloud.jacobmiller22.com", env_map["GF_SERVER_ROOT_URL"])
         self.assertEqual(env_map.get("GF_SERVER_SERVE_FROM_SUB_PATH"), "false")
+        self.assertEqual(env_map.get("GF_SERVER_ENABLE_GZIP"), "true")
         self.assertEqual(env_map.get("GF_ANALYTICS_REPORTING_ENABLED"), "false")
         self.assertEqual(env_map.get("GF_ANALYTICS_CHECK_FOR_UPDATES"), "false")
         self.assertEqual(env_map.get("GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES"), "false")

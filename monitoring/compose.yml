@@ -127,6 +127,7 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-https://monitoring.cloud.jacobmiller22.com}
       - GF_SERVER_SERVE_FROM_SUB_PATH=false
+      - GF_SERVER_ENABLE_GZIP=true
       - GF_ANALYTICS_REPORTING_ENABLED=false
       - GF_ANALYTICS_CHECK_FOR_UPDATES=false
       - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
@@ -146,10 +147,10 @@ services:
       resources:
         limits:
           cpus: '0.25'
-          memory: 120M
+          memory: 256M
         reservations:
           memory: 60M
-    mem_limit: 120m
+    mem_limit: 256m
     cpus: 0.25
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
