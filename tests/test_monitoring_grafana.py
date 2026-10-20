@@ -46,12 +46,12 @@ class TestGrafanaCompose(unittest.TestCase):
         grafana = services.get("grafana", {})
 
         # Strict resource bounds
-        self.assertEqual(grafana.get("mem_limit"), "120m")
+        self.assertEqual(grafana.get("mem_limit"), "256m")
         self.assertEqual(float(grafana.get("cpus")), 0.25)
 
         deploy_res = grafana.get("deploy", {}).get("resources", {})
         limits = deploy_res.get("limits", {})
-        self.assertEqual(limits.get("memory"), "120M")
+        self.assertEqual(limits.get("memory"), "256M")
         self.assertEqual(float(limits.get("cpus")), 0.25)
 
         reservations = deploy_res.get("reservations", {})
@@ -77,6 +77,7 @@ class TestGrafanaCompose(unittest.TestCase):
         self.assertIn("GF_SERVER_ROOT_URL", env_map)
         self.assertIn("https://monitoring.cloud.jacobmiller22.com", env_map["GF_SERVER_ROOT_URL"])
         self.assertEqual(env_map.get("GF_SERVER_SERVE_FROM_SUB_PATH"), "false")
+        self.assertEqual(env_map.get("GF_SERVER_ENABLE_GZIP"), "true")
         self.assertEqual(env_map.get("GF_ANALYTICS_REPORTING_ENABLED"), "false")
         self.assertEqual(env_map.get("GF_ANALYTICS_CHECK_FOR_UPDATES"), "false")
         self.assertEqual(env_map.get("GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES"), "false")
@@ -328,16 +329,17 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
         self.assertIn("sqlite", self.data.get("tags", []))
         self.assertIn("budget", self.data.get("tags", []))
 
-    def test_all_six_sections_present(self):
+    def test_all_seven_sections_present(self):
         row_titles = [p.get("title") for p in self.data.get("panels", []) if p.get("type") == "row"]
-        self.assertEqual(len(row_titles), 6, f"Expected 6 section rows, found: {row_titles}")
+        self.assertEqual(len(row_titles), 7, f"Expected 7 section rows, found: {row_titles}")
         expected_sections = [
             "Executive Financial Health",
             "Cash Flow Dynamics",
             "Statistical Anomaly",
             "Merchant & Payee Intelligence",
             "Predictive Forecasting",
-            "Hierarchical Category Decomposition"
+            "Hierarchical Category Decomposition",
+            "Investment Portfolio & Brokerage Growth"
         ]
         for expected in expected_sections:
             self.assertTrue(
@@ -356,7 +358,7 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
 
     def test_markdown_guidance_cards_present(self):
         text_panels = [p for p in self.data.get("panels", []) if p.get("type") == "text"]
-        self.assertEqual(len(text_panels), 6, f"Expected 6 guidance markdown panels (1 per section), found {len(text_panels)}")
+        self.assertEqual(len(text_panels), 7, f"Expected 7 guidance markdown panels (1 per section), found {len(text_panels)}")
         for tp in text_panels:
             content = tp.get("options", {}).get("content", "")
             self.assertIn("How to Read", content, f"Guidance panel '{tp.get('title')}' should explain how to read the metrics")
@@ -421,6 +423,54 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
         self.assertEqual(unit_103, "suffix: mo",
                          f"Panel 103 unit must be 'suffix: mo' to avoid Grafana interpreting 'm' as minutes, got '{unit_103}'")
 
+
+    def test_monthly_and_yearly_spend_panels(self):
+        panels = {p.get("id"): p for p in self.data.get("panels", [])}
+        for pid, expected_title_substr in [
+            (113, "Monthly Spend: Core Living"),
+            (114, "Monthly Spend: Amortized Total"),
+            (115, "Yearly Spend: Core Living"),
+            (116, "Yearly Spend: Amortized Total"),
+            (117, "Yearly Spend: Excl. Mortgage"),
+        ]:
+            panel = panels.get(pid)
+            self.assertIsNotNone(panel, f"Panel {pid} must exist")
+            self.assertEqual(panel.get("type"), "stat")
+            self.assertIn(expected_title_substr, panel.get("title", ""))
+            sql = panel["targets"][0]["rawSql"]
+            self.assertIn("transferred_id IS NULL", sql)
+            if pid in (113, 114, 115, 116):
+                self.assertIn("House Equity", sql)
+            else:
+                self.assertIn("Mortgage", sql)
+            self.assertIn("anchor", sql)
+            self.assertEqual(panel["fieldConfig"]["defaults"]["unit"], "currencyUSD")
+
+        panel_117_sql = panels[117]["targets"][0]["rawSql"]
+        for expected_metric in [
+            "Lifestyle Run-Rate",
+            "TTM Lifestyle (No Mtg/Rent)",
+            "FIRE w/ Amort CapEx",
+        ]:
+            self.assertIn(expected_metric, panel_117_sql)
+
+    def test_savings_rate_all_three_forms_panel_104(self):
+        panels = {p.get("id"): p for p in self.data.get("panels", [])}
+        panel_104 = panels.get(104)
+        self.assertIsNotNone(panel_104, "Panel 104 must exist")
+        self.assertEqual(panel_104.get("type"), "stat")
+        self.assertIn("All 3 Forms", panel_104.get("title", ""))
+        sql = panel_104["targets"][0]["rawSql"]
+        for expected_form in [
+            "Post-Tax Take-Home",
+            "All-In Invest + Cash",
+            "Total Wealth-Building",
+        ]:
+            self.assertIn(expected_form, sql, f"Panel 104 must return '{expected_form}'")
+        self.assertIn("anchor", sql)
+        self.assertIn("C1 401k [J]", sql)
+        self.assertIn("HSA [J]", sql)
+
     def test_sqlite_queries_execute_cleanly(self):
         import sqlite3
         con = sqlite3.connect(":memory:")
@@ -433,7 +483,8 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
                 name TEXT,
                 closed INTEGER DEFAULT 0,
                 offbudget INTEGER DEFAULT 0,
-                tombstone INTEGER DEFAULT 0
+                tombstone INTEGER DEFAULT 0,
+                balance_current INTEGER DEFAULT 0
             );
             CREATE TABLE category_groups (
                 id TEXT PRIMARY KEY,
@@ -464,6 +515,7 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
                 category TEXT,
                 description TEXT,
                 imported_description TEXT,
+                notes TEXT,
                 transferred_id TEXT,
                 tombstone INTEGER DEFAULT 0
             );
