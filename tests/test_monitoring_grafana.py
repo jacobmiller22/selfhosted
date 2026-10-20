@@ -439,7 +439,25 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
             sql = panel["targets"][0]["rawSql"]
             self.assertIn("transferred_id IS NULL", sql)
             self.assertIn("House Equity", sql)
+            self.assertIn("anchor", sql)
             self.assertEqual(panel["fieldConfig"]["defaults"]["unit"], "currencyUSD")
+
+    def test_savings_rate_all_three_forms_panel_104(self):
+        panels = {p.get("id"): p for p in self.data.get("panels", [])}
+        panel_104 = panels.get(104)
+        self.assertIsNotNone(panel_104, "Panel 104 must exist")
+        self.assertEqual(panel_104.get("type"), "stat")
+        self.assertIn("All 3 Forms", panel_104.get("title", ""))
+        sql = panel_104["targets"][0]["rawSql"]
+        for expected_form in [
+            "Post-Tax Take-Home",
+            "All-In Invest + Cash",
+            "Total Wealth-Building",
+        ]:
+            self.assertIn(expected_form, sql, f"Panel 104 must return '{expected_form}'")
+        self.assertIn("anchor", sql)
+        self.assertIn("C1 401k [J]", sql)
+        self.assertIn("HSA [J]", sql)
 
     def test_sqlite_queries_execute_cleanly(self):
         import sqlite3
