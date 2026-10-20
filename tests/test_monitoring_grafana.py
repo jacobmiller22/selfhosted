@@ -331,7 +331,7 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
 
     def test_all_seven_sections_present(self):
         row_titles = [p.get("title") for p in self.data.get("panels", []) if p.get("type") == "row"]
-        self.assertEqual(len(row_titles), 7, f"Expected 7 section rows, found: {row_titles}")
+        self.assertEqual(len(row_titles), 8, f"Expected 8 section rows, found: {row_titles}")
         expected_sections = [
             "Executive Financial Health",
             "Cash Flow Dynamics",
@@ -339,7 +339,8 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
             "Merchant & Payee Intelligence",
             "Predictive Forecasting",
             "Hierarchical Category Decomposition",
-            "Investment Portfolio & Brokerage Growth"
+            "Investment Portfolio & Brokerage Growth",
+            "Financial Independence & Early Retirement (FIRE)"
         ]
         for expected in expected_sections:
             self.assertTrue(
@@ -358,7 +359,7 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
 
     def test_markdown_guidance_cards_present(self):
         text_panels = [p for p in self.data.get("panels", []) if p.get("type") == "text"]
-        self.assertEqual(len(text_panels), 7, f"Expected 7 guidance markdown panels (1 per section), found {len(text_panels)}")
+        self.assertEqual(len(text_panels), 8, f"Expected 8 guidance markdown panels (1 per section), found {len(text_panels)}")
         for tp in text_panels:
             content = tp.get("options", {}).get("content", "")
             self.assertIn("How to Read", content, f"Guidance panel '{tp.get('title')}' should explain how to read the metrics")
@@ -470,6 +471,22 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
         self.assertIn("anchor", sql)
         self.assertIn("C1 401k [J]", sql)
         self.assertIn("HSA [J]", sql)
+
+    def test_fire_section_and_multi_dial_matrices(self):
+        panels = {p.get("id"): p for p in self.data.get("panels", [])}
+        self.assertEqual(panels[800]["type"], "row")
+        self.assertIn("Section 8: Financial Independence & Early Retirement (FIRE)", panels[800]["title"])
+        self.assertEqual(panels[801]["type"], "text")
+        self.assertEqual(panels[802]["type"], "stat")
+        for pid, expected_substr in [
+            (803, "Dial Matrix 1: Years-to-Walk-Away FIRE"),
+            (804, "Dial Matrix 2: Work-Horizon Payout Table"),
+            (805, "Dial Matrix 3: Sprint X Years"),
+        ]:
+            self.assertIn(pid, panels)
+            self.assertEqual(panels[pid]["type"], "table")
+            self.assertIn(expected_substr, panels[pid]["title"])
+            self.assertIn("WITH RECURSIVE", panels[pid]["targets"][0]["rawSql"])
 
     def test_sqlite_queries_execute_cleanly(self):
         import sqlite3
