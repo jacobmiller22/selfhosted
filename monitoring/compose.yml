@@ -139,6 +139,7 @@ services:
       - ./grafana/provisioning/alerting:/etc/grafana/provisioning/alerting:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - actual-analytics-data:/var/lib/grafana/data/actual:ro
+      - btcupdown-data:/var/lib/grafana/data/btcupdown:ro
     networks:
       - monitoring
       - nginx-proxy-manager
@@ -172,4 +173,7 @@ volumes:
     name: grafana-data
   actual-analytics-data:
     name: actual-analytics-data
+    external: true
+  btcupdown-data:
+    name: akg848ckos4oocc0ccokksc8_btcupdown-data
     external: true

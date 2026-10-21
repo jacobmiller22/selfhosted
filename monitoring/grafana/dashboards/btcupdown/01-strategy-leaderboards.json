@@ -1,0 +1,331 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Strategy Leaderboards",
+      "tooltip": "Go to Strategy Leaderboards & Performance Suite",
+      "type": "link",
+      "url": "/d/btcupdown-strategy-leaderboards"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Experiments Monitor",
+      "tooltip": "Go to Ongoing & All-Time Experiments Monitor",
+      "type": "link",
+      "url": "/d/btcupdown-experiments-monitor"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Market, Signals & Tape",
+      "tooltip": "Go to 15m Market Quotes, Vixxy Signals & Trade Tape",
+      "type": "link",
+      "url": "/d/btcupdown-market-signals-and-trades"
+    }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Strategy Standings Leaderboard (Ranked by Cash & Realized PnL)",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    s.participant_id,\n    s.experiment_id,\n    s.strategy_id,\n    s.display_label,\n    ROUND(s.cash_dollars, 2) AS cash_dollars,\n    ROUND(s.realized_pnl_dollars, 2) AS realized_pnl,\n    ROUND((s.cash_dollars - e.start_balance) / e.start_balance * 100.0, 2) AS roi_pct,\n    s.trades,\n    s.wins,\n    s.losses,\n    ROUND(s.win_rate_pct, 1) AS win_rate_pct,\n    e.status AS cohort_status\nFROM strategy_standings s\nJOIN strategy_experiments e ON s.participant_id = e.participant_id AND s.experiment_id = e.experiment_id\nWHERE ('$participant' = 'All' OR s.participant_id = '$participant')\n  AND ('$strategy' = 'All' OR s.strategy_id = '$strategy')\n  AND ('$experiment' = 'All' OR s.experiment_id = '$experiment')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\n  AND s.trades >= CAST('$min_trades' AS INTEGER)\nORDER BY s.cash_dollars DESC, s.realized_pnl_dollars DESC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Normalized Rolling ROI % (Eliminating Early-Starter Compounding Bias)",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    s.strategy_id,\n    COUNT(*) AS total_cohorts,\n    ROUND(AVG((s.cash_dollars - e.start_balance) / e.start_balance * 100.0), 2) AS mean_roi_pct,\n    ROUND(MIN((s.cash_dollars - e.start_balance) / e.start_balance * 100.0), 2) AS min_roi_pct,\n    ROUND(MAX((s.cash_dollars - e.start_balance) / e.start_balance * 100.0), 2) AS max_roi_pct,\n    ROUND(SUM(CASE WHEN s.cash_dollars > e.start_balance THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS pct_profitable_cohorts,\n    SUM(s.trades) AS total_trades,\n    ROUND(SUM(s.realized_pnl_dollars), 2) AS total_realized_pnl\nFROM strategy_standings s\nJOIN strategy_experiments e ON s.participant_id = e.participant_id AND s.experiment_id = e.experiment_id\nWHERE ('$participant' = 'All' OR s.participant_id = '$participant')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\n  AND s.trades >= CAST('$min_trades' AS INTEGER)\nGROUP BY s.strategy_id\nORDER BY mean_roi_pct DESC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Strategy Family Win Rate & Performance Comparison",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    s.strategy_id,\n    ROUND(AVG(s.win_rate_pct), 1) AS avg_win_rate_pct,\n    SUM(s.trades) AS total_trades,\n    SUM(s.wins) AS total_wins,\n    SUM(s.losses) AS total_losses,\n    ROUND(SUM(s.realized_pnl_dollars), 2) AS net_pnl_dollars\nFROM strategy_standings s\nJOIN strategy_experiments e ON s.participant_id = e.participant_id AND s.experiment_id = e.experiment_id\nWHERE ('$participant' = 'All' OR s.participant_id = '$participant')\n  AND ('$strategy' = 'All' OR s.strategy_id = '$strategy')\n  AND ('$experiment' = 'All' OR s.experiment_id = '$experiment')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\nGROUP BY s.strategy_id\nORDER BY avg_win_rate_pct DESC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Cumulative Realized PnL by Strategy ($)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 14,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    t.closed_at_ms AS time,\n    t.strategy_id AS metric,\n    SUM(t.pnl) OVER (PARTITION BY t.participant_id, t.strategy_id ORDER BY t.closed_at_ms ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cumulative_pnl\nFROM strategy_trades t\nWHERE t.closed_at_ms IS NOT NULL\n  AND ('$participant' = 'All' OR t.participant_id = '$participant')\n  AND ('$strategy' = 'All' OR t.strategy_id = '$strategy')\n  AND ('$experiment' = 'All' OR t.experiment_id = '$experiment')\nORDER BY t.closed_at_ms ASC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Exit Reason Breakdown by Strategy",
+      "type": "table",
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 14,
+        "y": 16
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    t.strategy_id,\n    COALESCE(t.exit_reason, 'unsettled') AS exit_reason,\n    COUNT(*) AS trade_count,\n    ROUND(SUM(t.pnl), 2) AS total_pnl,\n    ROUND(AVG(t.pnl), 2) AS avg_pnl\nFROM strategy_trades t\nWHERE ('$participant' = 'All' OR t.participant_id = '$participant')\n  AND ('$strategy' = 'All' OR t.strategy_id = '$strategy')\n  AND ('$experiment' = 'All' OR t.experiment_id = '$experiment')\nGROUP BY t.strategy_id, exit_reason\nORDER BY t.strategy_id ASC, trade_count DESC;",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "btcupdown",
+    "trading",
+    "crypto",
+    "paper-trading"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "participant",
+        "type": "query",
+        "label": "Participant",
+        "query": "SELECT DISTINCT participant_id FROM strategy_standings ORDER BY participant_id;",
+        "current": {
+          "text": "All",
+          "value": "All"
+        },
+        "includeAll": true,
+        "allValue": "All",
+        "multi": false,
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "btcupdown-sqlite"
+        }
+      },
+      {
+        "name": "strategy",
+        "type": "query",
+        "label": "Strategy",
+        "query": "SELECT DISTINCT strategy_id FROM strategy_standings ORDER BY strategy_id;",
+        "current": {
+          "text": "All",
+          "value": "All"
+        },
+        "includeAll": true,
+        "allValue": "All",
+        "multi": false,
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "btcupdown-sqlite"
+        }
+      },
+      {
+        "name": "experiment",
+        "type": "query",
+        "label": "Experiment",
+        "query": "SELECT DISTINCT experiment_id FROM strategy_experiments ORDER BY started_at_ms DESC;",
+        "current": {
+          "text": "All",
+          "value": "All"
+        },
+        "includeAll": true,
+        "allValue": "All",
+        "multi": false,
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "btcupdown-sqlite"
+        }
+      },
+      {
+        "name": "experiment_status",
+        "type": "custom",
+        "label": "Cohort Status",
+        "query": "all, active, draining, completed",
+        "current": {
+          "text": "all",
+          "value": "all"
+        },
+        "options": [
+          {
+            "text": "all",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "active",
+            "value": "active",
+            "selected": false
+          },
+          {
+            "text": "draining",
+            "value": "draining",
+            "selected": false
+          },
+          {
+            "text": "completed",
+            "value": "completed",
+            "selected": false
+          }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "min_trades",
+        "type": "custom",
+        "label": "Min Trades Filter",
+        "query": "0, 1, 5, 10, 20",
+        "current": {
+          "text": "0",
+          "value": "0"
+        },
+        "options": [
+          {
+            "text": "0",
+            "value": "0",
+            "selected": true
+          },
+          {
+            "text": "1",
+            "value": "1",
+            "selected": false
+          },
+          {
+            "text": "5",
+            "value": "5",
+            "selected": false
+          },
+          {
+            "text": "10",
+            "value": "10",
+            "selected": false
+          },
+          {
+            "text": "20",
+            "value": "20",
+            "selected": false
+          }
+        ],
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "BTC 15m Strategy Leaderboards & Performance Suite",
+  "uid": "btcupdown-strategy-leaderboards",
+  "version": 1
+}

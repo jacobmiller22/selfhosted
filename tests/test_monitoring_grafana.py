@@ -108,11 +108,16 @@ class TestGrafanaCompose(unittest.TestCase):
             any("actual-analytics-data:/var/lib/grafana/data/actual:ro" in str(v) for v in volumes),
             f"grafana must mount actual-analytics-data read-only, found: {volumes}"
         )
+        self.assertTrue(
+            any("btcupdown-data:/var/lib/grafana/data/btcupdown:ro" in str(v) for v in volumes),
+            f"grafana must mount btcupdown-data read-only, found: {volumes}"
+        )
 
         # Top-level volume declaration
         top_volumes = self.compose_data.get("volumes", {})
         self.assertIn("grafana-data", top_volumes)
         self.assertIn("actual-analytics-data", top_volumes)
+        self.assertIn("btcupdown-data", top_volumes)
 
     def test_grafana_networks(self):
         services = self.compose_data.get("services", {})
@@ -179,6 +184,7 @@ class TestGrafanaProvisioning(unittest.TestCase):
         self.assertEqual(provider.get("type"), "file")
         options = provider.get("options", {})
         self.assertEqual(options.get("path"), "/var/lib/grafana/dashboards")
+        self.assertTrue(options.get("foldersFromFilesStructure", False))
 
     def test_actual_sqlite_datasource_provisioning(self):
         sqlite_ds_file = DATASOURCES_DIR / "actual-sqlite.yml"
@@ -196,13 +202,29 @@ class TestGrafanaProvisioning(unittest.TestCase):
         self.assertFalse(actual_ds.get("isDefault"))
         self.assertEqual(actual_ds.get("jsonData", {}).get("path"), "/var/lib/grafana/data/actual/db.sqlite")
 
+    def test_btcupdown_sqlite_datasource_provisioning(self):
+        sqlite_ds_file = DATASOURCES_DIR / "btcupdown-sqlite.yml"
+        self.assertTrue(sqlite_ds_file.exists(), f"{sqlite_ds_file} must exist")
+        with open(sqlite_ds_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        self.assertIsInstance(data, dict)
+        datasources = data.get("datasources", [])
+        self.assertTrue(len(datasources) > 0)
+        btc_ds = datasources[0]
+        self.assertEqual(btc_ds.get("name"), "SQLite (btcupdown)")
+        self.assertEqual(btc_ds.get("uid"), "btcupdown-sqlite")
+        self.assertEqual(btc_ds.get("type"), "frser-sqlite-datasource")
+        self.assertEqual(btc_ds.get("access"), "proxy")
+        self.assertFalse(btc_ds.get("isDefault"))
+        self.assertEqual(btc_ds.get("jsonData", {}).get("path"), "/var/lib/grafana/data/btcupdown/broker.sqlite")
+
 
 class TestGrafanaDashboards(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        host_file = DASHBOARDS_JSON_DIR / "host-metrics.json"
-        container_file = DASHBOARDS_JSON_DIR / "container-metrics.json"
-        dr_file = DASHBOARDS_JSON_DIR / "dr-and-backups.json"
+        host_file = next(DASHBOARDS_JSON_DIR.rglob("host-metrics.json"))
+        container_file = next(DASHBOARDS_JSON_DIR.rglob("container-metrics.json"))
+        dr_file = next(DASHBOARDS_JSON_DIR.rglob("dr-and-backups.json"))
 
         cls.assertTrue(host_file.exists(), f"{host_file} must exist")
         cls.assertTrue(container_file.exists(), f"{container_file} must exist")
@@ -317,7 +339,7 @@ class TestGrafanaDashboards(unittest.TestCase):
 class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.dashboard_file = DASHBOARDS_JSON_DIR / "actual-budget-analytics.json"
+        cls.dashboard_file = next(DASHBOARDS_JSON_DIR.rglob("actual-budget-analytics.json"))
         cls.assertTrue(cls.dashboard_file.exists(), f"{cls.dashboard_file} must exist")
         with open(cls.dashboard_file, "r", encoding="utf-8") as f:
             cls.data = json.load(f)
@@ -510,6 +532,296 @@ class TestActualBudgetAnalyticsDashboard(unittest.TestCase):
                         self.fail(f"Query in panel '{p.get('title')}' failed with error: {e}\nSQL:\n{raw_sql}")
 
         self.assertTrue(executed_queries >= 12, f"Expected at least 12 SQL queries executed, got {executed_queries}")
+
+
+class TestBTCUpDownDashboards(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dashboards_dir = DASHBOARDS_JSON_DIR / "btcupdown"
+        cls.d1_file = cls.dashboards_dir / "01-strategy-leaderboards.json"
+        cls.d2_file = cls.dashboards_dir / "02-experiments-monitor.json"
+        cls.d3_file = cls.dashboards_dir / "03-market-signals-and-trades.json"
+
+        cls.assertTrue(cls.d1_file.exists(), f"{cls.d1_file} must exist")
+        cls.assertTrue(cls.d2_file.exists(), f"{cls.d2_file} must exist")
+        cls.assertTrue(cls.d3_file.exists(), f"{cls.d3_file} must exist")
+
+        with open(cls.d1_file, "r", encoding="utf-8") as f:
+            cls.d1 = json.load(f)
+        with open(cls.d2_file, "r", encoding="utf-8") as f:
+            cls.d2 = json.load(f)
+        with open(cls.d3_file, "r", encoding="utf-8") as f:
+            cls.d3 = json.load(f)
+
+    def test_dashboards_metadata_and_uids(self):
+        self.assertEqual(self.d1.get("uid"), "btcupdown-strategy-leaderboards")
+        self.assertEqual(self.d2.get("uid"), "btcupdown-experiments-monitor")
+        self.assertEqual(self.d3.get("uid"), "btcupdown-market-signals-and-trades")
+
+        for d in [self.d1, self.d2, self.d3]:
+            self.assertIn("btcupdown", d.get("tags", []))
+
+    def test_all_sqlite_queries_execute_cleanly_against_broker_schema(self):
+        import sqlite3
+        con = sqlite3.connect(":memory:")
+        cur = con.cursor()
+
+        # Seed schema matching crates/data-broker/src/store.rs
+        cur.executescript("""
+            CREATE TABLE IF NOT EXISTS strategy_experiments (
+                participant_id       TEXT NOT NULL,
+                experiment_id        TEXT NOT NULL,
+                generator_id         TEXT,
+                status               TEXT NOT NULL,
+                start_balance        REAL NOT NULL,
+                strategies_json      TEXT NOT NULL,
+                params_override_json TEXT,
+                started_at_ms        INTEGER NOT NULL,
+                end_at_ms            INTEGER,
+                max_cycles           INTEGER,
+                cycles_observed      INTEGER NOT NULL DEFAULT 0,
+                drain_deadline_ms    INTEGER,
+                completed_at_ms      INTEGER,
+                force_closed         INTEGER NOT NULL DEFAULT 0,
+                updated_at_ms        INTEGER NOT NULL,
+                ingested_at_ms       INTEGER NOT NULL,
+                PRIMARY KEY (participant_id, experiment_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS strategy_standings (
+                participant_id       TEXT NOT NULL,
+                experiment_id        TEXT NOT NULL,
+                strategy_id          TEXT NOT NULL,
+                display_label        TEXT NOT NULL,
+                cash_dollars         REAL NOT NULL,
+                trades               INTEGER NOT NULL,
+                wins                 INTEGER NOT NULL,
+                losses               INTEGER NOT NULL,
+                win_rate_pct         REAL NOT NULL,
+                realized_pnl_dollars REAL NOT NULL,
+                watching_json        TEXT,
+                settling_json        TEXT NOT NULL,
+                updated_at_ms        INTEGER NOT NULL,
+                ingested_at_ms       INTEGER NOT NULL,
+                PRIMARY KEY (participant_id, experiment_id, strategy_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS strategy_trades (
+                participant_id       TEXT NOT NULL,
+                experiment_id        TEXT NOT NULL,
+                trade_id             INTEGER NOT NULL,
+                strategy_id          TEXT NOT NULL,
+                cycle_id             TEXT NOT NULL,
+                ticker               TEXT NOT NULL,
+                side                 TEXT NOT NULL,
+                contracts            INTEGER NOT NULL,
+                entry_price          REAL NOT NULL,
+                cost                 REAL NOT NULL,
+                status               TEXT NOT NULL,
+                exit_reason          TEXT,
+                exit_price           REAL,
+                pnl                  REAL,
+                won                  INTEGER,
+                opened_at_ms         INTEGER NOT NULL,
+                closed_at_ms         INTEGER,
+                ingested_at_ms       INTEGER NOT NULL,
+                PRIMARY KEY (participant_id, experiment_id, trade_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS strategy_outputs (
+                participant_id       TEXT NOT NULL,
+                experiment_id        TEXT NOT NULL,
+                output_id            INTEGER NOT NULL,
+                strategy_id          TEXT NOT NULL,
+                cycle_key            TEXT NOT NULL,
+                ts_ms                INTEGER NOT NULL,
+                output_kind          TEXT NOT NULL,
+                log_line             TEXT NOT NULL,
+                payload_json         TEXT NOT NULL,
+                ingested_at_ms       INTEGER NOT NULL,
+                PRIMARY KEY (participant_id, experiment_id, output_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS cycles (
+                cycle_id             TEXT PRIMARY KEY,
+                contract_id          TEXT NOT NULL,
+                opened_at_ms         INTEGER NOT NULL,
+                locked_at_ms         INTEGER,
+                finalized_at_ms      INTEGER,
+                open_strike          REAL,
+                settle_price         REAL,
+                result               TEXT,
+                total_events         INTEGER NOT NULL DEFAULT 1,
+                last_state_json      TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS raw_events (
+                event_id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                ingested_at_ms       INTEGER NOT NULL,
+                producer_id          TEXT NOT NULL,
+                origin_host          TEXT NOT NULL,
+                topic                TEXT NOT NULL,
+                ts_ms                INTEGER NOT NULL,
+                is_state_change      INTEGER NOT NULL,
+                contract_id          TEXT,
+                cycle_id             TEXT,
+                direction            TEXT,
+                price                REAL,
+                open_strike          REAL,
+                current_spot         REAL,
+                seconds_remaining    REAL,
+                confidence           REAL,
+                reversal_risk        REAL,
+                normalized_json      TEXT NOT NULL,
+                extra_json           TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS state_changes (
+                event_id             INTEGER PRIMARY KEY,
+                ingested_at_ms       INTEGER NOT NULL,
+                producer_id          TEXT NOT NULL,
+                origin_host          TEXT NOT NULL,
+                topic                TEXT NOT NULL,
+                ts_ms                INTEGER NOT NULL,
+                contract_id          TEXT,
+                cycle_id             TEXT,
+                direction            TEXT,
+                price                REAL,
+                open_strike          REAL,
+                current_spot         REAL,
+                seconds_remaining    REAL,
+                confidence           REAL,
+                reversal_risk        REAL,
+                normalized_json      TEXT NOT NULL,
+                extra_json           TEXT NOT NULL
+            );
+        """)
+
+        total_queries = 0
+        import re
+
+        for dashboard in [self.d1, self.d2, self.d3]:
+            # 1. Audit template variables
+            for var in dashboard.get("templating", {}).get("list", []):
+                v_type = var.get("type")
+                v_query = var.get("query")
+                if v_type == "query" and isinstance(v_query, str) and v_query.strip():
+                    total_queries += 1
+                    sub_sql = (
+                        v_query.replace("$participant", "alice")
+                        .replace("$experiment", "exp-1")
+                        .replace("$strategy", "all")
+                    )
+                    try:
+                        cur.execute(sub_sql)
+                    except Exception as e:
+                        self.fail(f"Template variable query failed: {sub_sql}\nError: {e}")
+
+            # 2. Audit panel targets
+            for p in dashboard.get("panels", []):
+                for target in p.get("targets", []):
+                    raw_sql = target.get("rawSql") or target.get("query") or target.get("rawQueryText")
+                    if isinstance(raw_sql, str) and raw_sql.strip():
+                        total_queries += 1
+                        sub_sql = re.sub(r"\$__timeFilter\((.*?)\)", r"(\1 >= 0)", raw_sql)
+                        sub_sql = re.sub(r"\$__time\((.*?)\)", r"\1", sub_sql)
+                        sub_sql = re.sub(r"\$__timeGroup\((.*?),.*?\)", r"((\1 / 900000) * 900000)", sub_sql)
+                        sub_sql = re.sub(r"\$__unixEpochFrom\(\)", "0", sub_sql)
+                        sub_sql = re.sub(r"\$__unixEpochTo\(\)", "9999999999", sub_sql)
+                        sub_sql = (
+                            sub_sql.replace("$__timeFrom()", "0")
+                            .replace("$__timeTo()", "9999999999999")
+                            .replace("$__interval_ms", "1000")
+                            .replace("$__interval", "1s")
+                            .replace("$participant", "alice")
+                            .replace("$experiment", "exp-1")
+                            .replace("$strategy", "all")
+                            .replace("$experiment_status", "all")
+                            .replace("$min_trades", "0")
+                        )
+                        try:
+                            cur.execute(sub_sql)
+                        except Exception as e:
+                            self.fail(f"Panel '{p.get('title')}' in '{dashboard.get('title')}' failed SQL:\n{sub_sql}\nError: {e}")
+
+        self.assertEqual(total_queries, 25, f"Expected 25 SQL queries across 3 dashboards, got {total_queries}")
+
+
+class TestGrafanaFolderAcls(unittest.TestCase):
+    def test_enforce_folder_acls_default_deny(self):
+        import tempfile
+        import sqlite3
+        from monitoring.grafana.enforce_folder_acls import enforce_acls
+
+        with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
+            db_path = Path(tmp.name)
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.executescript("""
+                CREATE TABLE dashboard (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uid TEXT,
+                    title TEXT,
+                    is_folder INTEGER DEFAULT 0,
+                    org_id INTEGER DEFAULT 1
+                );
+                CREATE TABLE dashboard_acl (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    org_id INTEGER NOT NULL,
+                    dashboard_id INTEGER NOT NULL,
+                    user_id INTEGER NULL,
+                    team_id INTEGER NULL,
+                    permission INTEGER NOT NULL DEFAULT 4,
+                    role TEXT NULL,
+                    created DATETIME NOT NULL,
+                    updated DATETIME NOT NULL
+                );
+
+                -- Initial state: global permissions
+                INSERT INTO dashboard_acl (org_id, dashboard_id, permission, role, created, updated) VALUES
+                    (1, -1, 1, 'Viewer', '2026-01-01', '2026-01-01'),
+                    (1, -1, 2, 'Editor', '2026-01-01', '2026-01-01');
+
+                -- Initial folders
+                INSERT INTO dashboard (id, uid, title, is_folder, org_id) VALUES
+                    (10, 'infrastructure', 'Infrastructure', 1, 1),
+                    (11, 'financial-intelligence', 'Financial Intelligence', 1, 1),
+                    (12, 'btcupdown', 'BTC Up/Down', 1, 1);
+            """)
+            conn.commit()
+            conn.close()
+
+            results = enforce_acls(db_path)
+            self.assertEqual(results["global_viewers_removed"], 1)
+
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+
+            # Global check: no Viewer permission on dashboard_id = -1
+            cur.execute("SELECT * FROM dashboard_acl WHERE dashboard_id = -1 AND role = 'Viewer'")
+            self.assertIsNone(cur.fetchone())
+
+            # Infrastructure: Editor (2) and Admin (4) only
+            cur.execute("SELECT role, permission FROM dashboard_acl WHERE dashboard_id = 10")
+            infra_acls = dict(cur.fetchall())
+            self.assertNotIn("Viewer", infra_acls)
+            self.assertEqual(infra_acls.get("Editor"), 2)
+            self.assertEqual(infra_acls.get("Admin"), 4)
+
+            # Financial Intelligence: Editor (2) and Admin (4) only
+            cur.execute("SELECT role, permission FROM dashboard_acl WHERE dashboard_id = 11")
+            fin_acls = dict(cur.fetchall())
+            self.assertNotIn("Viewer", fin_acls)
+            self.assertEqual(fin_acls.get("Editor"), 2)
+
+            # BTC Up/Down: Viewer (1), Editor (2), and Admin (4)
+            cur.execute("SELECT role, permission FROM dashboard_acl WHERE dashboard_id = 12")
+            btc_acls = dict(cur.fetchall())
+            self.assertEqual(btc_acls.get("Viewer"), 1)
+            self.assertEqual(btc_acls.get("Editor"), 2)
+            self.assertEqual(btc_acls.get("Admin"), 4)
+
+            conn.close()
 
 
 if __name__ == "__main__":
