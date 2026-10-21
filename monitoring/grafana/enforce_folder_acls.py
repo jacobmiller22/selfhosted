@@ -29,11 +29,14 @@ def enforce_acls(db_path: Path) -> dict:
         )
         global_viewers_removed = cur.rowcount
 
-        # 2. Look up folders
+        # 2. Look up folders by uid or title (case-insensitive)
         cur.execute(
             "SELECT id, uid, title FROM dashboard WHERE is_folder = 1"
         )
-        folders = {row[1]: {"id": row[0], "title": row[2]} for row in cur.fetchall()}
+        folders = {}
+        for row in cur.fetchall():
+            folders[row[1].lower()] = {"id": row[0], "title": row[2]}
+            folders[row[2].lower()] = {"id": row[0], "title": row[2]}
 
         results = {
             "global_viewers_removed": global_viewers_removed,
@@ -41,15 +44,16 @@ def enforce_acls(db_path: Path) -> dict:
         }
 
         # 3. For each folder, configure explicit permissions
-        # Mapping: folder_uid -> list of (role, permission)
+        # Mapping: folder identifier (uid or title) -> list of (role, permission)
         folder_policy = {
             "infrastructure": [("Editor", 2), ("Admin", 4)],
+            "infrastructure-alerts": [("Editor", 2), ("Admin", 4)],
             "financial-intelligence": [("Editor", 2), ("Admin", 4)],
             "btcupdown": [("Viewer", 1), ("Editor", 2), ("Admin", 4)],
         }
 
-        for folder_uid, allowed_roles in folder_policy.items():
-            folder_info = folders.get(folder_uid)
+        for folder_key, allowed_roles in folder_policy.items():
+            folder_info = folders.get(folder_key.lower())
             if not folder_info:
                 # Folder might not be imported yet if Grafana hasn't booted
                 continue
@@ -69,7 +73,7 @@ def enforce_acls(db_path: Path) -> dict:
                     (folder_id, perm, role, now, now),
                 )
 
-            results["folders_configured"][folder_uid] = [r[0] for r in allowed_roles]
+            results["folders_configured"][folder_key] = [r[0] for r in allowed_roles]
 
         conn.commit()
         return results
