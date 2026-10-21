@@ -1,4 +1,4 @@
-FROM rust:1.85-bookworm AS builder
+FROM rust:1-bookworm AS builder
 
 ARG GITHUB_TOKEN=""
 ARG BTCUPDOWN_REPO="github.com/jacobmiller22/btcupdown.git"
