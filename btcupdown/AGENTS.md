@@ -15,6 +15,12 @@
 - **Supervised Processes** (`entrypoint.sh`):
   1. **`data-broker`**: Central Axum WebSocket & REST broker listening on `0.0.0.0:8080`, persisting SQLite WAL state in `/data/broker.sqlite` (`BROKER_RAW_RETENTION_DAYS=0`).
   2. **`vixxy-poller`**: Polls `GET /api/vixy/15m/current` every ~3000ms (±250ms jitter), renews the `vixy_session` JWT every 30s via `POST /api/auth/heartbeat`, persists rotated tokens atomically to `/data/vixxy_token_state.json`, and streams events over `ws://127.0.0.1:8080/ws/ingest`.
+  3. **`kalshi-poller`**: Discovers active `KXBTC15M` 15-minute contracts via the Kalshi Public API, polls real-time YES/NO bid/ask quotes and final settlement statuses, and streams `kalshi.15m.market` events into `data-broker` over `ws://127.0.0.1:8080/ws/ingest`.
+- **Installed Binaries**:
+  - `/usr/local/bin/data-broker`
+  - `/usr/local/bin/vixxy-poller`
+  - `/usr/local/bin/kalshi-poller`
+  - `/usr/local/bin/btcupdown-cli` (paper-trading engine monitor)
 - **Networks**:
   - `nginx-proxy-manager` (shared bridge network for reverse proxy routing).
 - **Persistent Storage**:

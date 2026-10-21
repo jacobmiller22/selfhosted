@@ -21,7 +21,7 @@ RUN if [ -n "${GITHUB_TOKEN}" ]; then \
     fi
 
 WORKDIR /app/src
-RUN cargo build --release --bin data-broker --bin vixxy-poller
+RUN cargo build --release --bin data-broker --bin vixxy-poller --bin kalshi-poller --bin btcupdown-cli
 
 FROM debian:bookworm-slim
 
@@ -34,6 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /app/src/target/release/data-broker /usr/local/bin/data-broker
 COPY --from=builder /app/src/target/release/vixxy-poller /usr/local/bin/vixxy-poller
+COPY --from=builder /app/src/target/release/kalshi-poller /usr/local/bin/kalshi-poller
+COPY --from=builder /app/src/target/release/btcupdown-cli /usr/local/bin/btcupdown-cli
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
