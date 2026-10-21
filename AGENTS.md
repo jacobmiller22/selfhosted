@@ -167,3 +167,4 @@ When working inside a specific service directory, consult its folder-level `AGEN
 - [tools/backup-runner/AGENTS.md](file:///Users/jacobmiller22/projects/selfhosted.feature-task-40-remote-host-verification/tools/backup-runner/AGENTS.md) – Alpine backup container, OpenSSL AES-256-CBC PBKDF2, B2 rotation, Discord/Snitch monitoring.
 - [obsidian/AGENTS.md](file:///Users/jacobmiller22/projects/selfhosted.feature-task-40-remote-host-verification/obsidian/AGENTS.md) – Obsidian CouchDB LiveSync backend.
 - [reiner-cam/AGENTS.md](file:///Users/jacobmiller22/projects/selfhosted.feature-task-40-remote-host-verification/reiner-cam/AGENTS.md) – Motion camera daemon and hardware device passthrough.
+- [btcupdown/AGENTS.md](file:///Users/jacobmiller22/projects/selfhosted/btcupdown/AGENTS.md) – Vixxy API poller (`vixxy-poller`) and central WebSocket/REST broker (`data-broker`).

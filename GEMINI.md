@@ -125,3 +125,4 @@ Refer to the subsystem documentation and directives:
 - [vaultwarden/AGENTS.md](file:///Users/jacobmiller22/projects/selfhosted.feature-task-40-remote-host-verification/vaultwarden/AGENTS.md) – Bitwarden Vault & Permissions
 - [nginx-proxy-manager/AGENTS.md](file:///Users/jacobmiller22/projects/selfhosted.feature-task-40-remote-host-verification/nginx-proxy-manager/AGENTS.md) – Central SSL Reverse Proxy
 - [tools/backup-runner/AGENTS.md](file:///Users/jacobmiller22/projects/selfhosted.feature-task-40-remote-host-verification/tools/backup-runner/AGENTS.md) – OpenSSL Backup Runner & B2 Retention
+- [btcupdown/AGENTS.md](file:///Users/jacobmiller22/projects/selfhosted/btcupdown/AGENTS.md) – Vixxy Poller & Central Data Broker API

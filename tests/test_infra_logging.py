@@ -20,6 +20,7 @@ TARGET_COMPOSE_FILES = [
     REPO_ROOT / "monitoring" / "compose.yml",
     REPO_ROOT / "homeassistant" / "compose.yml",
     REPO_ROOT / "obsidian" / "compose.yml",
+    REPO_ROOT / "btcupdown" / "compose.yml",
 ]
 
 
