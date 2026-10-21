@@ -69,7 +69,10 @@
           "queryType": "table",
           "rawQuery": true,
           "rawSql": "SELECT\n    e.participant_id,\n    e.experiment_id,\n    e.generator_id,\n    e.status,\n    e.cycles_observed,\n    e.max_cycles,\n    ROUND(SUM(s.cash_dollars), 2) AS current_bankroll,\n    ROUND(SUM(s.realized_pnl_dollars), 2) AS realized_pnl,\n    SUM(s.trades) AS trade_count,\n    e.started_at_ms,\n    e.end_at_ms,\n    e.drain_deadline_ms\nFROM strategy_experiments e\nLEFT JOIN strategy_standings s ON e.participant_id = s.participant_id AND e.experiment_id = s.experiment_id\nWHERE e.status IN ('active', 'draining')\n  AND ('$participant' = 'All' OR e.participant_id = '$participant')\nGROUP BY e.participant_id, e.experiment_id\nORDER BY e.started_at_ms DESC;",
-          "refId": "A"
+          "refId": "A",
+          "rawQueryText": "SELECT\n    e.participant_id,\n    e.experiment_id,\n    e.generator_id,\n    e.status,\n    e.cycles_observed,\n    e.max_cycles,\n    ROUND(SUM(s.cash_dollars), 2) AS current_bankroll,\n    ROUND(SUM(s.realized_pnl_dollars), 2) AS realized_pnl,\n    SUM(s.trades) AS trade_count,\n    e.started_at_ms,\n    e.end_at_ms,\n    e.drain_deadline_ms\nFROM strategy_experiments e\nLEFT JOIN strategy_standings s ON e.participant_id = s.participant_id AND e.experiment_id = s.experiment_id\nWHERE e.status IN ('active', 'draining')\n  AND ('$participant' = 'All' OR e.participant_id = '$participant')\nGROUP BY e.participant_id, e.experiment_id\nORDER BY e.started_at_ms DESC;",
+          "queryText": "SELECT\n    e.participant_id,\n    e.experiment_id,\n    e.generator_id,\n    e.status,\n    e.cycles_observed,\n    e.max_cycles,\n    ROUND(SUM(s.cash_dollars), 2) AS current_bankroll,\n    ROUND(SUM(s.realized_pnl_dollars), 2) AS realized_pnl,\n    SUM(s.trades) AS trade_count,\n    e.started_at_ms,\n    e.end_at_ms,\n    e.drain_deadline_ms\nFROM strategy_experiments e\nLEFT JOIN strategy_standings s ON e.participant_id = s.participant_id AND e.experiment_id = s.experiment_id\nWHERE e.status IN ('active', 'draining')\n  AND ('$participant' = 'All' OR e.participant_id = '$participant')\nGROUP BY e.participant_id, e.experiment_id\nORDER BY e.started_at_ms DESC;",
+          "format": "table"
         }
       ]
     },
@@ -96,7 +99,10 @@
           "queryType": "table",
           "rawQuery": true,
           "rawSql": "SELECT\n    status,\n    COUNT(*) AS count\nFROM strategy_experiments\nWHERE ('$participant' = 'All' OR participant_id = '$participant')\nGROUP BY status;",
-          "refId": "A"
+          "refId": "A",
+          "rawQueryText": "SELECT\n    status,\n    COUNT(*) AS count\nFROM strategy_experiments\nWHERE ('$participant' = 'All' OR participant_id = '$participant')\nGROUP BY status;",
+          "queryText": "SELECT\n    status,\n    COUNT(*) AS count\nFROM strategy_experiments\nWHERE ('$participant' = 'All' OR participant_id = '$participant')\nGROUP BY status;",
+          "format": "table"
         }
       ]
     },
@@ -123,7 +129,10 @@
           "queryType": "table",
           "rawQuery": true,
           "rawSql": "SELECT\n    e.participant_id,\n    e.experiment_id,\n    e.generator_id,\n    e.status,\n    e.cycles_observed,\n    ROUND(SUM(s.cash_dollars), 2) AS total_cash,\n    ROUND(SUM(s.realized_pnl_dollars), 2) AS total_pnl,\n    ROUND(AVG((s.cash_dollars - e.start_balance) / e.start_balance * 100.0), 2) AS cohort_roi_pct,\n    SUM(s.trades) AS total_trades,\n    SUM(s.wins) AS total_wins,\n    SUM(s.losses) AS total_losses,\n    ROUND(CASE WHEN SUM(s.trades) > 0 THEN (SUM(s.wins) * 100.0 / SUM(s.trades)) ELSE 0.0 END, 1) AS win_rate_pct,\n    e.started_at_ms,\n    e.completed_at_ms\nFROM strategy_experiments e\nJOIN strategy_standings s ON e.participant_id = s.participant_id AND e.experiment_id = s.experiment_id\nWHERE ('$participant' = 'All' OR e.participant_id = '$participant')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\nGROUP BY e.participant_id, e.experiment_id\nHAVING SUM(s.trades) >= CAST('$min_trades' AS INTEGER)\nORDER BY cohort_roi_pct DESC;",
-          "refId": "A"
+          "refId": "A",
+          "rawQueryText": "SELECT\n    e.participant_id,\n    e.experiment_id,\n    e.generator_id,\n    e.status,\n    e.cycles_observed,\n    ROUND(SUM(s.cash_dollars), 2) AS total_cash,\n    ROUND(SUM(s.realized_pnl_dollars), 2) AS total_pnl,\n    ROUND(AVG((s.cash_dollars - e.start_balance) / e.start_balance * 100.0), 2) AS cohort_roi_pct,\n    SUM(s.trades) AS total_trades,\n    SUM(s.wins) AS total_wins,\n    SUM(s.losses) AS total_losses,\n    ROUND(CASE WHEN SUM(s.trades) > 0 THEN (SUM(s.wins) * 100.0 / SUM(s.trades)) ELSE 0.0 END, 1) AS win_rate_pct,\n    e.started_at_ms,\n    e.completed_at_ms\nFROM strategy_experiments e\nJOIN strategy_standings s ON e.participant_id = s.participant_id AND e.experiment_id = s.experiment_id\nWHERE ('$participant' = 'All' OR e.participant_id = '$participant')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\nGROUP BY e.participant_id, e.experiment_id\nHAVING SUM(s.trades) >= CAST('$min_trades' AS INTEGER)\nORDER BY cohort_roi_pct DESC;",
+          "queryText": "SELECT\n    e.participant_id,\n    e.experiment_id,\n    e.generator_id,\n    e.status,\n    e.cycles_observed,\n    ROUND(SUM(s.cash_dollars), 2) AS total_cash,\n    ROUND(SUM(s.realized_pnl_dollars), 2) AS total_pnl,\n    ROUND(AVG((s.cash_dollars - e.start_balance) / e.start_balance * 100.0), 2) AS cohort_roi_pct,\n    SUM(s.trades) AS total_trades,\n    SUM(s.wins) AS total_wins,\n    SUM(s.losses) AS total_losses,\n    ROUND(CASE WHEN SUM(s.trades) > 0 THEN (SUM(s.wins) * 100.0 / SUM(s.trades)) ELSE 0.0 END, 1) AS win_rate_pct,\n    e.started_at_ms,\n    e.completed_at_ms\nFROM strategy_experiments e\nJOIN strategy_standings s ON e.participant_id = s.participant_id AND e.experiment_id = s.experiment_id\nWHERE ('$participant' = 'All' OR e.participant_id = '$participant')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\nGROUP BY e.participant_id, e.experiment_id\nHAVING SUM(s.trades) >= CAST('$min_trades' AS INTEGER)\nORDER BY cohort_roi_pct DESC;",
+          "format": "table"
         }
       ]
     },
@@ -150,7 +159,13 @@
           "queryType": "table",
           "rawQuery": true,
           "rawSql": "SELECT\n    t.closed_at_ms AS time,\n    (t.experiment_id || ' : ' || t.strategy_id) AS metric,\n    (e.start_balance + SUM(t.pnl) OVER (PARTITION BY t.participant_id, t.experiment_id, t.strategy_id ORDER BY t.closed_at_ms ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) AS current_balance\nFROM strategy_trades t\nJOIN strategy_experiments e ON t.participant_id = e.participant_id AND t.experiment_id = e.experiment_id\nWHERE t.closed_at_ms IS NOT NULL\n  AND e.status IN ('active', 'draining')\n  AND ('$participant' = 'All' OR t.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR t.experiment_id = '$experiment')\n  AND ('$strategy' = 'All' OR t.strategy_id = '$strategy')\nORDER BY t.closed_at_ms ASC;",
-          "refId": "A"
+          "refId": "A",
+          "rawQueryText": "SELECT\n    t.closed_at_ms AS time,\n    (t.experiment_id || ' : ' || t.strategy_id) AS metric,\n    (e.start_balance + SUM(t.pnl) OVER (PARTITION BY t.participant_id, t.experiment_id, t.strategy_id ORDER BY t.closed_at_ms ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) AS current_balance\nFROM strategy_trades t\nJOIN strategy_experiments e ON t.participant_id = e.participant_id AND t.experiment_id = e.experiment_id\nWHERE t.closed_at_ms IS NOT NULL\n  AND e.status IN ('active', 'draining')\n  AND ('$participant' = 'All' OR t.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR t.experiment_id = '$experiment')\n  AND ('$strategy' = 'All' OR t.strategy_id = '$strategy')\nORDER BY t.closed_at_ms ASC;",
+          "queryText": "SELECT\n    t.closed_at_ms AS time,\n    (t.experiment_id || ' : ' || t.strategy_id) AS metric,\n    (e.start_balance + SUM(t.pnl) OVER (PARTITION BY t.participant_id, t.experiment_id, t.strategy_id ORDER BY t.closed_at_ms ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) AS current_balance\nFROM strategy_trades t\nJOIN strategy_experiments e ON t.participant_id = e.participant_id AND t.experiment_id = e.experiment_id\nWHERE t.closed_at_ms IS NOT NULL\n  AND e.status IN ('active', 'draining')\n  AND ('$participant' = 'All' OR t.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR t.experiment_id = '$experiment')\n  AND ('$strategy' = 'All' OR t.strategy_id = '$strategy')\nORDER BY t.closed_at_ms ASC;",
+          "format": "table",
+          "timeColumns": [
+            "time"
+          ]
         }
       ]
     },
@@ -177,7 +192,10 @@
           "queryType": "table",
           "rawQuery": true,
           "rawSql": "SELECT\n    s.participant_id,\n    s.experiment_id,\n    s.strategy_id,\n    s.watching_json,\n    s.settling_json,\n    s.updated_at_ms\nFROM strategy_standings s\nJOIN strategy_experiments e ON s.participant_id = e.participant_id AND s.experiment_id = e.experiment_id\nWHERE e.status IN ('active', 'draining')\n  AND (s.watching_json IS NOT NULL OR (s.settling_json IS NOT NULL AND s.settling_json != '[]'))\n  AND ('$participant' = 'All' OR s.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR s.experiment_id = '$experiment')\nORDER BY s.updated_at_ms DESC;",
-          "refId": "A"
+          "refId": "A",
+          "rawQueryText": "SELECT\n    s.participant_id,\n    s.experiment_id,\n    s.strategy_id,\n    s.watching_json,\n    s.settling_json,\n    s.updated_at_ms\nFROM strategy_standings s\nJOIN strategy_experiments e ON s.participant_id = e.participant_id AND s.experiment_id = e.experiment_id\nWHERE e.status IN ('active', 'draining')\n  AND (s.watching_json IS NOT NULL OR (s.settling_json IS NOT NULL AND s.settling_json != '[]'))\n  AND ('$participant' = 'All' OR s.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR s.experiment_id = '$experiment')\nORDER BY s.updated_at_ms DESC;",
+          "queryText": "SELECT\n    s.participant_id,\n    s.experiment_id,\n    s.strategy_id,\n    s.watching_json,\n    s.settling_json,\n    s.updated_at_ms\nFROM strategy_standings s\nJOIN strategy_experiments e ON s.participant_id = e.participant_id AND s.experiment_id = e.experiment_id\nWHERE e.status IN ('active', 'draining')\n  AND (s.watching_json IS NOT NULL OR (s.settling_json IS NOT NULL AND s.settling_json != '[]'))\n  AND ('$participant' = 'All' OR s.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR s.experiment_id = '$experiment')\nORDER BY s.updated_at_ms DESC;",
+          "format": "table"
         }
       ]
     }

@@ -643,57 +643,51 @@ class TestBTCUpDownDashboards(unittest.TestCase):
             );
 
             CREATE TABLE IF NOT EXISTS cycles (
-                cycle_id             TEXT PRIMARY KEY,
-                contract_id          TEXT NOT NULL,
-                opened_at_ms         INTEGER NOT NULL,
-                locked_at_ms         INTEGER,
-                finalized_at_ms      INTEGER,
+                cycle_key            TEXT PRIMARY KEY,
+                producer_id          TEXT NOT NULL,
+                topic                TEXT NOT NULL,
+                contract_id          TEXT,
+                first_seen_ms        INTEGER NOT NULL,
+                last_seen_ms         INTEGER NOT NULL,
                 open_strike          REAL,
-                settle_price         REAL,
-                result               TEXT,
-                total_events         INTEGER NOT NULL DEFAULT 1,
-                last_state_json      TEXT NOT NULL
+                latest_spot          REAL,
+                current_state        TEXT,
+                locked_direction     TEXT,
+                locked_confidence    REAL,
+                locked_reversal_risk REAL,
+                price_at_lock        REAL,
+                latest_price_now     REAL,
+                locked_at_ms         INTEGER,
+                tick_count           INTEGER NOT NULL DEFAULT 0,
+                state_change_count   INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS raw_events (
-                event_id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                ingested_at_ms       INTEGER NOT NULL,
+                event_id             INTEGER PRIMARY KEY,
                 producer_id          TEXT NOT NULL,
-                origin_host          TEXT NOT NULL,
                 topic                TEXT NOT NULL,
-                ts_ms                INTEGER NOT NULL,
-                is_state_change      INTEGER NOT NULL,
+                cycle_key            TEXT,
                 contract_id          TEXT,
-                cycle_id             TEXT,
-                direction            TEXT,
-                price                REAL,
-                open_strike          REAL,
-                current_spot         REAL,
-                seconds_remaining    REAL,
-                confidence           REAL,
-                reversal_risk        REAL,
+                observed_at_ms       INTEGER NOT NULL,
+                ingested_at_ms       INTEGER NOT NULL,
+                is_state_change      INTEGER NOT NULL,
                 normalized_json      TEXT NOT NULL,
-                extra_json           TEXT NOT NULL
+                extra_json           TEXT NOT NULL,
+                changed_fields_json  TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS state_changes (
                 event_id             INTEGER PRIMARY KEY,
-                ingested_at_ms       INTEGER NOT NULL,
                 producer_id          TEXT NOT NULL,
-                origin_host          TEXT NOT NULL,
                 topic                TEXT NOT NULL,
-                ts_ms                INTEGER NOT NULL,
+                cycle_key            TEXT,
                 contract_id          TEXT,
-                cycle_id             TEXT,
-                direction            TEXT,
-                price                REAL,
-                open_strike          REAL,
-                current_spot         REAL,
-                seconds_remaining    REAL,
-                confidence           REAL,
-                reversal_risk        REAL,
+                observed_at_ms       INTEGER NOT NULL,
+                ingested_at_ms       INTEGER NOT NULL,
+                is_state_change      INTEGER NOT NULL,
                 normalized_json      TEXT NOT NULL,
-                extra_json           TEXT NOT NULL
+                extra_json           TEXT NOT NULL,
+                changed_fields_json  TEXT NOT NULL
             );
         """)
 

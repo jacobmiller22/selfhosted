@@ -68,8 +68,14 @@
           },
           "queryType": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n    ts_ms AS time,\n    current_spot AS spot,\n    open_strike AS strike\nFROM raw_events\nWHERE current_spot IS NOT NULL\n  AND open_strike IS NOT NULL\n  AND (ts_ms >= 0)\nORDER BY ts_ms ASC;",
-          "refId": "A"
+          "rawSql": "SELECT\n    observed_at_ms / 1000 AS time,\n    CAST(json_extract(normalized_json, '$.current_spot') AS REAL) AS spot,\n    CAST(json_extract(normalized_json, '$.open_strike') AS REAL) AS strike\nFROM raw_events\nWHERE json_extract(normalized_json, '$.current_spot') IS NOT NULL\n  AND json_extract(normalized_json, '$.open_strike') IS NOT NULL\n  AND (observed_at_ms / 1000 >= $__unixEpochFrom() AND observed_at_ms / 1000 <= $__unixEpochTo())\nORDER BY observed_at_ms ASC;",
+          "refId": "A",
+          "rawQueryText": "SELECT\n    observed_at_ms / 1000 AS time,\n    CAST(json_extract(normalized_json, '$.current_spot') AS REAL) AS spot,\n    CAST(json_extract(normalized_json, '$.open_strike') AS REAL) AS strike\nFROM raw_events\nWHERE json_extract(normalized_json, '$.current_spot') IS NOT NULL\n  AND json_extract(normalized_json, '$.open_strike') IS NOT NULL\n  AND (observed_at_ms / 1000 >= $__unixEpochFrom() AND observed_at_ms / 1000 <= $__unixEpochTo())\nORDER BY observed_at_ms ASC;",
+          "queryText": "SELECT\n    observed_at_ms / 1000 AS time,\n    CAST(json_extract(normalized_json, '$.current_spot') AS REAL) AS spot,\n    CAST(json_extract(normalized_json, '$.open_strike') AS REAL) AS strike\nFROM raw_events\nWHERE json_extract(normalized_json, '$.current_spot') IS NOT NULL\n  AND json_extract(normalized_json, '$.open_strike') IS NOT NULL\n  AND (observed_at_ms / 1000 >= $__unixEpochFrom() AND observed_at_ms / 1000 <= $__unixEpochTo())\nORDER BY observed_at_ms ASC;",
+          "format": "table",
+          "timeColumns": [
+            "time"
+          ]
         }
       ]
     },
@@ -95,8 +101,14 @@
           },
           "queryType": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n    ts_ms AS time,\n    ROUND(CAST(json_extract(normalized_json, '$.yes_bid') AS REAL) * 100.0, 1) AS yes_bid_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.yes_ask') AS REAL) * 100.0, 1) AS yes_ask_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.no_bid') AS REAL) * 100.0, 1) AS no_bid_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.no_ask') AS REAL) * 100.0, 1) AS no_ask_cents\nFROM raw_events\nWHERE topic = 'kalshi.15m.market'\n  AND (ts_ms >= 0)\nORDER BY ts_ms ASC;",
-          "refId": "A"
+          "rawSql": "SELECT\n    observed_at_ms / 1000 AS time,\n    ROUND(CAST(json_extract(normalized_json, '$.yes_bid') AS REAL) * 100.0, 1) AS yes_bid_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.yes_ask') AS REAL) * 100.0, 1) AS yes_ask_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.no_bid') AS REAL) * 100.0, 1) AS no_bid_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.no_ask') AS REAL) * 100.0, 1) AS no_ask_cents\nFROM raw_events\nWHERE topic = 'kalshi.15m.market'\n  AND (observed_at_ms / 1000 >= $__unixEpochFrom() AND observed_at_ms / 1000 <= $__unixEpochTo())\nORDER BY observed_at_ms ASC;",
+          "refId": "A",
+          "rawQueryText": "SELECT\n    observed_at_ms / 1000 AS time,\n    ROUND(CAST(json_extract(normalized_json, '$.yes_bid') AS REAL) * 100.0, 1) AS yes_bid_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.yes_ask') AS REAL) * 100.0, 1) AS yes_ask_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.no_bid') AS REAL) * 100.0, 1) AS no_bid_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.no_ask') AS REAL) * 100.0, 1) AS no_ask_cents\nFROM raw_events\nWHERE topic = 'kalshi.15m.market'\n  AND (observed_at_ms / 1000 >= $__unixEpochFrom() AND observed_at_ms / 1000 <= $__unixEpochTo())\nORDER BY observed_at_ms ASC;",
+          "queryText": "SELECT\n    observed_at_ms / 1000 AS time,\n    ROUND(CAST(json_extract(normalized_json, '$.yes_bid') AS REAL) * 100.0, 1) AS yes_bid_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.yes_ask') AS REAL) * 100.0, 1) AS yes_ask_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.no_bid') AS REAL) * 100.0, 1) AS no_bid_cents,\n    ROUND(CAST(json_extract(normalized_json, '$.no_ask') AS REAL) * 100.0, 1) AS no_ask_cents\nFROM raw_events\nWHERE topic = 'kalshi.15m.market'\n  AND (observed_at_ms / 1000 >= $__unixEpochFrom() AND observed_at_ms / 1000 <= $__unixEpochTo())\nORDER BY observed_at_ms ASC;",
+          "format": "table",
+          "timeColumns": [
+            "time"
+          ]
         }
       ]
     },
@@ -122,8 +134,14 @@
           },
           "queryType": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n    ts_ms AS time,\n    confidence,\n    reversal_risk,\n    direction\nFROM raw_events\nWHERE topic = 'vixxy.15m.current'\n  AND confidence IS NOT NULL\n  AND (ts_ms >= 0)\nORDER BY ts_ms ASC;",
-          "refId": "A"
+          "rawSql": "SELECT\n    observed_at_ms / 1000 AS time,\n    CAST(json_extract(normalized_json, '$.confidence') AS REAL) AS confidence,\n    CAST(json_extract(normalized_json, '$.reversal_risk') AS REAL) AS reversal_risk\nFROM raw_events\nWHERE topic = 'vixxy.15m.current'\n  AND json_extract(normalized_json, '$.confidence') IS NOT NULL\n  AND (observed_at_ms / 1000 >= $__unixEpochFrom() AND observed_at_ms / 1000 <= $__unixEpochTo())\nORDER BY observed_at_ms ASC;",
+          "refId": "A",
+          "rawQueryText": "SELECT\n    observed_at_ms / 1000 AS time,\n    CAST(json_extract(normalized_json, '$.confidence') AS REAL) AS confidence,\n    CAST(json_extract(normalized_json, '$.reversal_risk') AS REAL) AS reversal_risk\nFROM raw_events\nWHERE topic = 'vixxy.15m.current'\n  AND json_extract(normalized_json, '$.confidence') IS NOT NULL\n  AND (observed_at_ms / 1000 >= $__unixEpochFrom() AND observed_at_ms / 1000 <= $__unixEpochTo())\nORDER BY observed_at_ms ASC;",
+          "queryText": "SELECT\n    observed_at_ms / 1000 AS time,\n    CAST(json_extract(normalized_json, '$.confidence') AS REAL) AS confidence,\n    CAST(json_extract(normalized_json, '$.reversal_risk') AS REAL) AS reversal_risk\nFROM raw_events\nWHERE topic = 'vixxy.15m.current'\n  AND json_extract(normalized_json, '$.confidence') IS NOT NULL\n  AND (observed_at_ms / 1000 >= $__unixEpochFrom() AND observed_at_ms / 1000 <= $__unixEpochTo())\nORDER BY observed_at_ms ASC;",
+          "format": "table",
+          "timeColumns": [
+            "time"
+          ]
         }
       ]
     },
@@ -149,8 +167,11 @@
           },
           "queryType": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n    cycle_id,\n    contract_id,\n    open_strike,\n    settle_price,\n    result,\n    ROUND(settle_price - open_strike, 2) AS diff,\n    opened_at_ms,\n    locked_at_ms,\n    finalized_at_ms\nFROM cycles\nORDER BY opened_at_ms DESC\nLIMIT 50;",
-          "refId": "A"
+          "rawSql": "SELECT\n    cycle_key,\n    contract_id,\n    producer_id,\n    current_state,\n    locked_direction,\n    open_strike,\n    latest_spot,\n    price_at_lock,\n    latest_price_now,\n    tick_count,\n    first_seen_ms,\n    last_seen_ms\nFROM cycles\nORDER BY last_seen_ms DESC\nLIMIT 50;",
+          "refId": "A",
+          "rawQueryText": "SELECT\n    cycle_key,\n    contract_id,\n    producer_id,\n    current_state,\n    locked_direction,\n    open_strike,\n    latest_spot,\n    price_at_lock,\n    latest_price_now,\n    tick_count,\n    first_seen_ms,\n    last_seen_ms\nFROM cycles\nORDER BY last_seen_ms DESC\nLIMIT 50;",
+          "queryText": "SELECT\n    cycle_key,\n    contract_id,\n    producer_id,\n    current_state,\n    locked_direction,\n    open_strike,\n    latest_spot,\n    price_at_lock,\n    latest_price_now,\n    tick_count,\n    first_seen_ms,\n    last_seen_ms\nFROM cycles\nORDER BY last_seen_ms DESC\nLIMIT 50;",
+          "format": "table"
         }
       ]
     },
@@ -177,7 +198,10 @@
           "queryType": "table",
           "rawQuery": true,
           "rawSql": "SELECT\n    t.trade_id,\n    t.participant_id,\n    t.experiment_id,\n    t.strategy_id,\n    t.cycle_id,\n    t.ticker,\n    t.side,\n    t.contracts,\n    ROUND(t.entry_price, 4) AS entry_price,\n    ROUND(t.cost, 2) AS cost,\n    t.status,\n    t.exit_reason,\n    ROUND(t.exit_price, 4) AS exit_price,\n    ROUND(t.pnl, 2) AS pnl,\n    CASE WHEN t.won = 1 THEN 'WIN' WHEN t.won = 0 THEN 'LOSS' ELSE 'OPEN' END AS outcome,\n    t.opened_at_ms,\n    t.closed_at_ms\nFROM strategy_trades t\nWHERE ('$participant' = 'All' OR t.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR t.experiment_id = '$experiment')\n  AND ('$strategy' = 'All' OR t.strategy_id = '$strategy')\nORDER BY t.opened_at_ms DESC\nLIMIT 100;",
-          "refId": "A"
+          "refId": "A",
+          "rawQueryText": "SELECT\n    t.trade_id,\n    t.participant_id,\n    t.experiment_id,\n    t.strategy_id,\n    t.cycle_id,\n    t.ticker,\n    t.side,\n    t.contracts,\n    ROUND(t.entry_price, 4) AS entry_price,\n    ROUND(t.cost, 2) AS cost,\n    t.status,\n    t.exit_reason,\n    ROUND(t.exit_price, 4) AS exit_price,\n    ROUND(t.pnl, 2) AS pnl,\n    CASE WHEN t.won = 1 THEN 'WIN' WHEN t.won = 0 THEN 'LOSS' ELSE 'OPEN' END AS outcome,\n    t.opened_at_ms,\n    t.closed_at_ms\nFROM strategy_trades t\nWHERE ('$participant' = 'All' OR t.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR t.experiment_id = '$experiment')\n  AND ('$strategy' = 'All' OR t.strategy_id = '$strategy')\nORDER BY t.opened_at_ms DESC\nLIMIT 100;",
+          "queryText": "SELECT\n    t.trade_id,\n    t.participant_id,\n    t.experiment_id,\n    t.strategy_id,\n    t.cycle_id,\n    t.ticker,\n    t.side,\n    t.contracts,\n    ROUND(t.entry_price, 4) AS entry_price,\n    ROUND(t.cost, 2) AS cost,\n    t.status,\n    t.exit_reason,\n    ROUND(t.exit_price, 4) AS exit_price,\n    ROUND(t.pnl, 2) AS pnl,\n    CASE WHEN t.won = 1 THEN 'WIN' WHEN t.won = 0 THEN 'LOSS' ELSE 'OPEN' END AS outcome,\n    t.opened_at_ms,\n    t.closed_at_ms\nFROM strategy_trades t\nWHERE ('$participant' = 'All' OR t.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR t.experiment_id = '$experiment')\n  AND ('$strategy' = 'All' OR t.strategy_id = '$strategy')\nORDER BY t.opened_at_ms DESC\nLIMIT 100;",
+          "format": "table"
         }
       ]
     },
@@ -204,7 +228,10 @@
           "queryType": "table",
           "rawQuery": true,
           "rawSql": "SELECT\n    o.output_id,\n    o.participant_id,\n    o.experiment_id,\n    o.strategy_id,\n    o.cycle_key,\n    o.output_kind,\n    o.log_line,\n    o.ts_ms\nFROM strategy_outputs o\nWHERE ('$participant' = 'All' OR o.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR o.experiment_id = '$experiment')\n  AND ('$strategy' = 'All' OR o.strategy_id = '$strategy')\nORDER BY o.ts_ms DESC\nLIMIT 100;",
-          "refId": "A"
+          "refId": "A",
+          "rawQueryText": "SELECT\n    o.output_id,\n    o.participant_id,\n    o.experiment_id,\n    o.strategy_id,\n    o.cycle_key,\n    o.output_kind,\n    o.log_line,\n    o.ts_ms\nFROM strategy_outputs o\nWHERE ('$participant' = 'All' OR o.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR o.experiment_id = '$experiment')\n  AND ('$strategy' = 'All' OR o.strategy_id = '$strategy')\nORDER BY o.ts_ms DESC\nLIMIT 100;",
+          "queryText": "SELECT\n    o.output_id,\n    o.participant_id,\n    o.experiment_id,\n    o.strategy_id,\n    o.cycle_key,\n    o.output_kind,\n    o.log_line,\n    o.ts_ms\nFROM strategy_outputs o\nWHERE ('$participant' = 'All' OR o.participant_id = '$participant')\n  AND ('$experiment' = 'All' OR o.experiment_id = '$experiment')\n  AND ('$strategy' = 'All' OR o.strategy_id = '$strategy')\nORDER BY o.ts_ms DESC\nLIMIT 100;",
+          "format": "table"
         }
       ]
     }
