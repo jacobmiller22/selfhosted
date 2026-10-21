@@ -26,6 +26,7 @@ class TestRemoteHostVerificationArchitecture(unittest.TestCase):
         self.assertIn("nginx-proxy-manager", content)
         self.assertIn("obsidian", content)
         self.assertIn("reiner-cam", content)
+        self.assertIn("btcupdown", content)
         self.assertIn("Backblaze B2", content)
         self.assertIn("secure-backup", content)
         self.assertIn("Tailscale MagicDNS", content)
@@ -76,6 +77,7 @@ class TestRemoteHostVerificationArchitecture(unittest.TestCase):
             "nginx-proxy-manager",
             "obsidian",
             "reiner-cam",
+            "btcupdown",
             "tools/backup-runner"
         ]
 

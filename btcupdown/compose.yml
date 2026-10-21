@@ -1,0 +1,47 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  btcupdown:
+    logging: *default-logging
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+        BTCUPDOWN_REF: ${BTCUPDOWN_REF:-main}
+    container_name: btcupdown
+    restart: unless-stopped
+    environment:
+      - BROKER_LISTEN_ADDR=0.0.0.0:8080
+      - BROKER_DB_PATH=/data/broker.sqlite
+      - BROKER_RAW_RETENTION_DAYS=${BROKER_RAW_RETENTION_DAYS:-0}
+      - VIXXY_STATE_FILE=/data/vixxy_token_state.json
+      - VIXXY_POLL_INTERVAL_MS=${VIXXY_POLL_INTERVAL_MS:-3000}
+      - VIXXY_JITTER_MS=${VIXXY_JITTER_MS:-250}
+      - VIXXY_HEARTBEAT_INTERVAL_SECS=${VIXXY_HEARTBEAT_INTERVAL_SECS:-30}
+      - INITIAL_ACCESS_TOKEN=${INITIAL_ACCESS_TOKEN:-}
+    volumes:
+      - btcupdown-data:/data
+    ports:
+      - "8085:8080"
+    networks:
+      - nginx-proxy-manager
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  nginx-proxy-manager:
+    name: nginx-proxy-manager
+    external: true
+
+volumes:
+  btcupdown-data:
+    name: btcupdown-data
