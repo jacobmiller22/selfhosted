@@ -46,9 +46,10 @@ ssh bjorn "docker logs --tail 100 btcupdown"
 ssh bjorn "docker exec btcupdown vixxy-poller auth status"
 ssh bjorn "docker exec btcupdown vixxy-poller auth status --json"
 
-# Probe internal healthz and latest snapshot
-ssh bjorn "curl -fsS http://127.0.0.1:8085/healthz"
+# Probe internal health and latest snapshot
+ssh bjorn "curl -fsS http://127.0.0.1:8085/health"
 ssh bjorn "curl -fsS http://127.0.0.1:8085/api/latest"
+ssh bjorn "curl -fsS http://127.0.0.1:8085/api/telemetry"
 
 # Safe SQLite snapshot of broker.sqlite
 ssh bjorn "docker exec btcupdown sqlite3 /data/broker.sqlite '.backup /data/broker-snapshot.sqlite'"
@@ -60,10 +61,13 @@ ssh bjorn "docker exec btcupdown sqlite3 /data/broker.sqlite '.backup /data/brok
 
 - **Nginx Proxy Manager** terminates TLS (`*.cloud.jacobmiller22.com` wildcard certificate) and forwards traffic to `http://btcupdown:8080` with **Websockets Support** enabled.
 - **External Write Protection**:
-  - `/ws/ingest` and `/api/ingest` are explicitly blocked (`HTTP 403 Forbidden`) at the Nginx Proxy Manager layer so only the internal `vixxy-poller` process can ingest events over loopback (`127.0.0.1:8080`).
-  - Publicly readable endpoints:
+  - `/ws/ingest` and `/api/ingest` are explicitly blocked (`HTTP 403 Forbidden`) at the Nginx Proxy Manager layer so only the internal `vixxy-poller` and `kalshi-poller` processes can ingest market events over loopback (`127.0.0.1:8080`).
+  - Publicly accessible streaming & telemetry endpoints:
     - `wss://btcupdown.cloud.jacobmiller22.com/ws` (Push-only live stream: initial `Snapshot` + real-time `Event` ticks)
+    - `wss://btcupdown.cloud.jacobmiller22.com/ws/telemetry` (Bidirectional participant strategy telemetry WS stream)
+    - `POST https://btcupdown.cloud.jacobmiller22.com/api/telemetry` (REST telemetry ingest)
+    - `GET https://btcupdown.cloud.jacobmiller22.com/api/telemetry` (REST telemetry query by participant/strategy/experiment)
     - `GET https://btcupdown.cloud.jacobmiller22.com/api/latest`
     - `GET https://btcupdown.cloud.jacobmiller22.com/api/history`
     - `GET https://btcupdown.cloud.jacobmiller22.com/api/cycles`
-    - `GET https://btcupdown.cloud.jacobmiller22.com/healthz`
+    - `GET https://btcupdown.cloud.jacobmiller22.com/health`

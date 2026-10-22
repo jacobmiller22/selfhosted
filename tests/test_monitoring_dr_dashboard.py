@@ -17,7 +17,10 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = REPO_ROOT / "monitoring" / "compose.yml"
 DASHBOARDS_PROV_FILE = REPO_ROOT / "monitoring" / "grafana" / "provisioning" / "dashboards" / "dashboards.yml"
-DR_DASHBOARD_FILE = REPO_ROOT / "monitoring" / "grafana" / "dashboards" / "dr-and-backups.json"
+DR_DASHBOARD_FILE = next(
+    (REPO_ROOT / "monitoring" / "grafana" / "dashboards").rglob("dr-and-backups.json"),
+    REPO_ROOT / "monitoring" / "grafana" / "dashboards" / "dr-and-backups.json"
+)
 EXPORTER_SCRIPT = REPO_ROOT / "tools" / "backup-dr" / "export-dr-metrics.sh"
 README_FILE = REPO_ROOT / "monitoring" / "README.md"
 
