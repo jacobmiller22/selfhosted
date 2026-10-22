@@ -29,21 +29,27 @@ def enforce_acls(db_path: Path) -> dict:
         )
         global_viewers_removed = cur.rowcount
 
-        # 2. Look up folders by uid or title (case-insensitive)
+        # 2. Mark folders as having custom ACLs; child dashboards inherit from parent folder
+        cur.execute("UPDATE dashboard SET has_acl = 1 WHERE is_folder = 1")
+        cur.execute("UPDATE dashboard SET has_acl = 0 WHERE is_folder = 0")
+
+        # 3. Look up folders by uid or title (case-insensitive)
         cur.execute(
             "SELECT id, uid, title FROM dashboard WHERE is_folder = 1"
         )
         folders = {}
         for row in cur.fetchall():
-            folders[row[1].lower()] = {"id": row[0], "title": row[2]}
-            folders[row[2].lower()] = {"id": row[0], "title": row[2]}
+            folder_record = {"id": row[0], "uid": row[1], "title": row[2]}
+            folders[row[1].lower()] = folder_record
+            folders[row[2].lower()] = folder_record
 
         results = {
             "global_viewers_removed": global_viewers_removed,
             "folders_configured": {},
+            "viewer_rbac_permissions_pruned": 0,
         }
 
-        # 3. For each folder, configure explicit permissions
+        # 4. For each folder, configure explicit permissions in dashboard_acl
         # Mapping: folder identifier (uid or title) -> list of (role, permission)
         folder_policy = {
             "infrastructure": [("Editor", 2), ("Admin", 4)],
@@ -74,6 +80,56 @@ def enforce_acls(db_path: Path) -> dict:
                 )
 
             results["folders_configured"][folder_key] = [r[0] for r in allowed_roles]
+
+        # 5. Enforce modern Grafana 11 RBAC permission table if present
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='permission'")
+        if cur.fetchone():
+            viewer_role_id = None
+            cur.execute("SELECT id FROM role WHERE name = 'managed:builtins:viewer:permissions'")
+            r_row = cur.fetchone()
+            if r_row:
+                viewer_role_id = r_row[0]
+            else:
+                cur.execute("SELECT id FROM builtin_role WHERE name = 'Viewer'")
+                b_row = cur.fetchone()
+                if b_row:
+                    viewer_role_id = b_row[0]
+
+            if viewer_role_id is not None:
+                allowed_folder_uids = []
+                for f_key, allowed_roles in folder_policy.items():
+                    if any(r[0] == "Viewer" for r in allowed_roles):
+                        f_info = folders.get(f_key.lower())
+                        if f_info and f_info.get("uid"):
+                            allowed_folder_uids.append(f_info["uid"])
+
+                allowed_folder_scopes = [f"folders:uid:{uid}" for uid in allowed_folder_uids]
+                if allowed_folder_scopes:
+                    placeholders = ",".join("?" * len(allowed_folder_scopes))
+                    cur.execute(
+                        f"""
+                        DELETE FROM permission
+                        WHERE role_id = ?
+                          AND (
+                            (scope LIKE 'folders:uid:%' AND scope NOT IN ({placeholders}))
+                            OR scope IN ('datasources:uid:actual-sqlite', 'datasources:uid:victoriametrics')
+                          )
+                        """,
+                        [viewer_role_id] + allowed_folder_scopes,
+                    )
+                else:
+                    cur.execute(
+                        """
+                        DELETE FROM permission
+                        WHERE role_id = ?
+                          AND (
+                            scope LIKE 'folders:uid:%'
+                            OR scope IN ('datasources:uid:actual-sqlite', 'datasources:uid:victoriametrics')
+                          )
+                        """,
+                        (viewer_role_id,),
+                    )
+                results["viewer_rbac_permissions_pruned"] = cur.rowcount
 
         conn.commit()
         return results

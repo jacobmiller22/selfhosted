@@ -757,6 +757,8 @@ class TestGrafanaFolderAcls(unittest.TestCase):
                     uid TEXT,
                     title TEXT,
                     is_folder INTEGER DEFAULT 0,
+                    folder_id INTEGER DEFAULT 0,
+                    has_acl INTEGER DEFAULT 0,
                     org_id INTEGER DEFAULT 1
                 );
                 CREATE TABLE dashboard_acl (
@@ -770,26 +772,55 @@ class TestGrafanaFolderAcls(unittest.TestCase):
                     created DATETIME NOT NULL,
                     updated DATETIME NOT NULL
                 );
+                CREATE TABLE role (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL
+                );
+                CREATE TABLE permission (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    role_id INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    scope TEXT NOT NULL
+                );
 
                 -- Initial state: global permissions
                 INSERT INTO dashboard_acl (org_id, dashboard_id, permission, role, created, updated) VALUES
                     (1, -1, 1, 'Viewer', '2026-01-01', '2026-01-01'),
                     (1, -1, 2, 'Editor', '2026-01-01', '2026-01-01');
 
-                -- Initial folders
-                INSERT INTO dashboard (id, uid, title, is_folder, org_id) VALUES
-                    (10, 'infrastructure', 'Infrastructure', 1, 1),
-                    (11, 'financial-intelligence', 'Financial Intelligence', 1, 1),
-                    (12, 'btcupdown', 'BTC Up/Down', 1, 1);
+                -- Initial folders & child dashboard
+                INSERT INTO dashboard (id, uid, title, is_folder, folder_id, org_id) VALUES
+                    (10, 'infrastructure', 'Infrastructure', 1, 0, 1),
+                    (11, 'financial-intelligence', 'Financial Intelligence', 1, 0, 1),
+                    (12, 'btcupdown', 'BTC Up/Down', 1, 0, 1),
+                    (20, 'infra-dash', 'Host Metrics', 0, 10, 1);
+
+                -- Initial RBAC roles & permissions
+                INSERT INTO role (id, name) VALUES (1, 'managed:builtins:viewer:permissions');
+                INSERT INTO permission (role_id, action, scope) VALUES
+                    (1, 'folders:read', 'folders:uid:infrastructure'),
+                    (1, 'dashboards:read', 'folders:uid:infrastructure'),
+                    (1, 'folders:read', 'folders:uid:btcupdown'),
+                    (1, 'dashboards:read', 'folders:uid:btcupdown'),
+                    (1, 'datasources:query', 'datasources:uid:actual-sqlite');
             """)
             conn.commit()
             conn.close()
 
             results = enforce_acls(db_path)
             self.assertEqual(results["global_viewers_removed"], 1)
+            self.assertEqual(results["viewer_rbac_permissions_pruned"], 3)
 
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
+
+            # Verify has_acl: 1 for folders, 0 for child dashboards
+            cur.execute("SELECT id, has_acl FROM dashboard ORDER BY id")
+            dash_acls = dict(cur.fetchall())
+            self.assertEqual(dash_acls[10], 1)
+            self.assertEqual(dash_acls[11], 1)
+            self.assertEqual(dash_acls[12], 1)
+            self.assertEqual(dash_acls[20], 0)
 
             # Global check: no Viewer permission on dashboard_id = -1
             cur.execute("SELECT * FROM dashboard_acl WHERE dashboard_id = -1 AND role = 'Viewer'")
@@ -814,6 +845,12 @@ class TestGrafanaFolderAcls(unittest.TestCase):
             self.assertEqual(btc_acls.get("Viewer"), 1)
             self.assertEqual(btc_acls.get("Editor"), 2)
             self.assertEqual(btc_acls.get("Admin"), 4)
+
+            # RBAC permission check: Viewer only retains btcupdown
+            cur.execute("SELECT action, scope FROM permission WHERE role_id = 1")
+            viewer_perms = cur.fetchall()
+            self.assertEqual(len(viewer_perms), 2)
+            self.assertTrue(all(p[1] == "folders:uid:btcupdown" for p in viewer_perms))
 
             conn.close()
 
