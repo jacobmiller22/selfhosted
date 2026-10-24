@@ -30,6 +30,12 @@
     - `/data/broker.sqlite` (shared WAL database housing both `BrokerStore` tables (`raw_events`, `state_changes`, `cycles`, `strategy_standings`, `strategy_experiments`, `strategy_trades`, `strategy_outputs`) and co-located `EngineStore` tables/views (`experiments`, `strategy_books`, `raw_trades`, `policy_outputs`, `action_sinks`, `action_executions`, `v_strategy_standings`, `v_trade_history`)).
     - `/data/vixxy_token_state.json` (atomically persisted Vixxy session JWT state).
     - `/data/trade_log.txt` (human-readable paper/live trade audit log).
+    - `/data/kalshi.env` & `/data/kalshi_private.pem` (`chmod 600` BYOC Kalshi API v2 RSA-PSS credentials sourced at container startup, never stored in Git or SQLite).
+- **Live Real-Money Experiment & BYOC Action Sinks (`live-kalshi`)**:
+  - Experiment `live-kalshi` runs alongside `default` (paper) with **`$50.00` starting balance per strategy** explicitly allocated to **`wide`** (`$50.00`) and **`full port`** (`$50.00`).
+  - Two live `kalshi_live` BYOC action sinks (`dry_run: false`, `max_notional_dollars: 50.0`) are bound strictly to `experiment_id = "live-kalshi"`:
+    - `kalshi-live-wide` (`experiment_id="live-kalshi"`, `strategy_name="wide"`)
+    - `kalshi-live-full-port` (`experiment_id="live-kalshi"`, `strategy_name="full port"`)
 
 ---
 
@@ -59,11 +65,13 @@ ssh bjorn "curl -fsS http://127.0.0.1:8085/api/telemetry"
 # Probe co-located Engine Daemon HTTP Control API (:8086 -> :8081)
 ssh bjorn "curl -fsS http://127.0.0.1:8086/health"
 ssh bjorn "curl -fsS http://127.0.0.1:8086/api/status"
+ssh bjorn "curl -fsS http://127.0.0.1:8086/api/status?experiment=live-kalshi"
 ssh bjorn "curl -fsS http://127.0.0.1:8086/api/experiments"
 ssh bjorn "curl -fsS http://127.0.0.1:8086/api/actions"
 
 # Operator CLI via HTTP Control API (--engine-url) or Shared SQLite (--db)
 ssh bjorn "docker exec btcupdown btcupdown-cli --engine-url http://127.0.0.1:8081 status"
+ssh bjorn "docker exec btcupdown btcupdown-cli --engine-url http://127.0.0.1:8081 status --experiment live-kalshi"
 ssh bjorn "docker exec btcupdown btcupdown-cli --engine-url http://127.0.0.1:8081 actions"
 ssh bjorn "docker exec btcupdown btcupdown-cli --db /data/broker.sqlite status"
 
