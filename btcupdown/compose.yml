@@ -13,12 +13,20 @@ services:
       args:
         GITHUB_TOKEN: ${GITHUB_TOKEN:-}
         BTCUPDOWN_REF: ${BTCUPDOWN_REF:-main}
+        BTCUPDOWN_COMMIT: ${BTCUPDOWN_COMMIT:-317776b}
     container_name: btcupdown
     restart: unless-stopped
     environment:
       - BROKER_LISTEN_ADDR=0.0.0.0:8080
       - BROKER_DB_PATH=/data/broker.sqlite
       - BROKER_RAW_RETENTION_DAYS=${BROKER_RAW_RETENTION_DAYS:-0}
+      - ENGINE_ENABLE=${ENGINE_ENABLE:-true}
+      - ENGINE_LISTEN_ADDR=${ENGINE_LISTEN_ADDR:-0.0.0.0:8081}
+      - ENGINE_DB_PATH=${ENGINE_DB_PATH:-/data/broker.sqlite}
+      - ENGINE_TRADE_LOG_PATH=${ENGINE_TRADE_LOG_PATH:-/data/trade_log.txt}
+      - ENGINE_BROKER_WS_URL=${ENGINE_BROKER_WS_URL:-ws://127.0.0.1:8080/ws}
+      - ENGINE_PARTICIPANT_ID=${ENGINE_PARTICIPANT_ID:-bjorn}
+      - ENGINE_START_BALANCE=${ENGINE_START_BALANCE:-100.0}
       - VIXXY_STATE_FILE=/data/vixxy_token_state.json
       - VIXXY_POLL_INTERVAL_MS=${VIXXY_POLL_INTERVAL_MS:-3000}
       - VIXXY_JITTER_MS=${VIXXY_JITTER_MS:-250}
@@ -29,18 +37,22 @@ services:
       - KALSHI_SERIES_TICKER=${KALSHI_SERIES_TICKER:-KXBTC15M}
       - KALSHI_POLL_INTERVAL_MS=${KALSHI_POLL_INTERVAL_MS:-1000}
       - KALSHI_SETTLE_POLL_INTERVAL_MS=${KALSHI_SETTLE_POLL_INTERVAL_MS:-2000}
+      - KALSHI_KEY_ID=${KALSHI_KEY_ID:-}
+      - KALSHI_PRIVATE_KEY_PATH=${KALSHI_PRIVATE_KEY_PATH:-}
+      - KALSHI_PRIVATE_KEY_PEM=${KALSHI_PRIVATE_KEY_PEM:-}
     volumes:
       - btcupdown-data:/data
     ports:
       - "8085:8080"
+      - "8086:8081"
     networks:
       - nginx-proxy-manager
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health", "http://127.0.0.1:8081/health"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 45s
 
 networks:
   nginx-proxy-manager:

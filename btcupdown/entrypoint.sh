@@ -5,6 +5,14 @@ BROKER_LISTEN_ADDR="${BROKER_LISTEN_ADDR:-0.0.0.0:8080}"
 BROKER_DB_PATH="${BROKER_DB_PATH:-/data/broker.sqlite}"
 BROKER_RAW_RETENTION_DAYS="${BROKER_RAW_RETENTION_DAYS:-0}"
 
+ENGINE_ENABLE="${ENGINE_ENABLE:-true}"
+ENGINE_LISTEN_ADDR="${ENGINE_LISTEN_ADDR:-0.0.0.0:8081}"
+ENGINE_DB_PATH="${ENGINE_DB_PATH:-${BROKER_DB_PATH}}"
+ENGINE_TRADE_LOG_PATH="${ENGINE_TRADE_LOG_PATH:-/data/trade_log.txt}"
+ENGINE_BROKER_WS_URL="${ENGINE_BROKER_WS_URL:-ws://127.0.0.1:8080/ws}"
+ENGINE_PARTICIPANT_ID="${ENGINE_PARTICIPANT_ID:-bjorn}"
+ENGINE_START_BALANCE="${ENGINE_START_BALANCE:-100.0}"
+
 VIXXY_STATE_FILE="${VIXXY_STATE_FILE:-/data/vixxy_token_state.json}"
 VIXXY_POLL_INTERVAL_MS="${VIXXY_POLL_INTERVAL_MS:-3000}"
 VIXXY_JITTER_MS="${VIXXY_JITTER_MS:-250}"
@@ -26,13 +34,32 @@ data-broker \
   --raw-retention-days "${BROKER_RAW_RETENTION_DAYS}" &
 BROKER_PID=$!
 
-# Wait for data-broker to bind before connecting pollers
-for _ in {1..20}; do
-  if curl -fsS "http://127.0.0.1:8080/healthz" >/dev/null 2>&1; then
+# Wait for data-broker to bind before connecting co-located engine & pollers
+for _ in {1..120}; do
+  if curl -fsS "http://127.0.0.1:8080/health" >/dev/null 2>&1; then
     break
   fi
   sleep 0.25
 done
+
+PIDS=("${BROKER_PID}")
+
+if [[ "${ENGINE_ENABLE}" == "true" ]]; then
+  echo "[ENTRYPOINT] Starting co-located btcupdown-engine on ${ENGINE_LISTEN_ADDR} (DB=${ENGINE_DB_PATH}, participant=${ENGINE_PARTICIPANT_ID})..."
+  ENGINE_ARGS=(
+    --url "${ENGINE_BROKER_WS_URL}"
+    --db "${ENGINE_DB_PATH}"
+    --bind "${ENGINE_LISTEN_ADDR}"
+    --trade-log "${ENGINE_TRADE_LOG_PATH}"
+    --start-balance "${ENGINE_START_BALANCE}"
+  )
+  if [[ -n "${ENGINE_PARTICIPANT_ID}" ]]; then
+    ENGINE_ARGS+=(--participant "${ENGINE_PARTICIPANT_ID}")
+  fi
+  btcupdown-engine "${ENGINE_ARGS[@]}" &
+  ENGINE_PID=$!
+  PIDS+=("${ENGINE_PID}")
+fi
 
 echo "[ENTRYPOINT] Starting vixxy-poller (interval=${VIXXY_POLL_INTERVAL_MS}ms, state_file=${VIXXY_STATE_FILE})..."
 POLLER_ARGS=(
@@ -48,8 +75,7 @@ fi
 
 vixxy-poller "${POLLER_ARGS[@]}" &
 POLLER_PID=$!
-
-PIDS=("${BROKER_PID}" "${POLLER_PID}")
+PIDS+=("${POLLER_PID}")
 
 if [[ "${KALSHI_ENABLE}" == "true" ]]; then
   echo "[ENTRYPOINT] Starting kalshi-poller (series=${KALSHI_SERIES_TICKER}, interval=${KALSHI_POLL_INTERVAL_MS}ms)..."
