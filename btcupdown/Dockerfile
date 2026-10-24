@@ -29,6 +29,8 @@ RUN cargo build --release \
     --bin kalshi-poller \
     --bin btcupdown-engine \
     --bin btcupdown-cli
+RUN sed -i 's/status=open&limit=10/limit=100/g' crates/kalshi-poller/src/lib.rs && \
+    cargo build --release --bin kalshi-poller
 
 FROM debian:bookworm-slim
 
