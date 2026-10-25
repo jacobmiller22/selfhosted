@@ -3,7 +3,7 @@ FROM rust:1-bookworm AS builder
 ARG GITHUB_TOKEN=""
 ARG BTCUPDOWN_REPO="github.com/jacobmiller22/btcupdown.git"
 ARG BTCUPDOWN_REF="main"
-ARG BTCUPDOWN_COMMIT="317776b"
+ARG BTCUPDOWN_COMMIT="222aced"
 
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \

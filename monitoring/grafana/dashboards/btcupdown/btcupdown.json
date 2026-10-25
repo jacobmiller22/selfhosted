@@ -1,0 +1,358 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Unified Trading Hub",
+      "tooltip": "Go to BTC 15m Unified Observability Hub",
+      "type": "link",
+      "url": "/d/btcupdown-main"
+    }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Panel 1 \u2014 Strategy Leaderboard (Ranked by Bankroll & Net Profit)",
+      "description": "Comprehensive strategy standings leaderboard ranked by current bankroll cash and realized net profit. Columns: 'Participant' (reporting operator node or 'local'), 'Experiment' (cohort ID), 'Strategy' (strategy slug), 'What This Strategy Does' (plain-English trading behavior), 'Bankroll ($)' (available portfolio cash), 'Gross Profit ($)' (realized profits before exchange fees), 'Fees Paid ($)' (cumulative exchange fees incurred), 'Net Profit ($)' (realized profit after fees), 'Return (%)' (percentage return on initial balance), 'Total Trades' (completed trades), 'Wins'/'Losses'/'Win Rate (%)' (win performance metrics), 'Cohort Status' (active/draining/completed), and 'Last Updated (UTC)' (timestamp of last state update).",
+      "type": "table",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    s.participant_id AS \"Participant\",\n    s.experiment_id AS \"Experiment\",\n    s.strategy_id AS \"Strategy\",\n    s.display_label AS \"What This Strategy Does\",\n    ROUND(s.cash_dollars, 2) AS \"Bankroll ($)\",\n    ROUND(COALESCE(s.gross_realized_pnl_dollars, s.realized_pnl_dollars), 2) AS \"Gross Profit ($)\",\n    ROUND(COALESCE(s.total_fees_dollars, 0.0), 2) AS \"Fees Paid ($)\",\n    ROUND(s.realized_pnl_dollars, 2) AS \"Net Profit ($)\",\n    ROUND((s.cash_dollars - e.start_balance) / e.start_balance * 100.0, 2) AS \"Return (%)\",\n    s.trades AS \"Total Trades\",\n    s.wins AS \"Wins\",\n    s.losses AS \"Losses\",\n    ROUND(s.win_rate_pct, 1) AS \"Win Rate (%)\",\n    e.status AS \"Cohort Status\",\n    strftime('%Y-%m-%d %H:%M:%SZ', s.updated_at_ms / 1000.0, 'unixepoch') AS \"Last Updated (UTC)\"\nFROM v_grafana_standings s\nJOIN v_grafana_experiments e ON s.participant_id = e.participant_id AND s.experiment_id = e.experiment_id\nWHERE ('$participant' = 'All' OR s.participant_id = '$participant')\n  AND ('$strategy' = 'All' OR s.strategy_id = '$strategy')\n  AND ('$experiment' = 'All' OR s.experiment_id = '$experiment')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\n  AND s.trades >= CAST('$min_trades' AS INTEGER)\nORDER BY s.cash_dollars DESC, s.realized_pnl_dollars DESC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Panel 2 \u2014 Strategy Bankroll Over Time ($)",
+      "description": "Time-series trajectory of each strategy's bankroll over time ($), starting from initial allocation ($100 default) and tracking cumulative net PnL across closed trades. Partitioned by (participant_id, experiment_id, strategy_id) to prevent distinct cohort lines from crossing. Uses RFC3339 UTC time formatting.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "time series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    strftime('%Y-%m-%dT%H:%M:%SZ', t.closed_at_ms / 1000.0, 'unixepoch') AS time,\n    (t.participant_id || ' : ' || t.experiment_id || ' : ' || t.strategy_id) AS metric,\n    ROUND(e.start_balance + SUM(t.pnl) OVER (\n        PARTITION BY t.participant_id, t.experiment_id, t.strategy_id\n        ORDER BY t.closed_at_ms, t.trade_id\n        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n    ), 2) AS bankroll\nFROM v_grafana_trades t\nJOIN v_grafana_experiments e ON t.participant_id = e.participant_id AND t.experiment_id = e.experiment_id\nWHERE t.closed_at_ms IS NOT NULL\n  AND ('$participant' = 'All' OR t.participant_id = '$participant')\n  AND ('$strategy' = 'All' OR t.strategy_id = '$strategy')\n  AND ('$experiment' = 'All' OR t.experiment_id = '$experiment')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\nORDER BY t.closed_at_ms ASC, t.trade_id ASC;",
+          "refId": "A",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "Panel 3 \u2014 Live Open Positions & Watching Status",
+      "description": "Live inventory of open positions currently in flight, unpacked from JSON structures. Columns: 'Participant', 'Experiment', 'Strategy', 'Position State' (WATCHING = active contract awaiting exit criteria; SETTLING = closed market held to expiration awaiting official resolution), 'Cycle', 'Contract Ticker', 'Direction' (UP/DOWN), 'Contracts Held', 'Entry Price ($)', 'Total Cost ($)', 'Take-Profit Target ($)', 'Stop-Loss ($)', and 'Updated Time (UTC)'.",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    s.participant_id AS \"Participant\",\n    s.experiment_id AS \"Experiment\",\n    s.strategy_id AS \"Strategy\",\n    'WATCHING' AS \"Position State\",\n    json_extract(s.watching_json, '$.cycle_id') AS \"Cycle\",\n    json_extract(s.watching_json, '$.ticker') AS \"Contract Ticker\",\n    UPPER(json_extract(s.watching_json, '$.side')) AS \"Direction\",\n    CAST(json_extract(s.watching_json, '$.n') AS INTEGER) AS \"Contracts Held\",\n    ROUND(CAST(json_extract(s.watching_json, '$.entry_price') AS REAL), 4) AS \"Entry Price ($)\",\n    ROUND(CAST(json_extract(s.watching_json, '$.cost') AS REAL), 2) AS \"Total Cost ($)\",\n    ROUND(CAST(json_extract(s.watching_json, '$.limit_at') AS REAL), 4) AS \"Take-Profit Target ($)\",\n    ROUND(CAST(json_extract(s.watching_json, '$.stop_at') AS REAL), 4) AS \"Stop-Loss ($)\",\n    strftime('%Y-%m-%d %H:%M:%SZ', s.updated_at_ms / 1000.0, 'unixepoch') AS \"Updated Time (UTC)\"\nFROM v_grafana_standings s\nJOIN v_grafana_experiments e ON s.participant_id = e.participant_id AND s.experiment_id = e.experiment_id\nWHERE s.watching_json IS NOT NULL\n  AND json_valid(s.watching_json)\n  AND json_extract(s.watching_json, '$.ticker') IS NOT NULL\n  AND ('$participant' = 'All' OR s.participant_id = '$participant')\n  AND ('$strategy' = 'All' OR s.strategy_id = '$strategy')\n  AND ('$experiment' = 'All' OR s.experiment_id = '$experiment')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\n\nUNION ALL\n\nSELECT\n    s.participant_id AS \"Participant\",\n    s.experiment_id AS \"Experiment\",\n    s.strategy_id AS \"Strategy\",\n    'SETTLING' AS \"Position State\",\n    json_extract(j.value, '$.cycle_id') AS \"Cycle\",\n    json_extract(j.value, '$.ticker') AS \"Contract Ticker\",\n    UPPER(json_extract(j.value, '$.side')) AS \"Direction\",\n    CAST(json_extract(j.value, '$.n') AS INTEGER) AS \"Contracts Held\",\n    ROUND(CAST(json_extract(j.value, '$.entry_price') AS REAL), 4) AS \"Entry Price ($)\",\n    ROUND(CAST(json_extract(j.value, '$.cost') AS REAL), 2) AS \"Total Cost ($)\",\n    ROUND(CAST(json_extract(j.value, '$.limit_at') AS REAL), 4) AS \"Take-Profit Target ($)\",\n    ROUND(CAST(json_extract(j.value, '$.stop_at') AS REAL), 4) AS \"Stop-Loss ($)\",\n    strftime('%Y-%m-%d %H:%M:%SZ', s.updated_at_ms / 1000.0, 'unixepoch') AS \"Updated Time (UTC)\"\nFROM v_grafana_standings s\nJOIN v_grafana_experiments e ON s.participant_id = e.participant_id AND s.experiment_id = e.experiment_id,\njson_each(s.settling_json) j\nWHERE s.settling_json IS NOT NULL\n  AND json_valid(s.settling_json)\n  AND s.settling_json != '[]'\n  AND ('$participant' = 'All' OR s.participant_id = '$participant')\n  AND ('$strategy' = 'All' OR s.strategy_id = '$strategy')\n  AND ('$experiment' = 'All' OR s.experiment_id = '$experiment')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\nORDER BY \"Updated Time (UTC)\" DESC, \"Participant\" ASC, \"Strategy\" ASC;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Panel 4 \u2014 Recent Trade Tape (All Executed Paper & Cohort Trades)",
+      "description": "Recent Trade Tape logging every paper and cohort trade executed across strategies. Columns: 'Trade #' (unique ID), 'Opened Time (UTC)', 'Closed Time (UTC)' (or 'OPEN'), 'Participant', 'Experiment', 'Strategy', 'Cycle', 'Contract Ticker', 'Side' (UP/DOWN), 'Contracts' (size), 'Entry Price ($)', 'Exit Price ($)', 'Total Cost ($)', 'Gross Profit ($)' (pre-fee), 'Fees Paid ($)' (entry + exit), 'Net Profit ($)' (post-fee), 'Exit Reason' (take_profit, stop_loss, settle_win, settle_loss, scaled_zombie_cutoff), and 'Outcome' (WIN/LOSS/OPEN).",
+      "type": "table",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    t.trade_id AS \"Trade #\",\n    strftime('%Y-%m-%d %H:%M:%SZ', t.opened_at_ms / 1000.0, 'unixepoch') AS \"Opened Time (UTC)\",\n    CASE WHEN t.closed_at_ms IS NOT NULL\n         THEN strftime('%Y-%m-%d %H:%M:%SZ', t.closed_at_ms / 1000.0, 'unixepoch')\n         ELSE 'OPEN' END AS \"Closed Time (UTC)\",\n    t.participant_id AS \"Participant\",\n    t.experiment_id AS \"Experiment\",\n    t.strategy_id AS \"Strategy\",\n    t.cycle_id AS \"Cycle\",\n    t.ticker AS \"Contract Ticker\",\n    UPPER(t.side) AS \"Side\",\n    t.contracts AS \"Contracts\",\n    ROUND(t.entry_price, 4) AS \"Entry Price ($)\",\n    CASE WHEN t.exit_price IS NOT NULL THEN ROUND(t.exit_price, 4) ELSE NULL END AS \"Exit Price ($)\",\n    ROUND(t.cost, 2) AS \"Total Cost ($)\",\n    ROUND(COALESCE(t.gross_pnl, t.pnl), 2) AS \"Gross Profit ($)\",\n    ROUND(COALESCE(t.total_fee, 0.0), 2) AS \"Fees Paid ($)\",\n    ROUND(t.pnl, 2) AS \"Net Profit ($)\",\n    COALESCE(t.exit_reason, 'open') AS \"Exit Reason\",\n    CASE WHEN t.won = 1 THEN 'WIN'\n         WHEN t.won = 0 THEN 'LOSS'\n         ELSE 'OPEN' END AS \"Outcome\"\nFROM v_grafana_trades t\nJOIN v_grafana_experiments e ON t.participant_id = e.participant_id AND t.experiment_id = e.experiment_id\nWHERE ('$participant' = 'All' OR t.participant_id = '$participant')\n  AND ('$strategy' = 'All' OR t.strategy_id = '$strategy')\n  AND ('$experiment' = 'All' OR t.experiment_id = '$experiment')\n  AND ('$experiment_status' = 'all' OR e.status = '$experiment_status')\nORDER BY t.opened_at_ms DESC, t.trade_id DESC\nLIMIT 100;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Panel 5 \u2014 15-Minute BTC Cycles, Vixxy Locks & Official Kalshi Settlements",
+      "description": "15-Minute BTC Cycle Registry reconciling Vixxy directional lock predictions against official Kalshi contract settlements. Columns: 'Cycle' (canonical key), 'Contract Ticker', 'BTC Open Strike ($)' (baseline strike set at cycle start), 'Latest BTC Spot ($)' (last spot price), 'Spot vs Strike ($)' (spot minus strike; positive favors UP), 'Cycle State' (SEARCHING/LOCKED_UP/LOCKED_DOWN), 'Vixxy Locked Direction', 'Lock Confidence (%)', 'Reversal Risk (%)', 'Kalshi Market Status' (active/settled), 'Official Settlement' (yes/no/unsettled), 'Lock Outcome' (CORRECT/INCORRECT/PENDING/NO_LOCK), 'First Seen (UTC)', and 'Last Seen (UTC)'.",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    cycle_key AS \"Cycle\",\n    COALESCE(contract_id, '-') AS \"Contract Ticker\",\n    ROUND(open_strike, 2) AS \"BTC Open Strike ($)\",\n    ROUND(latest_spot, 2) AS \"Latest BTC Spot ($)\",\n    CASE WHEN latest_spot IS NOT NULL AND open_strike IS NOT NULL\n         THEN ROUND(latest_spot - open_strike, 2)\n         ELSE NULL END AS \"Spot vs Strike ($)\",\n    COALESCE(current_state, 'SEARCHING') AS \"Cycle State\",\n    UPPER(COALESCE(locked_direction, '-')) AS \"Vixxy Locked Direction\",\n    ROUND(locked_confidence, 1) AS \"Lock Confidence (%)\",\n    ROUND(locked_reversal_risk, 1) AS \"Reversal Risk (%)\",\n    COALESCE(market_status, 'active') AS \"Kalshi Market Status\",\n    COALESCE(market_result, 'unsettled') AS \"Official Settlement\",\n    CASE\n        WHEN locked_direction IS NULL THEN 'NO_LOCK'\n        WHEN market_result IS NULL OR UPPER(market_result) IN ('UNSETTLED', '') THEN 'PENDING'\n        WHEN (UPPER(locked_direction) = 'UP' AND UPPER(market_result) IN ('YES', 'UP'))\n          OR (UPPER(locked_direction) = 'DOWN' AND UPPER(market_result) IN ('NO', 'DOWN'))\n        THEN 'CORRECT'\n        ELSE 'INCORRECT'\n    END AS \"Lock Outcome\",\n    strftime('%Y-%m-%d %H:%M:%SZ', first_seen_ms / 1000.0, 'unixepoch') AS \"First Seen (UTC)\",\n    strftime('%Y-%m-%d %H:%M:%SZ', last_seen_ms / 1000.0, 'unixepoch') AS \"Last Seen (UTC)\"\nFROM cycles\nORDER BY last_seen_ms DESC\nLIMIT 50;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Panel 6 \u2014 BYOC Live & Dry-Run Action Sink Audit Log",
+      "description": "Audit Log of all BYOC (Bring-Your-Own-Credentials) live and dry-run action sink executions. Tracks venue fee handshakes, risk cap adjustments, and last-mile net-return veto decisions before orders reach exchange. Columns: 'Time (UTC)', 'Action Sink', 'Experiment', 'Strategy', 'Action' (BUY/SELL), 'Contract Ticker', 'Side', 'Requested Contracts', 'Executed Contracts' (reduced by risk caps if triggered), 'Order Price ($)', 'Notional ($)', 'Estimated Fee ($)', 'Execution Status' (EXECUTED/DRY_RUN/VETOED), 'Circuit Breaker / Status Reason' (veto rationale), and 'Kalshi Order ID'.",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "btcupdown-sqlite"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "btcupdown-sqlite"
+          },
+          "queryType": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    strftime('%Y-%m-%d %H:%M:%SZ', created_at_ms / 1000.0, 'unixepoch') AS \"Time (UTC)\",\n    sink_id AS \"Action Sink\",\n    experiment_id AS \"Experiment\",\n    strategy_name AS \"Strategy\",\n    action_type AS \"Action\",\n    ticker AS \"Contract Ticker\",\n    UPPER(side) AS \"Side\",\n    requested_contracts AS \"Requested Contracts\",\n    executed_contracts AS \"Executed Contracts\",\n    ROUND(price, 4) AS \"Order Price ($)\",\n    ROUND(notional_dollars, 2) AS \"Notional ($)\",\n    ROUND(fee_dollars, 4) AS \"Estimated Fee ($)\",\n    status AS \"Execution Status\",\n    COALESCE(reason, 'OK') AS \"Circuit Breaker / Status Reason\",\n    COALESCE(external_order_id, '-') AS \"Kalshi Order ID\"\nFROM action_executions\nWHERE ('$strategy' = 'All' OR strategy_name = '$strategy' OR strategy_name = '*')\n  AND ('$experiment' = 'All' OR experiment_id = '$experiment' OR experiment_id = '*')\nORDER BY created_at_ms DESC, execution_id DESC\nLIMIT 100;",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "btcupdown",
+    "trading",
+    "crypto",
+    "paper-trading",
+    "byoc"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "participant",
+        "type": "query",
+        "label": "Participant",
+        "query": "SELECT DISTINCT participant_id FROM v_grafana_standings ORDER BY participant_id;",
+        "current": {
+          "text": "All",
+          "value": "All"
+        },
+        "includeAll": true,
+        "allValue": "All",
+        "multi": false,
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "btcupdown-sqlite"
+        }
+      },
+      {
+        "name": "strategy",
+        "type": "query",
+        "label": "Strategy",
+        "query": "SELECT DISTINCT strategy_id FROM v_grafana_standings ORDER BY strategy_id;",
+        "current": {
+          "text": "All",
+          "value": "All"
+        },
+        "includeAll": true,
+        "allValue": "All",
+        "multi": false,
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "btcupdown-sqlite"
+        }
+      },
+      {
+        "name": "experiment",
+        "type": "query",
+        "label": "Experiment",
+        "query": "SELECT DISTINCT experiment_id FROM v_grafana_experiments ORDER BY started_at_ms DESC;",
+        "current": {
+          "text": "All",
+          "value": "All"
+        },
+        "includeAll": true,
+        "allValue": "All",
+        "multi": false,
+        "datasource": {
+          "type": "frser-sqlite-datasource",
+          "uid": "btcupdown-sqlite"
+        }
+      },
+      {
+        "name": "experiment_status",
+        "type": "custom",
+        "label": "Cohort Status",
+        "query": "all, active, draining, completed",
+        "current": {
+          "text": "all",
+          "value": "all"
+        },
+        "options": [
+          {
+            "text": "all",
+            "value": "all",
+            "selected": true
+          },
+          {
+            "text": "active",
+            "value": "active",
+            "selected": false
+          },
+          {
+            "text": "draining",
+            "value": "draining",
+            "selected": false
+          },
+          {
+            "text": "completed",
+            "value": "completed",
+            "selected": false
+          }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "min_trades",
+        "type": "custom",
+        "label": "Min Trades Filter",
+        "query": "0, 1, 5, 10, 20",
+        "current": {
+          "text": "0",
+          "value": "0"
+        },
+        "options": [
+          {
+            "text": "0",
+            "value": "0",
+            "selected": true
+          },
+          {
+            "text": "1",
+            "value": "1",
+            "selected": false
+          },
+          {
+            "text": "5",
+            "value": "5",
+            "selected": false
+          },
+          {
+            "text": "10",
+            "value": "10",
+            "selected": false
+          },
+          {
+            "text": "20",
+            "value": "20",
+            "selected": false
+          }
+        ],
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "BTC 15m Up/Down Trading & Telemetry Hub",
+  "uid": "btcupdown-main",
+  "version": 1
+}

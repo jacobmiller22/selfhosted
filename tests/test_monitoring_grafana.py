@@ -538,36 +538,63 @@ class TestBTCUpDownDashboards(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.dashboards_dir = DASHBOARDS_JSON_DIR / "btcupdown"
-        cls.d1_file = cls.dashboards_dir / "01-strategy-leaderboards.json"
-        cls.d2_file = cls.dashboards_dir / "02-experiments-monitor.json"
-        cls.d3_file = cls.dashboards_dir / "03-market-signals-and-trades.json"
+        cls.d_file = cls.dashboards_dir / "btcupdown.json"
 
-        cls.assertTrue(cls.d1_file.exists(), f"{cls.d1_file} must exist")
-        cls.assertTrue(cls.d2_file.exists(), f"{cls.d2_file} must exist")
-        cls.assertTrue(cls.d3_file.exists(), f"{cls.d3_file} must exist")
+        cls.assertTrue(cls.d_file.exists(), f"{cls.d_file} must exist")
 
-        with open(cls.d1_file, "r", encoding="utf-8") as f:
-            cls.d1 = json.load(f)
-        with open(cls.d2_file, "r", encoding="utf-8") as f:
-            cls.d2 = json.load(f)
-        with open(cls.d3_file, "r", encoding="utf-8") as f:
-            cls.d3 = json.load(f)
+        with open(cls.d_file, "r", encoding="utf-8") as f:
+            cls.d = json.load(f)
 
     def test_dashboards_metadata_and_uids(self):
-        self.assertEqual(self.d1.get("uid"), "btcupdown-strategy-leaderboards")
-        self.assertEqual(self.d2.get("uid"), "btcupdown-experiments-monitor")
-        self.assertEqual(self.d3.get("uid"), "btcupdown-market-signals-and-trades")
-
-        for d in [self.d1, self.d2, self.d3]:
-            self.assertIn("btcupdown", d.get("tags", []))
+        self.assertEqual(self.d.get("uid"), "btcupdown-main")
+        self.assertEqual(self.d.get("title"), "BTC 15m Up/Down Trading & Telemetry Hub")
+        self.assertIn("btcupdown", self.d.get("tags", []))
+        self.assertEqual(len(self.d.get("panels", [])), 6)
 
     def test_all_sqlite_queries_execute_cleanly_against_broker_schema(self):
         import sqlite3
         con = sqlite3.connect(":memory:")
         cur = con.cursor()
 
-        # Seed schema matching crates/data-broker/src/store.rs
+        # Seed schema matching crates/data-broker/src/store.rs and crates/engine-core/src/store.rs
         cur.executescript("""
+            CREATE TABLE IF NOT EXISTS cycles (
+                cycle_key            TEXT PRIMARY KEY,
+                producer_id          TEXT NOT NULL,
+                topic                TEXT NOT NULL,
+                contract_id          TEXT,
+                first_seen_ms        INTEGER NOT NULL,
+                last_seen_ms         INTEGER NOT NULL,
+                open_strike          REAL,
+                latest_spot          REAL,
+                current_state        TEXT,
+                locked_direction     TEXT,
+                locked_confidence    REAL,
+                locked_reversal_risk REAL,
+                price_at_lock        REAL,
+                latest_price_now     REAL,
+                locked_at_ms         INTEGER,
+                tick_count           INTEGER NOT NULL DEFAULT 0,
+                state_change_count   INTEGER NOT NULL DEFAULT 0,
+                market_status        TEXT,
+                market_result        TEXT,
+                settlement_price     REAL
+            );
+
+            CREATE TABLE IF NOT EXISTS raw_events (
+                event_id             INTEGER PRIMARY KEY,
+                producer_id          TEXT NOT NULL,
+                topic                TEXT NOT NULL,
+                cycle_key            TEXT,
+                contract_id          TEXT,
+                observed_at_ms       INTEGER NOT NULL,
+                ingested_at_ms       INTEGER NOT NULL,
+                is_state_change      INTEGER NOT NULL,
+                normalized_json      TEXT NOT NULL,
+                extra_json           TEXT NOT NULL,
+                changed_fields_json  TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS strategy_experiments (
                 participant_id       TEXT NOT NULL,
                 experiment_id        TEXT NOT NULL,
@@ -590,7 +617,7 @@ class TestBTCUpDownDashboards(unittest.TestCase):
 
             CREATE TABLE IF NOT EXISTS strategy_standings (
                 participant_id       TEXT NOT NULL,
-                experiment_id        TEXT NOT NULL,
+                experiment_id        TEXT NOT NULL DEFAULT 'default',
                 strategy_id          TEXT NOT NULL,
                 display_label        TEXT NOT NULL,
                 cash_dollars         REAL NOT NULL,
@@ -598,9 +625,11 @@ class TestBTCUpDownDashboards(unittest.TestCase):
                 wins                 INTEGER NOT NULL,
                 losses               INTEGER NOT NULL,
                 win_rate_pct         REAL NOT NULL,
+                gross_realized_pnl_dollars REAL,
+                total_fees_dollars   REAL,
                 realized_pnl_dollars REAL NOT NULL,
                 watching_json        TEXT,
-                settling_json        TEXT NOT NULL,
+                settling_json        TEXT NOT NULL DEFAULT '[]',
                 updated_at_ms        INTEGER NOT NULL,
                 ingested_at_ms       INTEGER NOT NULL,
                 PRIMARY KEY (participant_id, experiment_id, strategy_id)
@@ -608,29 +637,34 @@ class TestBTCUpDownDashboards(unittest.TestCase):
 
             CREATE TABLE IF NOT EXISTS strategy_trades (
                 participant_id       TEXT NOT NULL,
-                experiment_id        TEXT NOT NULL,
-                trade_id             INTEGER NOT NULL,
+                experiment_id        TEXT NOT NULL DEFAULT 'default',
                 strategy_id          TEXT NOT NULL,
+                trade_id             INTEGER NOT NULL,
                 cycle_id             TEXT NOT NULL,
                 ticker               TEXT NOT NULL,
                 side                 TEXT NOT NULL,
+                venue_id             TEXT,
                 contracts            INTEGER NOT NULL,
                 entry_price          REAL NOT NULL,
+                entry_fee            REAL,
                 cost                 REAL NOT NULL,
                 status               TEXT NOT NULL,
                 exit_reason          TEXT,
                 exit_price           REAL,
+                exit_fee             REAL,
+                total_fee            REAL,
+                gross_pnl            REAL,
                 pnl                  REAL,
                 won                  INTEGER,
                 opened_at_ms         INTEGER NOT NULL,
                 closed_at_ms         INTEGER,
                 ingested_at_ms       INTEGER NOT NULL,
-                PRIMARY KEY (participant_id, experiment_id, trade_id)
+                PRIMARY KEY (participant_id, experiment_id, strategy_id, trade_id)
             );
 
             CREATE TABLE IF NOT EXISTS strategy_outputs (
                 participant_id       TEXT NOT NULL,
-                experiment_id        TEXT NOT NULL,
+                experiment_id        TEXT NOT NULL DEFAULT 'default',
                 output_id            INTEGER NOT NULL,
                 strategy_id          TEXT NOT NULL,
                 cycle_key            TEXT NOT NULL,
@@ -639,106 +673,242 @@ class TestBTCUpDownDashboards(unittest.TestCase):
                 log_line             TEXT NOT NULL,
                 payload_json         TEXT NOT NULL,
                 ingested_at_ms       INTEGER NOT NULL,
-                PRIMARY KEY (participant_id, experiment_id, output_id)
+                PRIMARY KEY (participant_id, experiment_id, output_id, strategy_id, ts_ms)
             );
 
-            CREATE TABLE IF NOT EXISTS cycles (
-                cycle_key            TEXT PRIMARY KEY,
-                producer_id          TEXT NOT NULL,
-                topic                TEXT NOT NULL,
-                contract_id          TEXT,
-                first_seen_ms        INTEGER NOT NULL,
-                last_seen_ms         INTEGER NOT NULL,
-                open_strike          REAL,
-                latest_spot          REAL,
-                current_state        TEXT,
-                locked_direction     TEXT,
-                locked_confidence    REAL,
-                locked_reversal_risk REAL,
-                price_at_lock        REAL,
-                latest_price_now     REAL,
-                locked_at_ms         INTEGER,
-                tick_count           INTEGER NOT NULL DEFAULT 0,
-                state_change_count   INTEGER NOT NULL DEFAULT 0
+            CREATE TABLE IF NOT EXISTS experiments (
+                experiment_id        TEXT PRIMARY KEY,
+                generator_id         TEXT,
+                status               TEXT NOT NULL,
+                start_balance        REAL NOT NULL,
+                strategies_json      TEXT NOT NULL,
+                params_override_json TEXT,
+                started_at_ms        INTEGER NOT NULL,
+                end_at_ms            INTEGER,
+                max_cycles           INTEGER,
+                cycles_observed      INTEGER NOT NULL DEFAULT 0,
+                drain_deadline_ms    INTEGER,
+                completed_at_ms      INTEGER,
+                force_closed         INTEGER NOT NULL DEFAULT 0,
+                updated_at_ms        INTEGER NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS raw_events (
-                event_id             INTEGER PRIMARY KEY,
-                producer_id          TEXT NOT NULL,
-                topic                TEXT NOT NULL,
-                cycle_key            TEXT,
-                contract_id          TEXT,
-                observed_at_ms       INTEGER NOT NULL,
-                ingested_at_ms       INTEGER NOT NULL,
-                is_state_change      INTEGER NOT NULL,
-                normalized_json      TEXT NOT NULL,
-                extra_json           TEXT NOT NULL,
-                changed_fields_json  TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS strategy_books (
+                experiment_id        TEXT NOT NULL DEFAULT 'default',
+                strategy_id          TEXT NOT NULL,
+                display_label        TEXT NOT NULL,
+                cash                 REAL NOT NULL,
+                trades               INTEGER NOT NULL DEFAULT 0,
+                wins                 INTEGER NOT NULL DEFAULT 0,
+                losses               INTEGER NOT NULL DEFAULT 0,
+                gross_realized       REAL NOT NULL DEFAULT 0.0,
+                total_fees           REAL NOT NULL DEFAULT 0.0,
+                realized             REAL NOT NULL DEFAULT 0.0,
+                watching_json        TEXT,
+                settling_json        TEXT NOT NULL DEFAULT '[]',
+                updated_at_ms        INTEGER NOT NULL,
+                PRIMARY KEY (experiment_id, strategy_id)
             );
 
-            CREATE TABLE IF NOT EXISTS state_changes (
-                event_id             INTEGER PRIMARY KEY,
-                producer_id          TEXT NOT NULL,
-                topic                TEXT NOT NULL,
-                cycle_key            TEXT,
-                contract_id          TEXT,
-                observed_at_ms       INTEGER NOT NULL,
-                ingested_at_ms       INTEGER NOT NULL,
-                is_state_change      INTEGER NOT NULL,
-                normalized_json      TEXT NOT NULL,
-                extra_json           TEXT NOT NULL,
-                changed_fields_json  TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS raw_trades (
+                trade_id             INTEGER NOT NULL,
+                experiment_id        TEXT NOT NULL DEFAULT 'default',
+                strategy_id          TEXT NOT NULL,
+                cycle_id             TEXT NOT NULL,
+                ticker               TEXT NOT NULL,
+                side                 TEXT NOT NULL,
+                venue_id             TEXT NOT NULL DEFAULT 'kalshi',
+                confidence           REAL,
+                contracts            INTEGER NOT NULL,
+                entry_price          REAL NOT NULL,
+                entry_fee            REAL NOT NULL,
+                cost                 REAL NOT NULL,
+                limit_at             REAL,
+                stop_at              REAL,
+                status               TEXT NOT NULL,
+                exit_reason          TEXT,
+                exit_price           REAL,
+                exit_fee             REAL,
+                total_fee            REAL NOT NULL DEFAULT 0.0,
+                proceeds             REAL,
+                gross_pnl            REAL,
+                pnl                  REAL,
+                won                  INTEGER,
+                opened_at_ms         INTEGER NOT NULL,
+                closed_at_ms         INTEGER,
+                PRIMARY KEY (experiment_id, trade_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS policy_outputs (
+                output_id            INTEGER NOT NULL,
+                experiment_id        TEXT NOT NULL DEFAULT 'default',
+                strategy_id          TEXT NOT NULL,
+                cycle_key            TEXT NOT NULL,
+                ts_ms                INTEGER NOT NULL,
+                output_kind          TEXT NOT NULL,
+                log_line             TEXT NOT NULL,
+                payload_json         TEXT NOT NULL,
+                PRIMARY KEY (experiment_id, output_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS action_sinks (
+                sink_id              TEXT PRIMARY KEY,
+                sink_type            TEXT NOT NULL,
+                experiment_id        TEXT NOT NULL DEFAULT '*',
+                strategy_name        TEXT NOT NULL DEFAULT '*',
+                max_contracts        INTEGER,
+                max_notional_dollars REAL,
+                dry_run              INTEGER NOT NULL DEFAULT 1,
+                venue_fee_model_json TEXT NOT NULL,
+                enabled              INTEGER NOT NULL DEFAULT 1,
+                created_at_ms        INTEGER NOT NULL,
+                updated_at_ms        INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS action_executions (
+                execution_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                sink_id             TEXT NOT NULL,
+                experiment_id       TEXT NOT NULL,
+                strategy_name       TEXT NOT NULL,
+                cycle_id            TEXT NOT NULL,
+                ticker              TEXT NOT NULL,
+                side                TEXT NOT NULL,
+                action_type         TEXT NOT NULL,
+                requested_contracts INTEGER NOT NULL,
+                executed_contracts  INTEGER NOT NULL,
+                price               REAL NOT NULL,
+                notional_dollars    REAL NOT NULL,
+                fee_dollars         REAL NOT NULL,
+                status              TEXT NOT NULL,
+                reason              TEXT,
+                external_order_id   TEXT,
+                created_at_ms       INTEGER NOT NULL
+            );
+
+            DROP VIEW IF EXISTS v_grafana_experiments;
+            CREATE VIEW v_grafana_experiments AS
+            SELECT
+                participant_id, experiment_id, generator_id, status, start_balance,
+                strategies_json, params_override_json, started_at_ms, end_at_ms,
+                max_cycles, cycles_observed, drain_deadline_ms, completed_at_ms,
+                force_closed, updated_at_ms, ingested_at_ms
+            FROM strategy_experiments
+            UNION ALL
+            SELECT
+                'local' AS participant_id, e.experiment_id, e.generator_id, e.status, e.start_balance,
+                e.strategies_json, e.params_override_json, e.started_at_ms, e.end_at_ms,
+                e.max_cycles, e.cycles_observed, e.drain_deadline_ms, e.completed_at_ms,
+                e.force_closed, e.updated_at_ms, e.updated_at_ms AS ingested_at_ms
+            FROM experiments e
+            WHERE NOT EXISTS (
+                SELECT 1 FROM strategy_experiments se
+                WHERE se.participant_id = 'local' AND se.experiment_id = e.experiment_id
+            );
+
+            DROP VIEW IF EXISTS v_grafana_standings;
+            CREATE VIEW v_grafana_standings AS
+            SELECT
+                participant_id, experiment_id, strategy_id, display_label, cash_dollars,
+                trades, wins, losses, win_rate_pct, gross_realized_pnl_dollars,
+                total_fees_dollars, realized_pnl_dollars, watching_json, settling_json,
+                updated_at_ms, ingested_at_ms
+            FROM strategy_standings
+            UNION ALL
+            SELECT
+                'local' AS participant_id, b.experiment_id, b.strategy_id, b.display_label,
+                b.cash AS cash_dollars, b.trades, b.wins, b.losses,
+                CASE WHEN (b.wins + b.losses) > 0 THEN ROUND(100.0 * b.wins / (b.wins + b.losses), 1) ELSE 0.0 END AS win_rate_pct,
+                b.gross_realized AS gross_realized_pnl_dollars, b.total_fees AS total_fees_dollars,
+                b.realized AS realized_pnl_dollars, b.watching_json, b.settling_json,
+                b.updated_at_ms, b.updated_at_ms AS ingested_at_ms
+            FROM strategy_books b
+            WHERE NOT EXISTS (
+                SELECT 1 FROM strategy_standings ss
+                WHERE ss.participant_id = 'local' AND ss.experiment_id = b.experiment_id AND ss.strategy_id = b.strategy_id
+            );
+
+            DROP VIEW IF EXISTS v_grafana_trades;
+            CREATE VIEW v_grafana_trades AS
+            SELECT
+                participant_id, experiment_id, strategy_id, trade_id, cycle_id,
+                ticker, side, venue_id, contracts, entry_price, entry_fee, cost,
+                status, exit_reason, exit_price, exit_fee, total_fee, gross_pnl,
+                pnl, won, opened_at_ms, closed_at_ms, ingested_at_ms
+            FROM strategy_trades
+            UNION ALL
+            SELECT
+                'local' AS participant_id, r.experiment_id, r.strategy_id, r.trade_id, r.cycle_id,
+                r.ticker, r.side, r.venue_id, r.contracts, r.entry_price, r.entry_fee, r.cost,
+                r.status, r.exit_reason, r.exit_price, r.exit_fee, r.total_fee, r.gross_pnl,
+                r.pnl, r.won, r.opened_at_ms, r.closed_at_ms, r.closed_at_ms AS ingested_at_ms
+            FROM raw_trades r
+            WHERE NOT EXISTS (
+                SELECT 1 FROM strategy_trades st
+                WHERE st.participant_id = 'local' AND st.experiment_id = r.experiment_id AND st.strategy_id = r.strategy_id AND st.trade_id = r.trade_id
+            );
+
+            DROP VIEW IF EXISTS v_grafana_outputs;
+            CREATE VIEW v_grafana_outputs AS
+            SELECT
+                participant_id, experiment_id, strategy_id, output_id, cycle_key,
+                ts_ms, output_kind, log_line, payload_json, ingested_at_ms
+            FROM strategy_outputs
+            UNION ALL
+            SELECT
+                'local' AS participant_id, p.experiment_id, p.strategy_id, p.output_id, p.cycle_key,
+                p.ts_ms, p.output_kind, p.log_line, p.payload_json, p.ts_ms AS ingested_at_ms
+            FROM policy_outputs p
+            WHERE NOT EXISTS (
+                SELECT 1 FROM strategy_outputs so
+                WHERE so.participant_id = 'local' AND so.experiment_id = p.experiment_id AND so.output_id = p.output_id
             );
         """)
+
+        def substitute_macros_and_vars(sql: str) -> str:
+            defaults = {
+                "participant": "All",
+                "strategy": "All",
+                "experiment": "All",
+                "experiment_status": "all",
+                "min_trades": "0",
+            }
+            s = re.sub(r"\$__timeFilter\((.*?)\)", r"(\1 >= 0)", sql)
+            s = re.sub(r"\$__time\((.*?)\)", r"\1", s)
+            s = re.sub(r"\$__timeGroup\((.*?),.*?\)", r"((\1 / 900000) * 900000)", s)
+            s = re.sub(r"\$__unixEpochFrom\(\)", "0", s)
+            s = re.sub(r"\$__unixEpochTo\(\)", "9999999999", s)
+            for k in sorted(defaults.keys(), key=len, reverse=True):
+                s = s.replace(f"${k}", defaults[k])
+            return s
 
         total_queries = 0
         import re
 
-        for dashboard in [self.d1, self.d2, self.d3]:
-            # 1. Audit template variables
-            for var in dashboard.get("templating", {}).get("list", []):
-                v_type = var.get("type")
-                v_query = var.get("query")
-                if v_type == "query" and isinstance(v_query, str) and v_query.strip():
+        # 1. Audit template variables
+        for var in self.d.get("templating", {}).get("list", []):
+            v_type = var.get("type")
+            v_query = var.get("query")
+            if v_type == "query" and isinstance(v_query, str) and v_query.strip():
+                total_queries += 1
+                sub_sql = substitute_macros_and_vars(v_query)
+                try:
+                    cur.execute(sub_sql)
+                except Exception as e:
+                    self.fail(f"Template variable query failed: {sub_sql}\nError: {e}")
+
+        # 2. Audit panel targets
+        for p in self.d.get("panels", []):
+            for target in p.get("targets", []):
+                raw_sql = target.get("rawSql") or target.get("query") or target.get("rawQueryText")
+                if isinstance(raw_sql, str) and raw_sql.strip():
                     total_queries += 1
-                    sub_sql = (
-                        v_query.replace("$participant", "alice")
-                        .replace("$experiment", "exp-1")
-                        .replace("$strategy", "all")
-                    )
+                    sub_sql = substitute_macros_and_vars(raw_sql)
                     try:
                         cur.execute(sub_sql)
                     except Exception as e:
-                        self.fail(f"Template variable query failed: {sub_sql}\nError: {e}")
+                        self.fail(f"Panel '{p.get('title')}' in '{self.d.get('title')}' failed SQL:\n{sub_sql}\nError: {e}")
 
-            # 2. Audit panel targets
-            for p in dashboard.get("panels", []):
-                for target in p.get("targets", []):
-                    raw_sql = target.get("rawSql") or target.get("query") or target.get("rawQueryText")
-                    if isinstance(raw_sql, str) and raw_sql.strip():
-                        total_queries += 1
-                        sub_sql = re.sub(r"\$__timeFilter\((.*?)\)", r"(\1 >= 0)", raw_sql)
-                        sub_sql = re.sub(r"\$__time\((.*?)\)", r"\1", sub_sql)
-                        sub_sql = re.sub(r"\$__timeGroup\((.*?),.*?\)", r"((\1 / 900000) * 900000)", sub_sql)
-                        sub_sql = re.sub(r"\$__unixEpochFrom\(\)", "0", sub_sql)
-                        sub_sql = re.sub(r"\$__unixEpochTo\(\)", "9999999999", sub_sql)
-                        sub_sql = (
-                            sub_sql.replace("$__timeFrom()", "0")
-                            .replace("$__timeTo()", "9999999999999")
-                            .replace("$__interval_ms", "1000")
-                            .replace("$__interval", "1s")
-                            .replace("$participant", "alice")
-                            .replace("$experiment", "exp-1")
-                            .replace("$strategy", "all")
-                            .replace("$experiment_status", "all")
-                            .replace("$min_trades", "0")
-                        )
-                        try:
-                            cur.execute(sub_sql)
-                        except Exception as e:
-                            self.fail(f"Panel '{p.get('title')}' in '{dashboard.get('title')}' failed SQL:\n{sub_sql}\nError: {e}")
-
-        self.assertEqual(total_queries, 25, f"Expected 25 SQL queries across 3 dashboards, got {total_queries}")
+        self.assertEqual(total_queries, 9, f"Expected 9 SQL queries across 6 panels and variables, got {total_queries}")
 
 
 class TestGrafanaFolderAcls(unittest.TestCase):

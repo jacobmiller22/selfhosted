@@ -18,6 +18,9 @@ Dashboards placed in this directory are monitored and hot-reloaded by the Grafan
    - Focus: Service Backup Freshness Gauge (<24h green, 24-26h yellow, >26h red), Recovery Time Objective (RTO) and Recovery Point Objective (RPO) historical trends, backup archive size tracking over time, and automated failover DR drill status with plain-English ELI5 tooltips.
 4. **VictoriaMetrics TSDB Vitals**:
    - Focus: Ingestion rate (samples/sec), active time-series count, storage size on disk, query latency percentiles.
+5. **BTC 15m Up/Down Trading & Telemetry Hub** (`btcupdown/btcupdown.json`):
+   - UID: `btcupdown-main`
+   - Focus: Strategy leaderboard ranked by bankroll and net profit, bankroll time series, live open positions and watching state, trade tape with venue fee breakdown, 15m BTC cycle registry with Vixxy locks & Kalshi settlements, and BYOC live/dry-run action sink execution audit log. Allowed to Viewer role under folder RBAC.
 
 ## Adding Custom Dashboards
 1. Build or customize a dashboard in the Grafana UI (`https://monitoring.cloud.jacobmiller22.com`).
