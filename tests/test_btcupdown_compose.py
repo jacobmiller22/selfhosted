@@ -15,7 +15,7 @@ class TestBtcupdownColocatedStack(unittest.TestCase):
         self.assertIn("--bin kalshi-poller", dockerfile)
         self.assertIn("--bin btcupdown-cli", dockerfile)
         self.assertIn("/usr/local/bin/btcupdown-engine", dockerfile)
-        self.assertIn('ARG BTCUPDOWN_COMMIT="1d87631"', dockerfile)
+        self.assertIn('ARG BTCUPDOWN_COMMIT="08a8771"', dockerfile)
         self.assertIn("EXPOSE 8080 8081", dockerfile)
 
     def test_entrypoint_supervises_colocated_engine_sharing_broker_sqlite(self):
@@ -63,6 +63,7 @@ class TestBtcupdownColocatedStack(unittest.TestCase):
         self.assertIn("8086", agents_md)
         self.assertIn("v_strategy_standings", agents_md)
         self.assertIn("live-kalshi", agents_md)
+        self.assertIn("kalshi-live-conf-80", agents_md)
         self.assertIn("kalshi-live-wide", agents_md)
         self.assertIn("kalshi-live-full-port", agents_md)
 

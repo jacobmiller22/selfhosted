@@ -13,7 +13,7 @@ services:
       args:
         GITHUB_TOKEN: ${GITHUB_TOKEN:-}
         BTCUPDOWN_REF: ${BTCUPDOWN_REF:-main}
-        BTCUPDOWN_COMMIT: ${BTCUPDOWN_COMMIT:-317776b}
+        BTCUPDOWN_COMMIT: ${BTCUPDOWN_COMMIT:-08a8771}
     container_name: btcupdown
     restart: unless-stopped
     environment:
