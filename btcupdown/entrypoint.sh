@@ -24,8 +24,21 @@ KALSHI_BASE_URL="${KALSHI_BASE_URL:-https://api.elections.kalshi.com/trade-api/v
 KALSHI_SERIES_TICKER="${KALSHI_SERIES_TICKER:-KXBTC15M}"
 KALSHI_POLL_INTERVAL_MS="${KALSHI_POLL_INTERVAL_MS:-1000}"
 KALSHI_SETTLE_POLL_INTERVAL_MS="${KALSHI_SETTLE_POLL_INTERVAL_MS:-2000}"
+KALSHI_ENV_FILE="${KALSHI_ENV_FILE:-/data/kalshi.env}"
 
 mkdir -p /data
+
+if [[ -f "${KALSHI_ENV_FILE}" ]]; then
+  echo "[ENTRYPOINT] Loading BYOC Kalshi credentials from ${KALSHI_ENV_FILE}..."
+  set -a
+  # shellcheck disable=SC1090
+  source "${KALSHI_ENV_FILE}"
+  set +a
+fi
+
+if [[ -n "${KALSHI_PRIVATE_KEY_PATH:-}" && ! -f "${KALSHI_PRIVATE_KEY_PATH}" && -f "/data/kalshi_private.pem" ]]; then
+  export KALSHI_PRIVATE_KEY_PATH="/data/kalshi_private.pem"
+fi
 
 echo "[ENTRYPOINT] Starting data-broker on ${BROKER_LISTEN_ADDR} (DB=${BROKER_DB_PATH}, raw_retention_days=${BROKER_RAW_RETENTION_DAYS})..."
 data-broker \
@@ -52,9 +65,16 @@ if [[ "${ENGINE_ENABLE}" == "true" ]]; then
     --bind "${ENGINE_LISTEN_ADDR}"
     --trade-log "${ENGINE_TRADE_LOG_PATH}"
     --start-balance "${ENGINE_START_BALANCE}"
+    --kalshi-base-url "${KALSHI_BASE_URL}"
   )
   if [[ -n "${ENGINE_PARTICIPANT_ID}" ]]; then
     ENGINE_ARGS+=(--participant "${ENGINE_PARTICIPANT_ID}")
+  fi
+  if [[ -n "${KALSHI_KEY_ID:-}" ]]; then
+    ENGINE_ARGS+=(--kalshi-key-id "${KALSHI_KEY_ID}")
+  fi
+  if [[ -n "${KALSHI_PRIVATE_KEY_PATH:-}" ]]; then
+    ENGINE_ARGS+=(--kalshi-private-key-path "${KALSHI_PRIVATE_KEY_PATH}")
   fi
   btcupdown-engine "${ENGINE_ARGS[@]}" &
   ENGINE_PID=$!

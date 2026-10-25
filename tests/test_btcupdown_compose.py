@@ -28,6 +28,10 @@ class TestBtcupdownColocatedStack(unittest.TestCase):
         self.assertIn('--db "${ENGINE_DB_PATH}"', entrypoint)
         self.assertIn('--url "${ENGINE_BROKER_WS_URL}"', entrypoint)
         self.assertIn('--bind "${ENGINE_LISTEN_ADDR}"', entrypoint)
+        self.assertIn('KALSHI_ENV_FILE="${KALSHI_ENV_FILE:-/data/kalshi.env}"', entrypoint)
+        self.assertIn('source "${KALSHI_ENV_FILE}"', entrypoint)
+        self.assertIn('--kalshi-key-id "${KALSHI_KEY_ID}"', entrypoint)
+        self.assertIn('--kalshi-private-key-path "${KALSHI_PRIVATE_KEY_PATH}"', entrypoint)
 
     def test_compose_configures_shared_sqlite_and_control_port(self):
         compose_path = BTCUPDOWN_DIR / "compose.yml"
@@ -41,6 +45,7 @@ class TestBtcupdownColocatedStack(unittest.TestCase):
         self.assertIn("ENGINE_LISTEN_ADDR=${ENGINE_LISTEN_ADDR:-0.0.0.0:8081}", env_str)
         self.assertIn("ENGINE_DB_PATH=${ENGINE_DB_PATH:-/data/broker.sqlite}", env_str)
         self.assertIn("ENGINE_PARTICIPANT_ID=${ENGINE_PARTICIPANT_ID:-bjorn}", env_str)
+        self.assertIn("KALSHI_ENV_FILE=${KALSHI_ENV_FILE:-/data/kalshi.env}", env_str)
 
         ports = svc.get("ports", [])
         self.assertIn("8085:8080", ports)
@@ -56,6 +61,9 @@ class TestBtcupdownColocatedStack(unittest.TestCase):
         self.assertIn("/data/broker.sqlite", agents_md)
         self.assertIn("8086", agents_md)
         self.assertIn("v_strategy_standings", agents_md)
+        self.assertIn("live-kalshi", agents_md)
+        self.assertIn("kalshi-live-wide", agents_md)
+        self.assertIn("kalshi-live-full-port", agents_md)
 
 
 if __name__ == "__main__":
