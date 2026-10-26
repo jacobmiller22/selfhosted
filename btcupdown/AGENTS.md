@@ -32,11 +32,12 @@
     - `/data/trade_log.txt` (human-readable paper/live trade audit log).
     - `/data/kalshi.env` & `/data/kalshi_private.pem` (`chmod 600` BYOC Kalshi API v2 RSA-PSS credentials sourced at container startup, never stored in Git or SQLite).
 - **Live Real-Money Experiment & BYOC Action Sinks (`live-kalshi`)**:
-  - Experiment `live-kalshi` runs alongside `default` (paper) with **`$50.00` starting balance per strategy** allocated to **`conf 80`** (`$50.00`) and **`full port`** (`$50.00`) (with legacy `wide` disabled).
+  - Experiment `live-kalshi` runs alongside `default` (paper) with **`$50.00` starting balance** allocated exclusively to **`full port`** (with `scalp conf 89 no min entry any time`, `conf 80`, and `wide` disabled).
   - Active `kalshi_live` BYOC action sinks (`dry_run: false`, `max_notional_dollars: 50.0`, `entry_slippage_cents: 1`, `exit_slippage_cents: 2`) bound strictly to `experiment_id = "live-kalshi"`:
-    - `kalshi-live-conf-80` (`experiment_id="live-kalshi"`, `strategy_name="conf 80"`, `enabled=true`)
     - `kalshi-live-full-port` (`experiment_id="live-kalshi"`, `strategy_name="full port"`, `enabled=true`)
-    - `kalshi-live-wide` (`experiment_id="live-kalshi"`, `strategy_name="wide"`, `enabled=false` — retired after audit)
+    - `kalshi-live-scalp-conf-89` (`experiment_id="live-kalshi"`, `strategy_name="scalp conf 89 no min entry any time"`, `enabled=false` — disabled)
+    - `kalshi-live-conf-80` (`experiment_id="live-kalshi"`, `strategy_name="conf 80"`, `enabled=false` — retired)
+    - `kalshi-live-wide` (`experiment_id="live-kalshi"`, `strategy_name="wide"`, `enabled=false` — retired)
 - **Grafana Observability & RBAC**:
   - Unified 6-panel dashboard `monitoring/grafana/dashboards/btcupdown/btcupdown.json` (UID `btcupdown-main`, Title: `BTC 15m Up/Down Trading & Telemetry Hub`).
   - Folder `btcupdown` permissions: Viewer (Read), Editor (Edit), Admin (Admin). Default-deny enforced on sensitive folders (`infrastructure`, `financial-intelligence`).
