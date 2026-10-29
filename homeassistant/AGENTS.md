@@ -79,3 +79,15 @@ Home Assistant is routed through **Nginx Proxy Manager** at `https://ha.cloud.ja
     ```bash
     ssh bjorn "sqlite3 /config/home-assistant_v2.db '.backup /tmp/ha-backup.sqlite'"
     ```
+
+---
+
+## 5. Custom Components & ChoreOps Integration
+
+- **Custom Component Directory**: `homeassistant/config/custom_components/`
+  - Bound to `/config/custom_components/` in the container.
+- **ChoreOps Household Operations Platform**:
+  - Installed at `homeassistant/config/custom_components/choreops` (v1.6.0).
+  - Web UI Configuration: Navigate to **Settings** -> **Devices & Services** -> **Add Integration** -> search **ChoreOps**.
+  - All services, sensors, buttons, and dynamic Lovelace dashboard templates are automatically managed by the integration.
+

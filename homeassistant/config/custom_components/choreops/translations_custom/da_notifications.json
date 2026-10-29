@@ -1,0 +1,167 @@
+{
+  "_comment_assignee_section": "═════════════════════════════════════════════════════════════════════════════════",
+  "_comment_assignee_desc": "NOTIFIKATIONER TIL MODTAGERE: Gamificeret, andenpersons, opmuntrende tone med emojis. INGEN 'ChoreOps:' præfiks.",
+  "_comment_assignee_footer": "═════════════════════════════════════════════════════════════════════════════════",
+  "chore_approved_assignee": {
+    "title": "🎉 Godkendt pligt!",
+    "message": "{chore_name} godkendt! Du har opnået {points} {points_label}"
+  },
+  "chore_disapproved_assignee": {
+    "title": "↩️ Opgave returneret",
+    "message": "{chore_name} kræver mere arbejde."
+  },
+  "chore_overdue_assignee": {
+    "title": "⏰ Forfalden pligt",
+    "message": "{chore_name} er for sent! Færdiggør den nu for at optjene {points} {points_label}"
+  },
+  "chore_overdue_steal_available": {
+    "title": "⚡ Huslige pligter",
+    "message": "{chore_name} er for sent og kan stjæles! Fuldfør den først for at optjene {points} {points_label}"
+  },
+  "chore_missed_assignee": {
+    "title": "😔 Opgave udløbet",
+    "message": "{chore_name} udløb uden fuldførelse."
+  },
+  "chore_due_reminder_assignee": {
+    "title": "⏰ Påmindelse om huslige pligter",
+    "message": "{chore_name} forfalder om {minutes} minutter! Værdien er {points} {points_label}"
+  },
+  "chore_due_window_assignee": {
+    "title": "🎯 Huslige pligter skal udføres nu",
+    "message": "{chore_name} forfalder nu! Færdiggør inden for {hours} time(r) for at optjene {points} {points_label}"
+  },
+  "chore_approved_assignee_no_points": {
+    "message": "{chore_name} godkendt!"
+  },
+  "chore_overdue_assignee_no_points": {
+    "message": "{chore_name} er for sent! Færdiggør det nu"
+  },
+  "chore_overdue_steal_available_no_points": {
+    "message": "{chore_name} er for sent og kan stjæles! Færdiggør den først"
+  },
+  "chore_standby_needed_no_points": {
+    "message": "{primary_name}s opgave {chore_name} er for sent! Gør krav på den nu"
+  },
+  "chore_due_reminder_assignee_no_points": {
+    "message": "{chore_name} forfalder om {minutes} minutter!"
+  },
+  "chore_due_window_assignee_no_points": {
+    "message": "{chore_name} skal nu afleveres! Færdiggør inden for {hours} time(r)"
+  },
+  "reward_approved_assignee": {
+    "title": "🎉 Belønning godkendt!",
+    "message": "{reward_name} godkendt!"
+  },
+  "reward_disapproved_assignee": {
+    "title": "💭 Belønningsanmodning returneret",
+    "message": "{reward_name} blev ikke godkendt denne gang."
+  },
+  "badge_earned_assignee": {
+    "title": "🥇 Badge optjent!",
+    "message": "Du har fortjent {badge_name} -mærket!"
+  },
+  "achievement_earned_assignee": {
+    "title": "🏆 Opnået præstation!",
+    "message": "Du har fortjent {achievement_name}! Fortsæt det gode arbejde"
+  },
+  "challenge_completed_assignee": {
+    "title": "🏁 Udfordring fuldført!",
+    "message": "Du har gennemført {challenge_name}! Fortsæt det gode arbejde."
+  },
+  "penalty_applied_assignee": {
+    "title": "⚠️ Straf pålagt",
+    "message": "{penalty_name}: {points} {points_label} fratrukket. Lad os komme tilbage på sporet!"
+  },
+  "bonus_applied_assignee": {
+    "title": "⭐ Bonus anvendt!",
+    "message": "{bonus_name}: Du har optjent {points} bonus {points_label}! Godt gået"
+  },
+  "multiplier_changed_assignee": {
+    "title": "⚖️ Multiplikator opdateret",
+    "message": "Din {points_label} multiplikator er ændret fra {old_multiplier}x til {new_multiplier}x"
+  },
+  "_comment_approver_section": "═════════════════════════════════════════════════════════════════════════════════",
+  "_comment_approver_desc": "GODKENDELSESMEDDELELSER: Informative, tredjepersons, handlingsrettede. Format: '{assignee_name}: Handling'. INGEN 'ChoreOps:' præfiks.",
+  "_comment_approver_footer": "═════════════════════════════════════════════════════════════════════════════════",
+  "chore_claimed_approver": {
+    "title": "✋ {assignee_name}: Opgave påtaget",
+    "message": "{assignee_name} gjorde krav på {chore_name}"
+  },
+  "chore_reminder_approver": {
+    "title": "⏰ {assignee_name}: Godkendelse påkrævet",
+    "message": "Påmindelse: {chore_name} gjort krav på af {assignee_name} venter på din anmeldelse"
+  },
+  "chore_overdue_approver": {
+    "title": "⚠️ {assignee_name}: Forfalden pligt",
+    "message": "{assignee_name}s opgave {chore_name} er forsinket (forfaldsdato: {due_date})"
+  },
+  "pending_chores_approver": {
+    "title": "📋 {assignee_name}: {count} Afventer",
+    "message": "{count} pligter afventer gennemgang. Seneste: {latest_chore} (+{points} {points_label})"
+  },
+  "pending_chores_approver_no_points": {
+    "message": "{count} pligter afventer gennemgang. Seneste: {latest_chore}"
+  },
+  "reward_claimed_approver": {
+    "title": "🎁 {assignee_name}: Belønningsanmodning",
+    "message": "{assignee_name} anmodede om {reward_name} for {points} {points_label}"
+  },
+  "reward_reminder_approver": {
+    "title": "⏰ {assignee_name}: Belønning afventer",
+    "message": "Påmindelse: {reward_name} anmodet af {assignee_name} venter på din godkendelse"
+  },
+  "badge_earned_approver": {
+    "title": "🥇 {assignee_name}: Badge optjent",
+    "message": "{assignee_name} har fået {badge_name} -mærket!"
+  },
+  "achievement_earned_approver": {
+    "title": "🏆 {assignee_name}: Præstation",
+    "message": "{assignee_name} optjent {achievement_name}"
+  },
+  "challenge_completed_approver": {
+    "title": "🏁 {assignee_name}: Udfordringen er færdig",
+    "message": "{assignee_name} fuldført {challenge_name}"
+  },
+  "multiplier_changed_approver": {
+    "title": "⚖️ {assignee_name}: Multiplikator opdateret",
+    "message": "{assignee_name}s {points_label} multiplikator ændret fra {old_multiplier}x til {new_multiplier}x"
+  },
+  "_comment_system_section": "═════════════════════════════════════════════════════════════════════════════════",
+  "_comment_system_desc": "SYSTEM-/ADMIN-MEDDELELSER: Datahåndteringshandlinger",
+  "_comment_system_footer": "═════════════════════════════════════════════════════════════════════════════════",
+  "data_reset": {
+    "title": "🔄 ChoreOps: Datanulstilling",
+    "message": "Systemdata er blevet nulstillet"
+  },
+  "data_reset_global": {
+    "title": "🔄 ChoreOps: Fuld nulstilling",
+    "message": "Alle systemdata er blevet nulstillet til standardindstillingerne"
+  },
+  "data_reset_assignee": {
+    "title": "🔄 ChoreOps: Nulstilling af tildelt person",
+    "message": "Data nulstillet for {assignee_name}"
+  },
+  "data_reset_item_type": {
+    "title": "🔄 Opgaver: {item_type} Nulstil",
+    "message": "Alle {item_type} data er blevet nulstillet"
+  },
+  "data_reset_item": {
+    "title": "🔄 ChoreOps: Genstandsnulstilling",
+    "message": "{item_type} '{item_name}' er blevet nulstillet"
+  },
+  "_comment_actions_section": "═════════════════════════════════════════════════════════════════════════════════",
+  "_comment_actions_desc": "NOTIFIKATIONSKNAPPER: Blødere og mere opmuntrende sprog",
+  "_comment_actions_footer": "═════════════════════════════════════════════════════════════════════════════════",
+  "actions": {
+    "approve": "✅ Godkend",
+    "claim": "✋ Jeg klarede det!",
+    "complete": "✅ Færdig",
+    "disapprove": "↩️ Afvis",
+    "remind_30": "⏰ Påmind om 30 min.",
+    "skip": "⏭️ Spring over"
+  },
+  "chore_standby_needed": {
+    "title": "🫲 Standby anmodet",
+    "message": "{primary_name}s opgave {chore_name} er for sent! Gør krav på den nu for at optjene {points} {points_label}"
+  }
+}

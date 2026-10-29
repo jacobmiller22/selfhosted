@@ -1,0 +1,167 @@
+{
+  "_comment_assignee_section": "═════════════════════════════════════════════════════════════════════════════════",
+  "_comment_assignee_desc": "MEDDELANDEN TILL TILLDELAD: Spelifierad, andrapersons, uppmuntrande ton med emojis. INGET prefix 'ChoreOps:'.",
+  "_comment_assignee_footer": "═════════════════════════════════════════════════════════════════════════════════",
+  "chore_approved_assignee": {
+    "title": "🎉 Godkänt för sysslor!",
+    "message": "{chore_name} godkänt! Du fick {points} {points_label}"
+  },
+  "chore_disapproved_assignee": {
+    "title": "↩️ Syssla återlämnad",
+    "message": "{chore_name} behöver mer arbete."
+  },
+  "chore_overdue_assignee": {
+    "title": "⏰ Försenad syssla",
+    "message": "{chore_name} är försenad! Slutför den nu för att tjäna {points} {points_label}"
+  },
+  "chore_overdue_steal_available": {
+    "title": "⚡ Sysslovarning",
+    "message": "{chore_name} är försenad och tillgänglig för stjälning! Slutför den först för att tjäna {points} {points_label}"
+  },
+  "chore_missed_assignee": {
+    "title": "😔 Syssla har löpt ut",
+    "message": "{chore_name} har upphört att fungera utan att det har slutförts."
+  },
+  "chore_due_reminder_assignee": {
+    "title": "⏰ Påminnelse om sysslor",
+    "message": "{chore_name} förfaller om {minutes} minuter! Värt {points} {points_label}"
+  },
+  "chore_due_window_assignee": {
+    "title": "🎯 Syssla ska vara klar nu",
+    "message": "{chore_name} är nu förfallet! Slutför inom {hours} timme(r) för att tjäna {points} {points_label}"
+  },
+  "chore_approved_assignee_no_points": {
+    "message": "{chore_name} godkänd!"
+  },
+  "chore_overdue_assignee_no_points": {
+    "message": "{chore_name} är försenad! Slutför det nu"
+  },
+  "chore_overdue_steal_available_no_points": {
+    "message": "{chore_name} är försenad och tillgänglig för stjälning! Slutför den först"
+  },
+  "chore_standby_needed_no_points": {
+    "message": "{primary_name}s syssla {chore_name} är försenad! Hämta den nu"
+  },
+  "chore_due_reminder_assignee_no_points": {
+    "message": "{chore_name} ska förfalla om {minutes} minuter!"
+  },
+  "chore_due_window_assignee_no_points": {
+    "message": "{chore_name} ska vara klar! Slutför inom {hours} timme(r)"
+  },
+  "reward_approved_assignee": {
+    "title": "🎉 Belöning godkänd!",
+    "message": "{reward_name} godkänd!"
+  },
+  "reward_disapproved_assignee": {
+    "title": "💭 Belöningsförfrågan returnerad",
+    "message": "{reward_name} godkändes inte den här gången."
+  },
+  "badge_earned_assignee": {
+    "title": "🥇 Märke intjänat!",
+    "message": "Du har förtjänat märket {badge_name}!"
+  },
+  "achievement_earned_assignee": {
+    "title": "🏆 Prestation uppnådd!",
+    "message": "Du förtjänade {achievement_name}! Fortsätt med det fantastiska arbetet"
+  },
+  "challenge_completed_assignee": {
+    "title": "🏁 Utmaningen är klar!",
+    "message": "Du har slutfört {challenge_name}! Fortsätt med det fantastiska arbetet."
+  },
+  "penalty_applied_assignee": {
+    "title": "⚠️ Straff tillämpad",
+    "message": "{penalty_name}: {points} {points_label} dragit av. Nu kommer vi tillbaka på rätt spår!"
+  },
+  "bonus_applied_assignee": {
+    "title": "⭐ Bonus tillämpad!",
+    "message": "{bonus_name}: Du tjänade {points} bonus {points_label}! Bra jobbat"
+  },
+  "multiplier_changed_assignee": {
+    "title": "⚖️ Multiplikator uppdaterad",
+    "message": "Din {points_label} multiplikator har ändrats från {old_multiplier}x till {new_multiplier}x"
+  },
+  "_comment_approver_section": "═════════════════════════════════════════════════════════════════════════════════",
+  "_comment_approver_desc": "GODKÄNNANDENUMMER: Informativa, tredjepersons, handlingsbara. Format: '{assignee_name}: Åtgärd'. INGET prefix 'ChoreOps:'.",
+  "_comment_approver_footer": "═════════════════════════════════════════════════════════════════════════════════",
+  "chore_claimed_approver": {
+    "title": "✋ {assignee_name}: Syssla begärd",
+    "message": "{assignee_name} gjorde anspråk på {chore_name}"
+  },
+  "chore_reminder_approver": {
+    "title": "⏰ {assignee_name}: Godkännande krävs",
+    "message": "Påminnelse: {chore_name} som gjorts anspråk på av {assignee_name} väntar på din granskning"
+  },
+  "chore_overdue_approver": {
+    "title": "⚠️ {assignee_name}: Försenad syssla",
+    "message": "{assignee_name}s syssla {chore_name} är försenad (förfaller: {due_date})"
+  },
+  "pending_chores_approver": {
+    "title": "📋 {assignee_name}: {count} Väntar",
+    "message": "{count} sysslor väntar på granskning. Senaste: {latest_chore} (+{points} {points_label})"
+  },
+  "pending_chores_approver_no_points": {
+    "message": "{count} sysslor väntar på granskning. Senaste: {latest_chore}"
+  },
+  "reward_claimed_approver": {
+    "title": "🎁 {assignee_name}: Belöningsförfrågan",
+    "message": "{assignee_name} begärde {reward_name} för {points} {points_label}"
+  },
+  "reward_reminder_approver": {
+    "title": "⏰ {assignee_name}: Belöning väntar",
+    "message": "Påminnelse: {reward_name} begärd av {assignee_name} väntar på ditt godkännande"
+  },
+  "badge_earned_approver": {
+    "title": "🥇 {assignee_name}: Märke intjänat",
+    "message": "{assignee_name} fick märket {badge_name}!"
+  },
+  "achievement_earned_approver": {
+    "title": "🏆 {assignee_name}: Prestation",
+    "message": "{assignee_name} tjänade {achievement_name}"
+  },
+  "challenge_completed_approver": {
+    "title": "🏁 {assignee_name}: Utmaning klar",
+    "message": "{assignee_name} slutförd {challenge_name}"
+  },
+  "multiplier_changed_approver": {
+    "title": "⚖️ {assignee_name}: Multiplikatorn uppdaterad",
+    "message": "{assignee_name}s multiplikator {points_label} har ändrats från {old_multiplier}x till {new_multiplier}x"
+  },
+  "_comment_system_section": "═════════════════════════════════════════════════════════════════════════════════",
+  "_comment_system_desc": "SYSTEM-/ADMINISTRATIONSMEDDELANDEN: Datahanteringsåtgärder",
+  "_comment_system_footer": "═════════════════════════════════════════════════════════════════════════════════",
+  "data_reset": {
+    "title": "🔄 ChoreOps: Dataåterställning",
+    "message": "Systemdata har återställts"
+  },
+  "data_reset_global": {
+    "title": "🔄 ChoreOps: Fullständig återställning",
+    "message": "All systemdata har återställts till standardinställningarna"
+  },
+  "data_reset_assignee": {
+    "title": "🔄 ChoreOps: Återställning av tilldelad person",
+    "message": "Dataåterställning för {assignee_name}"
+  },
+  "data_reset_item_type": {
+    "title": "🔄 ChoreOps: {item_type} Återställ",
+    "message": "All {item_type} data har återställts"
+  },
+  "data_reset_item": {
+    "title": "🔄 ChoreOps: Återställning av föremål",
+    "message": "{item_type} '{item_name}' har återställts"
+  },
+  "_comment_actions_section": "═════════════════════════════════════════════════════════════════════════════════",
+  "_comment_actions_desc": "NOTIFIERINGSKNAPPAR: Mjukare, mer uppmuntrande språk",
+  "_comment_actions_footer": "═════════════════════════════════════════════════════════════════════════════════",
+  "actions": {
+    "approve": "✅ Godkänn",
+    "claim": "✋ Jag klarade det!",
+    "complete": "✅ Komplett",
+    "disapprove": "↩️ Avvisa",
+    "remind_30": "⏰ Påminn om 30 minuter",
+    "skip": "⏭️ Hoppa över"
+  },
+  "chore_standby_needed": {
+    "title": "🫲 Standby begärd",
+    "message": "{primary_name}s syssla {chore_name} är försenad! Hämta den nu för att tjäna {points} {points_label}"
+  }
+}

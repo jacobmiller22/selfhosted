@@ -1,0 +1,167 @@
+{
+  "_comment_assignee_section": "═══════════════════════════════ ════════════════════════════════",
+  "_comment_assignee_desc": "NOTIFICAÇÕES AO RESPONSÁVEL: Tom gamificado, na segunda pessoa, encorajador e com emojis. SEM o prefixo 'Tarefas:'.",
+  "_comment_assignee_footer": "═══════════════════════════════ ════════════════════════════════",
+  "chore_approved_assignee": {
+    "title": "🎉 Tarefa aprovada!",
+    "message": "{chore_name} aprovado! Ganhou {points} {points_label}"
+  },
+  "chore_disapproved_assignee": {
+    "title": "↩️ Tarefa devolvida",
+    "message": "{chore_name} necessita de mais trabalho."
+  },
+  "chore_overdue_assignee": {
+    "title": "⏰ Tarefa atrasada",
+    "message": "{chore_name} está atrasado! Complete agora para ganhar {points} {points_label}"
+  },
+  "chore_overdue_steal_available": {
+    "title": "⚡ Alerta de Tarefa",
+    "message": "{chore_name} está atrasado e disponível para roubar! Complete-o primeiro para ganhar {points} {points_label}"
+  },
+  "chore_missed_assignee": {
+    "title": "😔 Tarefa expirada",
+    "message": "{chore_name} expirou sem estar concluído."
+  },
+  "chore_due_reminder_assignee": {
+    "title": "⏰ Lembrete de Tarefas",
+    "message": "{chore_name} deve ser entregue em {minutes} minutos! Vale {points} {points_label}"
+  },
+  "chore_due_window_assignee": {
+    "title": "🎯 Tarefa a fazer agora",
+    "message": "{chore_name} já está disponível! Conclua em {hours} hora(s) para ganhar {points} {points_label}"
+  },
+  "chore_approved_assignee_no_points": {
+    "message": "{chore_name} aprovado!"
+  },
+  "chore_overdue_assignee_no_points": {
+    "message": "{chore_name} está atrasado! Complete-o agora"
+  },
+  "chore_overdue_steal_available_no_points": {
+    "message": "{chore_name} está atrasado e disponível para roubar! Complete-o primeiro"
+  },
+  "chore_standby_needed_no_points": {
+    "message": "{primary_name}'s chore {chore_name} is overdue! Claim it now"
+  },
+  "chore_due_reminder_assignee_no_points": {
+    "message": "{chore_name} deve ser entregue em {minutes} minutos!"
+  },
+  "chore_due_window_assignee_no_points": {
+    "message": "{chore_name} já deve ser entregue! Concluir em {hours} hora(s)"
+  },
+  "reward_approved_assignee": {
+    "title": "🎉 Recompensa aprovada!",
+    "message": "{reward_name} aprovado!"
+  },
+  "reward_disapproved_assignee": {
+    "title": "💭 Pedido de recompensa devolvido",
+    "message": "{reward_name} não foi aprovado desta vez."
+  },
+  "badge_earned_assignee": {
+    "title": "🥇 Insígnia conquistada!",
+    "message": "Ganhou o crachá {badge_name}!"
+  },
+  "achievement_earned_assignee": {
+    "title": "🏆 Conquista alcançada!",
+    "message": "Ganhou {achievement_name}! Continuem com o excelente trabalho!"
+  },
+  "challenge_completed_assignee": {
+    "title": "🏁 Desafio Concluído!",
+    "message": "Concluiu {challenge_name}! Continuem com o excelente trabalho!"
+  },
+  "penalty_applied_assignee": {
+    "title": "⚠️ Penalidade aplicada",
+    "message": "{penalty_name}: {points} {points_label} deduzido. Vamos voltar ao assunto!"
+  },
+  "bonus_applied_assignee": {
+    "title": "⭐ Bónus aplicado!",
+    "message": "{bonus_name}: You earned {points} bonus {points_label}! Great job"
+  },
+  "multiplier_changed_assignee": {
+    "title": "⚖️ Multiplicador atualizado",
+    "message": "O seu multiplicador {points_label} passou de {old_multiplier}x para {new_multiplier}x"
+  },
+  "_comment_approver_section": "═══════════════════════════════ ════════════════════════════════",
+  "_comment_approver_desc": "NOTIFICAÇÕES DO APROVADOR: Informativas, na terceira pessoa, passíveis de ação. Formato: '{assignee_name}: Acção'. SEM prefixo 'ChoreOps:'.",
+  "_comment_approver_footer": "═══════════════════════════════ ════════════════════════════════",
+  "chore_claimed_approver": {
+    "title": "✋ {assignee_name}: Tarefa atribuída",
+    "message": "{assignee_name} alegou {chore_name}"
+  },
+  "chore_reminder_approver": {
+    "title": "⏰ {assignee_name}: Aprovação necessária",
+    "message": "Lembrete: {chore_name} reivindicado por {assignee_name} está a aguardar a sua avaliação."
+  },
+  "chore_overdue_approver": {
+    "title": "⚠️ {assignee_name}: Tarefa atrasada",
+    "message": "O chore de {assignee_name} {chore_name} está atrasado (devido: {due_date})"
+  },
+  "pending_chores_approver": {
+    "title": "📋 {assignee_name}: {count} Pendente",
+    "message": "{count} Tarefas a aguardar revisão. Mais recentes: {latest_chore} (+{points} {points_label})"
+  },
+  "pending_chores_approver_no_points": {
+    "message": "{count} Tarefas a aguardar revisão. Mais recente: {latest_chore}"
+  },
+  "reward_claimed_approver": {
+    "title": "🎁 {assignee_name}: Pedido de Recompensa",
+    "message": "{assignee_name} solicitou {reward_name} para {points} {points_label}"
+  },
+  "reward_reminder_approver": {
+    "title": "⏰ {assignee_name}: Recompensa pendente",
+    "message": "Recorde-se: {reward_name} solicitado por {assignee_name} aguarda a sua aprovação."
+  },
+  "badge_earned_approver": {
+    "title": "🥇 {assignee_name}: Insígnia Conquistada",
+    "message": "{assignee_name} ganhou o crachá {badge_name}!"
+  },
+  "achievement_earned_approver": {
+    "title": "🏆 {assignee_name}: Conquista",
+    "message": "{assignee_name} ganhou {achievement_name}"
+  },
+  "challenge_completed_approver": {
+    "title": "🏁 {assignee_name}: Desafio Concluído",
+    "message": "{assignee_name} concluído {challenge_name}"
+  },
+  "multiplier_changed_approver": {
+    "title": "⚖️ {assignee_name}: Multiplicador Atualizado",
+    "message": "{assignee_name}'s {points_label} multiplier changed from {old_multiplier}x to {new_multiplier}x"
+  },
+  "_comment_system_section": "═══════════════════════════════ ════════════════════════════════",
+  "_comment_system_desc": "NOTIFICAÇÕES DO SISTEMA/ADMINISTRADOR: Operações de gestão de dados",
+  "_comment_system_footer": "═══════════════════════════════ ════════════════════════════════",
+  "data_reset": {
+    "title": "🔄 ChoreOps: Redefinição de dados",
+    "message": "Os dados do sistema foram repostos."
+  },
+  "data_reset_global": {
+    "title": "🔄 ChoreOps: Reinício completo",
+    "message": "Todos os dados do sistema foram repostos nos valores padrão."
+  },
+  "data_reset_assignee": {
+    "title": "🔄 ChoreOps: Redefinição de Tarefas",
+    "message": "Reinicialização de dados para {assignee_name}"
+  },
+  "data_reset_item_type": {
+    "title": "🔄 ChoreOps: {item_type} Reiniciar",
+    "message": "Todos os dados {item_type} foram repostos"
+  },
+  "data_reset_item": {
+    "title": "🔄 ChoreOps: Redefinição de Itens",
+    "message": "{item_type} '{item_name}' foi reposto"
+  },
+  "_comment_actions_section": "═══════════════════════════════ ════════════════════════════════",
+  "_comment_actions_desc": "BOTÕES DE AÇÃO DE NOTIFICAÇÃO: Linguagem mais suave e encorajadora",
+  "_comment_actions_footer": "═══════════════════════════════ ════════════════════════════════",
+  "actions": {
+    "approve": "✅ Aprovar",
+    "claim": "✋ Eu consegui!",
+    "complete": "✅ Completo",
+    "disapprove": "↩️ Desaprovar",
+    "remind_30": "⏰ Lembrete em 30 minutos",
+    "skip": "⏭️ Saltar"
+  },
+  "chore_standby_needed": {
+    "title": "🫲 Aguarde!",
+    "message": "{primary_name}'s chore {chore_name} is overdue! Claim it now to earn {points} {points_label}"
+  }
+}

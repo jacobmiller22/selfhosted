@@ -1,0 +1,167 @@
+{
+  "_comment_assignee_section": "══════════════════════════════════════════════════════════════════════════",
+  "_comment_assignee_desc": "OBVESTILA DODELJENIM PREJEMNIKOM: Gamificiran, drugoosebni, spodbuden ton z emojiji. BREZ predpone »ChoreOps:«.",
+  "_comment_assignee_footer": "══════════════════════════════════════════════════════════════════════════",
+  "chore_approved_assignee": {
+    "title": "🎉 Opravilo odobreno!",
+    "message": "{chore_name} odobreno! Zaslužili ste si {points} {points_label}"
+  },
+  "chore_disapproved_assignee": {
+    "title": "↩️ Opravilo vrnjeno",
+    "message": "{chore_name} potrebuje več dela."
+  },
+  "chore_overdue_assignee": {
+    "title": "⏰ Opravilo je zamujeno",
+    "message": "{chore_name} je že zapadel! Izpolnite ga zdaj in si prislužite {points} {points_label}"
+  },
+  "chore_overdue_steal_available": {
+    "title": "⚡ Opozorilo o opravilih",
+    "message": "{chore_name} je zapadla in jo lahko ukradete! Najprej jo dokončajte, da si prislužite {points} {points_label}"
+  },
+  "chore_missed_assignee": {
+    "title": "😔 Opravilo je poteklo",
+    "message": "{chore_name} je potekel brez dokončanja."
+  },
+  "chore_due_reminder_assignee": {
+    "title": "⏰ Opomnik za opravila",
+    "message": "{chore_name} je zapadlo čez {minutes} minut! Vredno {points} {points_label}"
+  },
+  "chore_due_window_assignee": {
+    "title": "🎯 Opravilo čaka na izvedbo",
+    "message": "{chore_name} je zdaj rok! Izpolnite v {hours} uri in zaslužite {points} {points_label}"
+  },
+  "chore_approved_assignee_no_points": {
+    "message": "{chore_name} odobreno!"
+  },
+  "chore_overdue_assignee_no_points": {
+    "message": "{chore_name} je zamudil! Dokončaj ga zdaj"
+  },
+  "chore_overdue_steal_available_no_points": {
+    "message": "{chore_name} je zapadla in na voljo za krajo! Najprej jo dokončajte."
+  },
+  "chore_standby_needed_no_points": {
+    "message": "Naloga uporabnika {primary_name} {chore_name} je že zapadla! Prevzemite jo zdaj."
+  },
+  "chore_due_reminder_assignee_no_points": {
+    "message": "{chore_name} je rok čez {minutes} minut!"
+  },
+  "chore_due_window_assignee_no_points": {
+    "message": "Rok za oddajo {chore_name} je zdaj! Dokončajte v {hours} uri"
+  },
+  "reward_approved_assignee": {
+    "title": "🎉 Nagrada odobrena!",
+    "message": "{reward_name} odobreno!"
+  },
+  "reward_disapproved_assignee": {
+    "title": "💭 Zahteva za nagrado vrnjena",
+    "message": "{reward_name} tokrat ni bil odobren."
+  },
+  "badge_earned_assignee": {
+    "title": "🥇 Prislužena značka!",
+    "message": "Pridobili ste značko {badge_name}!"
+  },
+  "achievement_earned_assignee": {
+    "title": "🏆 Dosežek dosežen!",
+    "message": "Zaslužili ste si {achievement_name}! Nadaljujte z odličnim delom."
+  },
+  "challenge_completed_assignee": {
+    "title": "🏁 Izziv zaključen!",
+    "message": "Končali ste {challenge_name}! Nadaljujte z odličnim delom"
+  },
+  "penalty_applied_assignee": {
+    "title": "⚠️ Izrečena kazen",
+    "message": "{penalty_name}: {points} {points_label} odšteto. Gremo nazaj na pravo pot!"
+  },
+  "bonus_applied_assignee": {
+    "title": "⭐ Bonus je bil uporabljen!",
+    "message": "{bonus_name}: Prislužili ste si {points} bonus {points_label}! Odlično opravljeno"
+  },
+  "multiplier_changed_assignee": {
+    "title": "⚖️ Množitelj posodobljen",
+    "message": "Vaš množitelj {points_label} se je spremenil iz {old_multiplier}x na {new_multiplier}x"
+  },
+  "_comment_approver_section": "══════════════════════════════════════════════════════════════════════════",
+  "_comment_approver_desc": "OBVESTILA ODOBRITELJA: Informativna, v tretji osebi, uporabna. Oblika: '{assignee_name}: Dejanje'. BREZ predpone 'ChoreOps:'.",
+  "_comment_approver_footer": "══════════════════════════════════════════════════════════════════════════",
+  "chore_claimed_approver": {
+    "title": "✋ {assignee_name}: Opravilo prevzeto",
+    "message": "{assignee_name} zahteval {chore_name}"
+  },
+  "chore_reminder_approver": {
+    "title": "⏰ {assignee_name}: Potrebna je odobritev",
+    "message": "Opomnik: {chore_name} , ki ga je zahteval {assignee_name} , čaka na vaš pregled"
+  },
+  "chore_overdue_approver": {
+    "title": "⚠️ {assignee_name}: Opravilo je zamudilo",
+    "message": "Naloga uporabnika {assignee_name} {chore_name} je že v zamudi (rok: {due_date})"
+  },
+  "pending_chores_approver": {
+    "title": "📋 {assignee_name}: {count} V teku",
+    "message": "{count} opravila, ki čakajo na pregled. Zadnja: {latest_chore} (+{points} {points_label})"
+  },
+  "pending_chores_approver_no_points": {
+    "message": "{count} opravila, ki čakajo na pregled. Zadnje: {latest_chore}"
+  },
+  "reward_claimed_approver": {
+    "title": "🎁 {assignee_name}: Zahteva za nagrado",
+    "message": "{assignee_name} zahteval {reward_name} za {points} {points_label}"
+  },
+  "reward_reminder_approver": {
+    "title": "⏰ {assignee_name}: Nagrada čaka",
+    "message": "Opomnik: {reward_name} , ki ga je zahteval {assignee_name} , čaka na vašo odobritev"
+  },
+  "badge_earned_approver": {
+    "title": "🥇 {assignee_name}: Značka prislužena",
+    "message": "{assignee_name} si je prislužil/a značko {badge_name}!"
+  },
+  "achievement_earned_approver": {
+    "title": "🏆 {assignee_name}: Dosežek",
+    "message": "{assignee_name} zaslužil {achievement_name}"
+  },
+  "challenge_completed_approver": {
+    "title": "🏁 {assignee_name}: Izziv opravljen",
+    "message": "{assignee_name} končano {challenge_name}"
+  },
+  "multiplier_changed_approver": {
+    "title": "⚖️ {assignee_name}: Množitelj posodobljen",
+    "message": "{assignee_name}'s {points_label} multiplier changed from {old_multiplier}x to {new_multiplier}x"
+  },
+  "_comment_system_section": "══════════════════════════════════════════════════════════════════════════",
+  "_comment_system_desc": "OBVESTILA SISTEMA/ADMINIRANJA: Postopki upravljanja podatkov",
+  "_comment_system_footer": "══════════════════════════════════════════════════════════════════════════",
+  "data_reset": {
+    "title": "🔄 Domača opravila: Ponastavitev podatkov",
+    "message": "Sistemski podatki so bili ponastavljeni"
+  },
+  "data_reset_global": {
+    "title": "🔄 Domača opravila: Popolna ponastavitev",
+    "message": "Vsi sistemski podatki so bili ponastavljeni na privzete vrednosti"
+  },
+  "data_reset_assignee": {
+    "title": "🔄 Domača opravila: Ponastavitev dodeljevalca",
+    "message": "Ponastavitev podatkov za {assignee_name}"
+  },
+  "data_reset_item_type": {
+    "title": "🔄 Domača opravila: {item_type} Ponastavi",
+    "message": "Vsi podatki {item_type} so bili ponastavljeni"
+  },
+  "data_reset_item": {
+    "title": "🔄 Domača opravila: Ponastavitev predmeta",
+    "message": "{item_type} '{item_name}' je bil ponastavljen"
+  },
+  "_comment_actions_section": "══════════════════════════════════════════════════════════════════════════",
+  "_comment_actions_desc": "GUMBI ZA OBVESTILA: Mehkejši, bolj spodbuden jezik",
+  "_comment_actions_footer": "══════════════════════════════════════════════════════════════════════════",
+  "actions": {
+    "approve": "✅ Odobritev",
+    "claim": "✋ Uspelo mi je!",
+    "complete": "✅ Dokončano",
+    "disapprove": "↩️ Ne odobri",
+    "remind_30": "⏰ Opomni čez 30 minut",
+    "skip": "⏭️ Preskoči"
+  },
+  "chore_standby_needed": {
+    "title": "🫲 Zahtevano stanje pripravljenosti",
+    "message": "Naloga uporabnika {primary_name} {chore_name} je že zapadla! Izkoristite jo zdaj in si prislužite {points} {points_label}"
+  }
+}

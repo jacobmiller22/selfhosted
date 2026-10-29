@@ -1,0 +1,5614 @@
+# File: sensor.py
+# Using private coordinator methods for state checks
+# pyright: reportIncompatibleVariableOverride=false
+# ^ Suppresses Pylance warnings about @property overriding @cached_property from base classes.
+#   This is intentional: our sensors compute dynamic values on each access (chore status, points),
+#   so we use @property instead of @cached_property to avoid stale cached data.
+"""Sensors for the ChoreOps integration.
+
+This file defines modern sensor entities for each Assignee, Chore, Reward, and Badge.
+Legacy/optional sensors are imported from sensor_legacy.py.
+
+Module-level functions for dynamic entity creation (used by services).
+
+Sensors Defined in This File (15):
+
+# Modern Assignee-Specific Sensors (9)
+01. AssigneeChoreStatusSensor
+02. AssigneePointsSensor
+03. AssigneeChoresSensor
+04. AssigneeBadgesSensor
+05. AssigneeBadgeProgressSensor
+06. AssigneeRewardStatusSensor
+07. AssigneeAchievementProgressSensor
+08. AssigneeChallengeProgressSensor
+09. AssigneeDashboardHelperSensor
+
+# Modern System-Level Sensors (6)
+10. SystemBadgeSensor
+11. SystemChoreSharedStateSensor
+12. SystemAchievementSensor
+13. SystemChallengeSensor
+14. SystemDashboardTranslationSensor
+15. SystemDashboardHelperSensor
+
+Legacy Sensors Imported from sensor_legacy.py (13):
+    Assignee Chore Completion Sensors (4):
+    1. AssigneeChoreCompletionSensor - Total chores completed (data in AssigneeChoresSensor attributes)
+    2. AssigneeChoreCompletionDailySensor - Daily chores completed (data in AssigneeChoreCompletionSensor attributes)
+    3. AssigneeChoreCompletionWeeklySensor - Weekly chores completed (data in AssigneeChoreCompletionSensor attributes)
+    4. AssigneeChoreCompletionMonthlySensor - Monthly chores completed (data in AssigneeChoreCompletionSensor attributes)
+
+    Pending Approval Sensors (2):
+    5. SystemChoresPendingApprovalSensor - Pending chore approvals (global)
+    6. SystemRewardsPendingApprovalSensor - Pending reward approvals (global)
+
+    Assignee Points Earned Sensors (4):
+    7. AssigneePointsEarnedDailySensor - Daily points earned (data in AssigneePointsSensor attributes)
+    8. AssigneePointsEarnedWeeklySensor - Weekly points earned (data in AssigneePointsSensor attributes)
+    9. AssigneePointsEarnedMonthlySensor - Monthly points earned (data in AssigneePointsSensor attributes)
+    10. AssigneePointsMaxEverSensor - Maximum points ever reached (data in AssigneePointsSensor attributes)
+
+    Streak Sensor (1):
+    11. AssigneeChoreStreakSensor - Highest chore streak (data in AssigneePointsSensor attributes)
+
+    Bonus/Penalty Sensors (2):
+    12. AssigneePenaltyAppliedSensor - Penalty application count (data in dashboard helper)
+    13. AssigneeBonusAppliedSensor - Bonus application count (data in dashboard helper)
+"""
+
+from datetime import datetime, timedelta
+import json
+from typing import Any, cast
+
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.const import PERCENTAGE
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_registry import async_get
+from homeassistant.util import dt as dt_util
+
+from . import const
+from .coordinator import ChoreOpsConfigEntry, ChoreOpsDataCoordinator
+from .engines.chore_engine import ChoreEngine
+from .entity import ChoreOpsCoordinatorEntity
+from .helpers.device_helpers import (
+    create_assignee_device_info_from_coordinator,
+    create_system_device_info,
+)
+from .helpers.entity_helpers import (
+    get_assignee_name_by_id,
+    get_friendly_label,
+    get_item_name_or_log_error,
+    is_user_assigned_to_reward,
+    should_create_entity,
+    should_create_entity_for_user_assignee,
+    should_create_gamification_entities,
+    should_create_workflow_buttons,
+)
+from .helpers.translation_helpers import load_dashboard_translation
+from .managers.ui_manager import HelperShardRuntimePlan
+from .sensor_legacy import (
+    AssigneeBonusAppliedSensor,
+    AssigneeChoreCompletionDailySensor,
+    AssigneeChoreCompletionMonthlySensor,
+    AssigneeChoreCompletionSensor,
+    AssigneeChoreCompletionWeeklySensor,
+    AssigneeChoreStreakSensor,
+    AssigneePenaltyAppliedSensor,
+    AssigneePointsEarnedDailySensor,
+    AssigneePointsEarnedMonthlySensor,
+    AssigneePointsEarnedWeeklySensor,
+    AssigneePointsMaxEverSensor,
+    SystemChoresPendingApprovalSensor,
+    SystemRewardsPendingApprovalSensor,
+)
+from .type_defs import (
+    AchievementData,
+    AchievementProgress,
+    AssigneeData,
+    BadgeData,
+    ChallengeData,
+    ChallengeProgress,
+    ChoreData,
+    PeriodicStatsEntry,
+    RewardData,
+)
+from .utils.dt_utils import (
+    dt_add_interval,
+    dt_format,
+    dt_now_local,
+    dt_time_until,
+    dt_to_utc,
+    dt_today_local,
+)
+from .utils.math_utils import calculate_average, round_points
+
+# Platinum requirement: Parallel Updates
+# Set to 0 (unlimited) for coordinator-based entities that don't poll
+PARALLEL_UPDATES = 0
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ChoreOpsConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up sensors for ChoreOps integration."""
+    coordinator = entry.runtime_data
+
+    points_label = entry.options.get(
+        const.CONF_POINTS_LABEL, const.DEFAULT_POINTS_LABEL
+    )
+    points_icon = entry.options.get(const.CONF_POINTS_ICON, const.DEFAULT_POINTS_ICON)
+    show_legacy_entities = entry.options.get(const.CONF_SHOW_LEGACY_ENTITIES, False)
+    entities: list[SensorEntity] = []
+
+    # System-level pending approval sensors (EXTRA requirement)
+    if should_create_entity(
+        const.SENSOR_KC_UID_SUFFIX_PENDING_CHORE_APPROVALS_SENSOR,
+        extra_enabled=show_legacy_entities,
+    ):
+        entities.append(SystemChoresPendingApprovalSensor(coordinator, entry))
+    if should_create_entity(
+        const.SENSOR_KC_UID_SUFFIX_PENDING_REWARD_APPROVALS_SENSOR,
+        extra_enabled=show_legacy_entities,
+    ):
+        entities.append(SystemRewardsPendingApprovalSensor(coordinator, entry))
+
+    # For each assignee profile, add standard sensors
+    for assignee_id, assignee_info in coordinator.assignees_data.items():
+        assignee_name = get_item_name_or_log_error(
+            "assignee", assignee_id, assignee_info, const.DATA_USER_NAME
+        )
+        if not assignee_name:
+            continue
+
+        # Points counter sensor (GAMIFICATION requirement)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_POINTS_SENSOR,
+            coordinator,
+            assignee_id,
+        ):
+            entities.append(
+                AssigneePointsSensor(
+                    coordinator,
+                    entry,
+                    assignee_id,
+                    assignee_name,
+                    points_label,
+                    points_icon,
+                )
+            )
+
+        # Chores sensor with all stats (ALWAYS created)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_CHORES_SENSOR,
+            coordinator,
+            assignee_id,
+        ):
+            entities.append(
+                AssigneeChoresSensor(coordinator, entry, assignee_id, assignee_name)
+            )
+
+        # Chore completion sensors (EXTRA requirement)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_COMPLETED_TOTAL_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            entities.append(
+                AssigneeChoreCompletionSensor(
+                    coordinator, entry, assignee_id, assignee_name
+                )
+            )
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_COMPLETED_DAILY_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            entities.append(
+                AssigneeChoreCompletionDailySensor(
+                    coordinator, entry, assignee_id, assignee_name
+                )
+            )
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_COMPLETED_WEEKLY_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            entities.append(
+                AssigneeChoreCompletionWeeklySensor(
+                    coordinator, entry, assignee_id, assignee_name
+                )
+            )
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_COMPLETED_MONTHLY_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            entities.append(
+                AssigneeChoreCompletionMonthlySensor(
+                    coordinator, entry, assignee_id, assignee_name
+                )
+            )
+
+        # Assignee Badges (displays highest cumulative badge) (GAMIFICATION requirement)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_BADGES_SENSOR,
+            coordinator,
+            assignee_id,
+        ):
+            entities.append(
+                AssigneeBadgesSensor(coordinator, entry, assignee_id, assignee_name)
+            )
+
+        # Points earned sensors (EXTRA requirement)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_POINTS_EARNED_DAILY_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            entities.append(
+                AssigneePointsEarnedDailySensor(
+                    coordinator,
+                    entry,
+                    assignee_id,
+                    assignee_name,
+                    points_label,
+                    points_icon,
+                )
+            )
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_POINTS_EARNED_WEEKLY_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            entities.append(
+                AssigneePointsEarnedWeeklySensor(
+                    coordinator,
+                    entry,
+                    assignee_id,
+                    assignee_name,
+                    points_label,
+                    points_icon,
+                )
+            )
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_POINTS_EARNED_MONTHLY_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            entities.append(
+                AssigneePointsEarnedMonthlySensor(
+                    coordinator,
+                    entry,
+                    assignee_id,
+                    assignee_name,
+                    points_label,
+                    points_icon,
+                )
+            )
+
+        # Maximum points sensor (EXTRA requirement)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_MAX_POINTS_EVER_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            entities.append(
+                AssigneePointsMaxEverSensor(
+                    coordinator,
+                    entry,
+                    assignee_id,
+                    assignee_name,
+                    points_label,
+                    points_icon,
+                )
+            )
+
+        # Penalty applied sensors (EXTRA requirement)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_PENALTY_APPLIES_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            for penalty_id, penalty_info in coordinator.penalties_data.items():
+                penalty_name = get_item_name_or_log_error(
+                    "penalty", penalty_id, penalty_info, const.DATA_PENALTY_NAME
+                )
+                if not penalty_name:
+                    continue
+                entities.append(
+                    AssigneePenaltyAppliedSensor(
+                        coordinator,
+                        entry,
+                        assignee_id,
+                        assignee_name,
+                        penalty_id,
+                        penalty_name,
+                    )
+                )
+
+        # Bonus applied sensors (EXTRA requirement)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_BONUS_APPLIES_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            for bonus_id, bonus_info in coordinator.bonuses_data.items():
+                bonus_name = get_item_name_or_log_error(
+                    "bonus", bonus_id, bonus_info, const.DATA_BONUS_NAME
+                )
+                if not bonus_name:
+                    continue
+                entities.append(
+                    AssigneeBonusAppliedSensor(
+                        coordinator,
+                        entry,
+                        assignee_id,
+                        assignee_name,
+                        bonus_id,
+                        bonus_name,
+                    )
+                )
+
+        # Badge progress sensors (GAMIFICATION requirement)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_BADGE_PROGRESS_SENSOR,
+            coordinator,
+            assignee_id,
+        ):
+            badge_progress_data = assignee_info.get(const.DATA_USER_BADGE_PROGRESS, {})
+            for badge_id in badge_progress_data:
+                badge_info_raw: dict[str, Any] = cast(
+                    "dict[str, Any]", coordinator.badges_data.get(badge_id, {})
+                )
+                badge_type = badge_info_raw.get(const.DATA_BADGE_TYPE)
+                if badge_type != const.BADGE_TYPE_CUMULATIVE:
+                    badge_name = get_item_name_or_log_error(
+                        "badge",
+                        badge_id,
+                        badge_info_raw,
+                        const.DATA_BADGE_NAME,
+                    )
+                    if not badge_name:
+                        continue
+                    entities.append(
+                        AssigneeBadgeProgressSensor(
+                            coordinator,
+                            entry,
+                            assignee_id,
+                            assignee_name,
+                            badge_id,
+                            badge_name,
+                        )
+                    )
+
+        # Achievement Progress per Assignee (GAMIFICATION requirement)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_ACHIEVEMENT_PROGRESS_SENSOR,
+            coordinator,
+            assignee_id,
+        ):
+            for achievement_id, achievement in coordinator.achievements_data.items():
+                if assignee_id in achievement.get(
+                    const.DATA_ACHIEVEMENT_ASSIGNED_USER_IDS, []
+                ):
+                    achievement_name = get_item_name_or_log_error(
+                        "achievement",
+                        achievement_id,
+                        achievement,
+                        const.DATA_ACHIEVEMENT_NAME,
+                    )
+                    if not achievement_name:
+                        continue
+                    entities.append(
+                        AssigneeAchievementProgressSensor(
+                            coordinator,
+                            entry,
+                            assignee_id,
+                            assignee_name,
+                            achievement_id,
+                            achievement_name,
+                        )
+                    )
+
+        # Highest Streak Sensor per Assignee (EXTRA requirement)
+        if should_create_entity_for_user_assignee(
+            const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_HIGHEST_STREAK_SENSOR,
+            coordinator,
+            assignee_id,
+            extra_enabled=show_legacy_entities,
+        ):
+            entities.append(
+                AssigneeChoreStreakSensor(
+                    coordinator, entry, assignee_id, assignee_name
+                )
+            )
+
+        # Dashboard helper sensor will be created after all individual entities
+
+    # For each chore assigned to each assignee, add a AssigneeChoreStatusSensor
+    for chore_id, chore_info in coordinator.chores_data.items():
+        chore_name = get_item_name_or_log_error(
+            "chore", chore_id, chore_info, const.DATA_CHORE_NAME
+        )
+        if not chore_name:
+            continue
+        assigned_assignees_ids = chore_info.get(const.DATA_CHORE_ASSIGNED_USER_IDS, [])
+        for assignee_id in assigned_assignees_ids:
+            assignee_data: AssigneeData = cast(
+                "AssigneeData", coordinator.assignees_data.get(assignee_id, {})
+            )
+            assignee_name = get_item_name_or_log_error(
+                "assignee", assignee_id, assignee_data, const.DATA_USER_NAME
+            )
+            if not assignee_name:
+                continue
+            entities.append(
+                AssigneeChoreStatusSensor(
+                    coordinator,
+                    entry,
+                    assignee_id,
+                    assignee_name,
+                    chore_id,
+                    chore_name,
+                )
+            )
+
+    # For each shared chore, add a global state sensor
+    for chore_id, chore_info in coordinator.chores_data.items():
+        if ChoreEngine.is_shared_chore(chore_info):
+            chore_name = get_item_name_or_log_error(
+                "chore", chore_id, chore_info, const.DATA_CHORE_NAME
+            )
+            if not chore_name:
+                continue
+            entities.append(
+                SystemChoreSharedStateSensor(coordinator, entry, chore_id, chore_name)
+            )
+
+    # For each Reward, add a AssigneeRewardStatusSensor (GAMIFICATION requirement)
+    for reward_id, reward_info in coordinator.rewards_data.items():
+        reward_name = get_item_name_or_log_error(
+            "reward", reward_id, reward_info, const.DATA_REWARD_NAME
+        )
+        if not reward_name:
+            continue
+
+        # For each assignee with gamification enabled, create the reward status sensor
+        for assignee_id, assignee_info in coordinator.assignees_data.items():
+            if not should_create_entity_for_user_assignee(
+                const.SENSOR_KC_UID_SUFFIX_REWARD_STATUS_SENSOR,
+                coordinator,
+                assignee_id,
+            ):
+                continue
+            if not is_user_assigned_to_reward(coordinator, assignee_id, reward_id):
+                continue
+            assignee_name = get_item_name_or_log_error(
+                "assignee", assignee_id, assignee_info, const.DATA_USER_NAME
+            )
+            if not assignee_name:
+                continue
+            entities.append(
+                AssigneeRewardStatusSensor(
+                    coordinator,
+                    entry,
+                    assignee_id,
+                    assignee_name,
+                    reward_id,
+                    reward_name,
+                )
+            )
+
+    # For each Badge, add a BadgeSensor (GAMIFICATION requirement - system-level)
+    for badge_id, badge_info in coordinator.badges_data.items():
+        badge_name = get_item_name_or_log_error(
+            "badge", badge_id, badge_info, const.DATA_BADGE_NAME
+        )
+        if not badge_name:
+            continue
+        entities.append(SystemBadgeSensor(coordinator, entry, badge_id, badge_name))
+
+    # For each Achievement, add an AchievementSensor (GAMIFICATION requirement - system-level)
+    for achievement_id, achievement in coordinator.achievements_data.items():
+        achievement_name = get_item_name_or_log_error(
+            "achievement", achievement_id, achievement, const.DATA_ACHIEVEMENT_NAME
+        )
+        if not achievement_name:
+            continue
+        entities.append(
+            SystemAchievementSensor(
+                coordinator, entry, achievement_id, achievement_name
+            )
+        )
+
+    # Collect unique dashboard languages in use across all assignees and approvers
+    languages_in_use: set[str] = set()
+    for assignee_info in coordinator.assignees_data.values():
+        lang = assignee_info.get(
+            const.DATA_USER_DASHBOARD_LANGUAGE, const.DEFAULT_DASHBOARD_LANGUAGE
+        )
+        languages_in_use.add(lang)
+    for approver_info in coordinator.approvers_data.values():
+        lang = approver_info.get(
+            const.DATA_USER_DASHBOARD_LANGUAGE, const.DEFAULT_DASHBOARD_LANGUAGE
+        )
+        languages_in_use.add(lang)
+
+    # Ensure at least English exists (fallback)
+    if not languages_in_use:
+        languages_in_use.add(const.DEFAULT_DASHBOARD_LANGUAGE)
+
+    # Register the async_add_entities callback on coordinator for dynamic sensor creation
+    # This enables creating new translation sensors when a assignee changes to a new language
+    coordinator.ui_manager.register_translation_sensor_callback(async_add_entities)
+
+    # Register callback for dynamic chore/reward sensor creation (services)
+    register_chore_reward_callback(async_add_entities)
+
+    # Create one translation sensor per unique language
+    # Track created sensors on coordinator for lifecycle management
+    for lang_code in languages_in_use:
+        entities.append(SystemDashboardTranslationSensor(coordinator, entry, lang_code))
+        coordinator.ui_manager.mark_translation_sensor_created(lang_code)
+
+    entities.append(SystemDashboardHelperSensor(coordinator, entry))
+
+    # First batch: all non-dashboard entities must be registered in HA before
+    # computing the shard plan, so chore status sensor entity IDs are resolvable
+    # in the registry for accurate payload size estimation.
+    async_add_entities(entities)
+
+    # Compute shard plan AFTER entities are registered. At this point the chore
+    # status sensors exist in the entity registry, so _build_chore_rows() returns
+    # real chore_eid values, giving an accurate inline payload size for the
+    # inline-vs-sharded threshold decision.
+    await coordinator.ui_manager.async_reconcile_chore_shards_for_users(
+        list(coordinator.assignees_data),
+        registry_only=True,
+    )
+
+    # Second batch: shard helper and dashboard helper sensors
+    # Shard helpers are added first so their states exist before the main
+    # dashboard helper republishes deterministic chore_helper_eids.
+    dashboard_entities: list[SensorEntity] = []
+    for assignee_id, assignee_data in coordinator.assignees_data.items():
+        assignee_name = get_item_name_or_log_error(
+            "assignee", assignee_id, assignee_data, const.DATA_USER_NAME
+        )
+        if not assignee_name:
+            continue
+
+        plan = coordinator.ui_manager.get_helper_shard_plan(
+            assignee_id,
+            const.HELPER_SHARD_FAMILY_CHORES,
+        )
+        if plan is not None and plan.mode == const.HELPER_SHARD_MODE_SHARDED:
+            for shard_index in range(1, plan.expected_shard_count + 1):
+                dashboard_entities.append(
+                    AssigneeDashboardChoreShardSensor(
+                        coordinator,
+                        entry,
+                        assignee_id,
+                        assignee_name,
+                        shard_index,
+                    )
+                )
+
+    # Dashboard helper sensors: Created last to ensure all referenced entities exist
+    # This prevents entity ID lookup failures during initial setup
+    for assignee_id, assignee_data in coordinator.assignees_data.items():
+        assignee_name = get_item_name_or_log_error(
+            "assignee", assignee_id, assignee_data, const.DATA_USER_NAME
+        )
+        if not assignee_name:
+            continue
+        dashboard_entities.append(
+            AssigneeDashboardHelperSensor(
+                coordinator,
+                entry,
+                assignee_id,
+                assignee_name,
+                points_label,
+            )
+        )
+
+    if dashboard_entities:
+        async_add_entities(dashboard_entities)
+    coordinator.hass.async_create_task(
+        coordinator.ui_manager.async_finalize_chore_shards_for_users(
+            list(coordinator.assignees_data),
+            registry_only=True,
+        )
+    )
+    coordinator.async_update_listeners()
+
+
+# ------------------------------------------------------------------------------------------
+# Module-level callback storage for dynamic entity creation
+# ------------------------------------------------------------------------------------------
+
+_async_add_entities_callback: AddEntitiesCallback | None = None
+
+
+def register_chore_reward_callback(
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Register async_add_entities callback for dynamic chore/reward sensor creation.
+
+    Called once during platform setup to enable services to create new sensor entities
+    after chores/rewards are added at runtime.
+    """
+    global _async_add_entities_callback  # noqa: PLW0603
+    _async_add_entities_callback = async_add_entities
+
+
+def _sensor_entity_exists(
+    coordinator: ChoreOpsDataCoordinator,
+    unique_id: str,
+) -> bool:
+    """Return whether a sensor entity with the given unique ID already exists."""
+    entity_registry = async_get(coordinator.hass)
+    return (
+        entity_registry.async_get_entity_id("sensor", const.DOMAIN, unique_id)
+        is not None
+    )
+
+
+def create_chore_entities(
+    coordinator: ChoreOpsDataCoordinator,
+    chore_id: str,
+    *,
+    assignee_ids: list[str] | None = None,
+    replace_existing: bool = False,
+) -> int:
+    """Create missing chore-linked sensor entities for a chore.
+
+    Args:
+        coordinator: Runtime coordinator.
+        chore_id: Internal ID of the chore.
+        assignee_ids: Optional subset of assignee IDs to create status sensors for.
+            When omitted, create sensors for all currently assigned assignees.
+        replace_existing: If True, do not filter existing registry entities. This is
+            intended for flows that have already removed the prior entity set.
+
+    Returns:
+        Count of entities handed to Home Assistant for creation.
+    """
+    if _async_add_entities_callback is None:
+        const.LOGGER.warning("Cannot create chore entities: callback not registered")
+        return 0
+
+    chore_info = coordinator.chores_data.get(chore_id)
+    if not chore_info:
+        const.LOGGER.warning(
+            "Cannot create chore entities: chore %s not found", chore_id
+        )
+        return 0
+
+    chore_name = get_item_name_or_log_error(
+        "chore", chore_id, chore_info, const.DATA_CHORE_NAME
+    )
+    if not chore_name:
+        return 0
+
+    assigned_assignees_ids = chore_info.get(const.DATA_CHORE_ASSIGNED_USER_IDS, [])
+    target_assignee_ids = assigned_assignees_ids
+    if assignee_ids is not None:
+        target_assignee_ids = [
+            assignee_id
+            for assignee_id in assigned_assignees_ids
+            if assignee_id in assignee_ids
+        ]
+
+    entities: list[SensorEntity] = []
+
+    for assignee_id in target_assignee_ids:
+        assignee_data: AssigneeData = cast(
+            "AssigneeData", coordinator.assignees_data.get(assignee_id) or {}
+        )
+        assignee_name = get_item_name_or_log_error(
+            "assignee", assignee_id, assignee_data, const.DATA_USER_NAME
+        )
+        if not assignee_name:
+            continue
+
+        unique_id = (
+            f"{coordinator.config_entry.entry_id}_{assignee_id}_{chore_id}"
+            f"{const.SENSOR_KC_UID_SUFFIX_CHORE_STATUS_SENSOR}"
+        )
+        if not replace_existing and _sensor_entity_exists(coordinator, unique_id):
+            continue
+
+        entities.append(
+            AssigneeChoreStatusSensor(
+                coordinator,
+                coordinator.config_entry,
+                assignee_id,
+                assignee_name,
+                chore_id,
+                chore_name,
+            )
+        )
+
+    if ChoreEngine.is_shared_chore(chore_info):
+        unique_id = (
+            f"{coordinator.config_entry.entry_id}_{chore_id}"
+            f"{const.SENSOR_KC_UID_SUFFIX_SHARED_CHORE_GLOBAL_STATE_SENSOR}"
+        )
+        if replace_existing or not _sensor_entity_exists(coordinator, unique_id):
+            entities.append(
+                SystemChoreSharedStateSensor(
+                    coordinator,
+                    coordinator.config_entry,
+                    chore_id,
+                    chore_name,
+                )
+            )
+
+    if entities:
+        _async_add_entities_callback(entities)
+        const.LOGGER.debug(
+            "Created %d chore-linked sensors for chore: %s", len(entities), chore_name
+        )
+
+    return len(entities)
+
+
+def create_reward_entities(
+    coordinator: ChoreOpsDataCoordinator,
+    reward_id: str,
+    *,
+    assignee_ids: list[str] | None = None,
+) -> int:
+    """Create missing reward status sensor entities for a reward.
+
+    Args:
+        coordinator: Runtime coordinator.
+        reward_id: Internal ID of the reward.
+        assignee_ids: Optional subset of assignee IDs to create sensors for.
+            When omitted, create sensors for all currently assigned assignees.
+
+    Returns:
+        Count of entities handed to Home Assistant for creation.
+    """
+    if _async_add_entities_callback is None:
+        const.LOGGER.warning("Cannot create reward entities: callback not registered")
+        return 0
+
+    reward_info = coordinator.rewards_data.get(reward_id)
+    if not reward_info:
+        const.LOGGER.warning(
+            "Cannot create reward entities: reward %s not found", reward_id
+        )
+        return 0
+
+    reward_name = get_item_name_or_log_error(
+        "reward", reward_id, reward_info, const.DATA_REWARD_NAME
+    )
+    if not reward_name:
+        return 0
+
+    entities: list[SensorEntity] = []
+
+    for assignee_id, assignee_info in coordinator.assignees_data.items():
+        if assignee_ids is not None and assignee_id not in assignee_ids:
+            continue
+        # Skip linked profiles without gamification
+        if not should_create_gamification_entities(coordinator, assignee_id):
+            continue
+        if not is_user_assigned_to_reward(coordinator, assignee_id, reward_id):
+            continue
+
+        assignee_name = get_item_name_or_log_error(
+            "assignee", assignee_id, assignee_info, const.DATA_USER_NAME
+        )
+        if not assignee_name:
+            continue
+
+        unique_id = (
+            f"{coordinator.config_entry.entry_id}_{assignee_id}_{reward_id}"
+            f"{const.SENSOR_KC_UID_SUFFIX_REWARD_STATUS_SENSOR}"
+        )
+        if _sensor_entity_exists(coordinator, unique_id):
+            continue
+
+        entities.append(
+            AssigneeRewardStatusSensor(
+                coordinator,
+                coordinator.config_entry,
+                assignee_id,
+                assignee_name,
+                reward_id,
+                reward_name,
+            )
+        )
+
+    if entities:
+        _async_add_entities_callback(entities)
+        const.LOGGER.debug(
+            "Created %d reward status sensors for reward: %s",
+            len(entities),
+            reward_name,
+        )
+
+    return len(entities)
+
+
+# ------------------------------------------------------------------------------------------
+class AssigneeChoreStatusSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Sensor for chore status: pending/claimed/approved/etc.
+    Tracks individual assignee chore state independent of shared chore global state.
+    Provides comprehensive attributes including per-chore statistics (claims, approvals,
+    streaks, points earned), chore configuration, and button entity IDs for UI integration.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_CHORE_STATUS_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        assignee_id: str,
+        assignee_name: str,
+        chore_id: str,
+        chore_name: str,
+    ):
+        """Initialize the sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            assignee_id: Unique identifier for the assignee.
+            assignee_name: Display name of the assignee.
+            chore_id: Unique identifier for the chore.
+            chore_name: Display name of the chore.
+        """
+
+        super().__init__(coordinator)
+        self._assignee_id = assignee_id
+        self._assignee_name = assignee_name
+        self._chore_id = chore_id
+        self._chore_name = chore_name
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_{assignee_id}_{chore_id}{const.SENSOR_KC_UID_SUFFIX_CHORE_STATUS_SENSOR}"
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # self.entity_id = f"{const.SENSOR_KC_PREFIX}{assignee_name}{const.SENSOR_KC_EID_MIDFIX_CHORE_STATUS_SENSOR}{chore_name}"
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_ASSIGNEE_NAME: assignee_name,
+            const.TRANS_KEY_SENSOR_ATTR_CHORE_NAME: chore_name,
+        }
+        self._attr_device_info = create_assignee_device_info_from_coordinator(
+            self.coordinator, assignee_id, assignee_name, entry
+        )
+
+    @property
+    def native_value(self) -> Any:
+        """Return the chore's state based on shared or individual tracking.
+
+        Uses get_chore_status_context() for single bulk fetch instead of
+        multiple individual manager calls. State priority is handled by
+        the context provider.
+        """
+        ctx = self.coordinator.chore_manager.get_chore_status_context(
+            self._assignee_id, self._chore_id
+        )
+        return cast("str", ctx[const.CHORE_CTX_STATE])
+
+    @staticmethod
+    def _format_claimed_completed_by(value: str | list[str] | None) -> str | None:
+        """Format claimed_by or completed_by value for display.
+
+        Args:
+            value: The value from assignee_chore_data (str for INDEPENDENT/SHARED_FIRST,
+                   list[str] for SHARED_ALL, or None)
+
+        Returns:
+            Formatted string (comma-separated if list) or None
+        """
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return ", ".join(value) if value else None
+        return value
+
+    @staticmethod
+    def _normalize_name_list(value: str | list[str] | None) -> list[str] | None:
+        """Normalize claimed/completed ownership values to a list of names."""
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return [name for name in value if isinstance(name, str) and name]
+        return [value] if value else None
+
+    def _get_due_window_start_iso(self) -> str | None:
+        """Get the due window start time as ISO string."""
+        due_window_start = self.coordinator.chore_manager.get_due_window_start(
+            self._chore_id, self._assignee_id
+        )
+        return due_window_start.isoformat() if due_window_start else None
+
+    def _get_time_until_due(self) -> str | None:
+        """Get human-readable time remaining until due window starts.
+
+        Returns "0d 0h 0m" if window already started (past) or if due window
+        is disabled (0), returns same as time_until_overdue.
+        """
+        chore_info: ChoreData = cast(
+            "ChoreData", self.coordinator.chores_data.get(self._chore_id, {})
+        )
+        due_window_offset = chore_info.get(
+            const.DATA_CHORE_DUE_WINDOW_OFFSET, const.DEFAULT_DUE_WINDOW_OFFSET
+        )
+
+        # If due window disabled (0), match due date behavior
+        if due_window_offset == "0":
+            return self._get_time_until_overdue()
+
+        due_window_start = self.coordinator.chore_manager.get_due_window_start(
+            self._chore_id, self._assignee_id
+        )
+        if not due_window_start:
+            return None
+
+        # Calculate time until window start
+        result = dt_time_until(due_window_start)
+        # If already past (None), return 0d 0h 0m
+        return result or "0d 0h 0m"
+
+    def _get_time_until_overdue(self) -> str | None:
+        """Get human-readable time remaining until due date (overdue).
+
+        Returns "0d 0h 0m" if already overdue (past).
+        """
+        due_date = self.coordinator.chore_manager.get_due_date(
+            self._chore_id, self._assignee_id
+        )
+        if not due_date:
+            return None
+
+        result = dt_time_until(due_date)
+        # If already past (None), return 0d 0h 0m
+        return result or "0d 0h 0m"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Include points, description, etc. Uses new per-chore data where possible.
+
+        Provides comprehensive chore metadata including:
+        - Configuration: points, labels, assigned assignees, recurrence, due date
+        - Statistics: all-time and daily claims/approvals/streaks via periods data structure
+        - UI Integration: button entity IDs for claim/approve/disapprove actions
+        - State tracking: individual vs shared/global state differentiation
+        """
+        chore_info: ChoreData = cast(
+            "ChoreData", self.coordinator.chores_data.get(self._chore_id, {})
+        )
+        completion_criteria = chore_info.get(
+            const.DATA_CHORE_COMPLETION_CRITERIA, const.COMPLETION_CRITERIA_INDEPENDENT
+        )
+        global_state_context = (
+            self.coordinator.chore_manager.get_global_chore_state_context(
+                self._chore_id
+            )
+        )
+        global_state = global_state_context["ui_state"]
+
+        assigned_assignees_ids = chore_info.get(const.DATA_CHORE_ASSIGNED_USER_IDS, [])
+        assigned_assignees_names = [
+            name
+            for k_id in assigned_assignees_ids
+            if (name := get_assignee_name_by_id(self.coordinator, k_id))
+        ]
+
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        completion_criteria = chore_info.get(
+            const.DATA_CHORE_COMPLETION_CRITERIA, const.COMPLETION_CRITERIA_INDEPENDENT
+        )
+
+        assigned_assignees_ids = chore_info.get(const.DATA_CHORE_ASSIGNED_USER_IDS, [])
+        assigned_assignees_names = [
+            name
+            for k_id in assigned_assignees_ids
+            if (name := get_assignee_name_by_id(self.coordinator, k_id))
+        ]
+
+        assignee_chore_data = assignee_info.get(const.DATA_USER_CHORE_DATA, {}).get(
+            self._chore_id, {}
+        )
+        periods = assignee_chore_data.get(const.DATA_USER_CHORE_DATA_PERIODS, {})
+
+        # Use get_period_total for all_time metrics (replaces manual nested navigation)
+        period_key_mapping = {
+            const.PERIOD_ALL_TIME: const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME
+        }
+
+        claims_count = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED,
+            period_key_mapping=period_key_mapping,
+        )
+        approvals_count = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_APPROVED,
+            period_key_mapping=period_key_mapping,
+        )
+
+        # Get today's and yesterday's ISO dates
+        today_local_iso = dt_today_local().isoformat()
+        yesterday_local_iso = dt_add_interval(
+            today_local_iso,
+            interval_unit=const.TIME_UNIT_DAYS,
+            delta=-1,
+            require_future=False,
+            return_type=const.HELPER_RETURN_ISO_DATE,
+        )
+
+        daily_periods = periods.get(const.DATA_USER_CHORE_DATA_PERIODS_DAILY, {})
+
+        # Phase 5: Read current streak from assignee_chore_data level (survives retention)
+        # Fallback to period data for backward compatibility
+        current_streak = (
+            assignee_chore_data.get(const.DATA_USER_CHORE_DATA_CURRENT_STREAK)
+            or daily_periods.get(today_local_iso, {}).get(
+                const.DATA_USER_CHORE_DATA_PERIOD_STREAK_TALLY
+            )
+            or daily_periods.get(yesterday_local_iso, {}).get(
+                const.DATA_USER_CHORE_DATA_PERIOD_STREAK_TALLY, const.DEFAULT_ZERO
+            )
+        )
+
+        # Phase 5: Read current missed streak from assignee_chore_data level
+        current_missed_streak = assignee_chore_data.get(
+            const.DATA_USER_CHORE_DATA_CURRENT_MISSED_STREAK, const.DEFAULT_ZERO
+        )
+
+        highest_streak = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_LONGEST_STREAK,
+            period_key_mapping=period_key_mapping,
+        )
+        # Phase 5: Add missed tracking stats
+        longest_missed_streak = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_MISSED_LONGEST_STREAK,
+            period_key_mapping=period_key_mapping,
+        )
+        missed_count = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_MISSED,
+            period_key_mapping=period_key_mapping,
+        )
+        points_earned = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_POINTS,
+            period_key_mapping=period_key_mapping,
+        )
+        overdue_count = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE,
+            period_key_mapping=period_key_mapping,
+        )
+        overdue_duration_total = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+            period_key_mapping=period_key_mapping,
+        )
+        overdue_duration_count = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+            period_key_mapping=period_key_mapping,
+        )
+        avg_overdue_seconds = calculate_average(
+            overdue_duration_total,
+            overdue_duration_count,
+        )
+        longest_overdue_seconds = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+            period_key_mapping=period_key_mapping,
+        )
+        disapproved_count = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_DISAPPROVED,
+            period_key_mapping=period_key_mapping,
+        )
+        completed_count = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_COMPLETED,
+            period_key_mapping=period_key_mapping,
+        )
+        last_longest_streak_date = assignee_chore_data.get(
+            const.DATA_USER_CHORE_DATA_LAST_LONGEST_STREAK_ALL_TIME
+        )
+
+        # Collect timestamp fields
+        last_claimed = assignee_chore_data.get(const.DATA_USER_CHORE_DATA_LAST_CLAIMED)
+        last_approved = assignee_chore_data.get(
+            const.DATA_USER_CHORE_DATA_LAST_APPROVED
+        )
+        # Use unified helper for INDEPENDENT vs SHARED last_completed resolution
+        last_completed = self.coordinator.chore_manager.get_chore_last_completed(
+            self._chore_id, self._assignee_id
+        )
+        last_disapproved = assignee_chore_data.get(
+            const.DATA_USER_CHORE_DATA_LAST_DISAPPROVED
+        )
+        last_overdue = assignee_chore_data.get(const.DATA_USER_CHORE_DATA_LAST_OVERDUE)
+
+        stored_labels = chore_info.get(const.DATA_CHORE_LABELS, [])
+        raw_labels = [
+            label
+            for label in cast("list", stored_labels)
+            if isinstance(label, str) and label.strip()
+        ]
+
+        # Phase 4: Add v0.5.0 rotation and claim interaction attributes
+        # Get current chore state for claim_mode calculation
+        ctx = self.coordinator.chore_manager.get_chore_status_context(
+            self._assignee_id, self._chore_id
+        )
+        can_claim = bool(ctx.get(const.CHORE_CTX_CAN_CLAIM, False))
+        can_approve = bool(ctx.get(const.CHORE_CTX_CAN_APPROVE, False))
+        claim_mode = ctx.get(const.CHORE_CTX_CLAIM_MODE)
+
+        # turn_assignee_name: resolve rotation_current_assignee_id to assignee name (if rotation mode)
+        turn_assignee_name = None
+        if ChoreEngine.is_rotation_mode(chore_info):
+            current_turn_assignee_id = chore_info.get(
+                const.DATA_CHORE_ROTATION_CURRENT_ASSIGNEE_ID
+            )
+            if current_turn_assignee_id:
+                turn_assignee_name = get_assignee_name_by_id(
+                    self.coordinator, current_turn_assignee_id
+                )
+
+        available_at = ctx.get(const.CHORE_CTX_AVAILABLE_AT)
+
+        attributes = {
+            # --- 1. Identity & Meta ---
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_CHORE_STATUS,
+            const.ATTR_USER_NAME: self._assignee_name,
+            const.ATTR_CHORE_NAME: self._chore_name,
+            const.ATTR_DESCRIPTION: chore_info.get(
+                const.DATA_CHORE_DESCRIPTION, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_ASSIGNED_USER_NAMES: assigned_assignees_names,
+            const.ATTR_LABELS: raw_labels,
+            # --- 2. State & actionability ---
+            const.ATTR_GLOBAL_STATE: global_state,
+            const.ATTR_CAN_CLAIM: can_claim,
+            const.ATTR_CHORE_CLAIM_MODE: claim_mode,
+            const.ATTR_CAN_APPROVE: can_approve,
+            const.ATTR_CHORE_TURN_USER_NAME: turn_assignee_name,
+            const.ATTR_CHORE_ROTATION_CYCLE_OVERRIDE: chore_info.get(
+                const.DATA_CHORE_ROTATION_CYCLE_OVERRIDE, False
+            ),
+            # --- 3. Workflow policy (logic drivers) ---
+            const.ATTR_DEFAULT_POINTS: chore_info.get(
+                const.DATA_CHORE_DEFAULT_POINTS, const.DEFAULT_ZERO
+            ),
+            const.ATTR_COMPLETION_CRITERIA: completion_criteria,
+            const.ATTR_APPROVAL_RESET_TYPE: chore_info.get(
+                const.DATA_CHORE_APPROVAL_RESET_TYPE,
+                const.DEFAULT_APPROVAL_RESET_TYPE,
+            ),
+            const.ATTR_APPROVAL_RESET_PENDING_CLAIM_ACTION: chore_info.get(
+                const.DATA_CHORE_APPROVAL_RESET_PENDING_CLAIM_ACTION,
+                const.DEFAULT_APPROVAL_RESET_PENDING_CLAIM_ACTION,
+            ),
+            const.ATTR_OVERDUE_HANDLING_TYPE: chore_info.get(
+                const.DATA_CHORE_OVERDUE_HANDLING_TYPE,
+                const.DEFAULT_OVERDUE_HANDLING_TYPE,
+            ),
+            const.ATTR_CHORE_CLAIM_LOCK_UNTIL_WINDOW: chore_info.get(
+                const.DATA_CHORE_CLAIM_LOCK_UNTIL_WINDOW,
+                const.DEFAULT_CHORE_CLAIM_LOCK_UNTIL_WINDOW,
+            ),
+            const.ATTR_CHORE_DUE_WINDOW_OFFSET: chore_info.get(
+                const.DATA_CHORE_DUE_WINDOW_OFFSET,
+                const.DEFAULT_DUE_WINDOW_OFFSET,
+            ),
+            const.ATTR_CHORE_NOTIFICATION_CHANNEL: chore_info.get(
+                const.DATA_CHORE_NOTIFICATION_CHANNEL, ""
+            ),
+            const.ATTR_CHORE_NOTIFICATION_IMPORTANCE: chore_info.get(
+                const.DATA_CHORE_NOTIFICATION_IMPORTANCE, ""
+            ),
+            const.ATTR_AUTO_APPROVE: chore_info.get(
+                const.DATA_CHORE_AUTO_APPROVE,
+                const.DEFAULT_CHORE_AUTO_APPROVE,
+            ),
+            const.ATTR_RECURRING_FREQUENCY: chore_info.get(
+                const.DATA_CHORE_RECURRING_FREQUENCY, const.SENTINEL_NONE_TEXT
+            ),
+            # For INDEPENDENT chores, use per_assignee_applicable_days; for SHARED, use chore-level
+            # Empty list [] means all days are applicable
+            const.ATTR_APPLICABLE_DAYS: (
+                chore_info.get(const.DATA_CHORE_PER_ASSIGNEE_APPLICABLE_DAYS, {}).get(
+                    self._assignee_id,
+                    chore_info.get(const.DATA_CHORE_APPLICABLE_DAYS, []),
+                )
+                if completion_criteria == const.COMPLETION_CRITERIA_INDEPENDENT
+                else chore_info.get(const.DATA_CHORE_APPLICABLE_DAYS, [])
+            ),
+            # --- 4. Runtime scheduling context ---
+            # Return None (not translation key) when no due_date - dashboard templates
+            # use None to trigger "no_due_date" display text
+            const.ATTR_DUE_DATE: (
+                due_dt.isoformat()
+                if (
+                    due_dt := self.coordinator.chore_manager.get_due_date(
+                        self._chore_id, self._assignee_id
+                    )
+                )
+                else None
+            ),
+            const.ATTR_DUE_WINDOW_START: self._get_due_window_start_iso(),
+            const.ATTR_CHORE_AVAILABLE_AT: available_at,
+            # Use coordinator helper to correctly handle INDEPENDENT (per-assignee) vs SHARED (chore-level)
+            const.ATTR_APPROVAL_PERIOD_START: self.coordinator.chore_manager.get_approval_period_start(
+                self._assignee_id, self._chore_id
+            ),
+            # --- 5. Ownership tracking ---
+            # INDEPENDENT: assignee's own name
+            # SHARED/ROTATION: chore-level ownership authority
+            const.ATTR_CLAIMED_BY: self._normalize_name_list(
+                assignee_chore_data.get(const.DATA_CHORE_CLAIMED_BY)
+                if completion_criteria == const.COMPLETION_CRITERIA_INDEPENDENT
+                else chore_info.get(const.DATA_CHORE_CLAIMED_BY)
+            ),
+            const.ATTR_COMPLETED_BY: self._normalize_name_list(
+                assignee_chore_data.get(const.DATA_CHORE_COMPLETED_BY)
+                if completion_criteria == const.COMPLETION_CRITERIA_INDEPENDENT
+                else chore_info.get(const.DATA_CHORE_COMPLETED_BY)
+            ),
+            # --- 6. Timestamps (last_* events) ---
+            const.ATTR_LAST_CLAIMED: last_claimed,
+            const.ATTR_LAST_APPROVED: last_approved,
+            const.ATTR_LAST_COMPLETED: last_completed,
+            const.ATTR_LAST_DISAPPROVED: last_disapproved,
+            const.ATTR_LAST_OVERDUE: last_overdue,
+            # --- 7. Statistics (counts) ---
+            const.ATTR_CHORE_POINTS_EARNED: points_earned,
+            const.ATTR_CHORE_CLAIMS_COUNT: claims_count,
+            const.ATTR_CHORE_COMPLETED_COUNT: completed_count,
+            const.ATTR_CHORE_APPROVALS_COUNT: approvals_count,
+            const.ATTR_CHORE_DISAPPROVED_COUNT: disapproved_count,
+            const.ATTR_CHORE_OVERDUE_COUNT: overdue_count,
+            const.ATTR_CHORE_AVG_OVERDUE_SECONDS: avg_overdue_seconds,
+            const.ATTR_CHORE_LONGEST_OVERDUE_SECONDS: longest_overdue_seconds,
+            # --- 8. Statistics (streaks) ---
+            const.ATTR_CHORE_CURRENT_STREAK: current_streak,
+            const.ATTR_CHORE_LONGEST_STREAK: highest_streak,
+            const.ATTR_CHORE_LAST_LONGEST_STREAK_DATE: last_longest_streak_date,
+            # Phase 5: Missed tracking stats
+            const.ATTR_CHORE_CURRENT_MISSED_STREAK: current_missed_streak,
+            const.ATTR_CHORE_LONGEST_MISSED_STREAK: longest_missed_streak,
+            const.ATTR_CHORE_MISSED_COUNT: missed_count,
+            const.ATTR_CHORE_LAST_MISSED: assignee_chore_data.get(
+                const.DATA_USER_CHORE_DATA_LAST_MISSED
+            ),
+        }
+
+        if (
+            chore_info.get(const.DATA_CHORE_RECURRING_FREQUENCY)
+            in const.CUSTOM_INTERVAL_FREQUENCIES
+        ):
+            attributes[const.ATTR_CUSTOM_FREQUENCY_INTERVAL] = chore_info.get(
+                const.DATA_CHORE_CUSTOM_INTERVAL
+            )
+            attributes[const.ATTR_CUSTOM_FREQUENCY_UNIT] = chore_info.get(
+                const.DATA_CHORE_CUSTOM_INTERVAL_UNIT
+            )
+
+        # Show today's approvals if approval_reset_type allows multiple
+        approval_reset_type = chore_info.get(
+            const.DATA_CHORE_APPROVAL_RESET_TYPE, const.DEFAULT_APPROVAL_RESET_TYPE
+        )
+        if approval_reset_type in (
+            const.APPROVAL_RESET_AT_MIDNIGHT_MULTI,
+            const.APPROVAL_RESET_AT_DUE_DATE_MULTI,
+            const.APPROVAL_RESET_UPON_COMPLETION,
+        ):
+            today_approvals = (
+                periods.get(const.DATA_USER_CHORE_DATA_PERIODS_DAILY, {})
+                .get(dt_today_local().isoformat(), {})
+                .get(const.DATA_USER_CHORE_DATA_PERIOD_APPROVED, const.DEFAULT_ZERO)
+            )
+            attributes[const.ATTR_CHORE_APPROVALS_TODAY] = today_approvals
+
+        # Add claim, approve, disapprove button entity ids to attributes for direct ui access.
+        button_types = [
+            (
+                const.BUTTON_KC_UID_SUFFIX_APPROVE,
+                const.ATTR_CHORE_APPROVE_BUTTON_ENTITY_ID,
+            ),
+            (
+                const.BUTTON_KC_UID_SUFFIX_DISAPPROVE,
+                const.ATTR_CHORE_DISAPPROVE_BUTTON_ENTITY_ID,
+            ),
+            (const.BUTTON_KC_UID_SUFFIX_CLAIM, const.ATTR_CHORE_CLAIM_BUTTON_ENTITY_ID),
+        ]
+        button_entity_ids = {}
+        try:
+            entity_registry = async_get(self.hass)
+            for suffix, attr_name in button_types:
+                unique_id = f"{self._entry.entry_id}_{self._assignee_id}_{self._chore_id}{suffix}"
+                entity_id = entity_registry.async_get_entity_id(
+                    "button", const.DOMAIN, unique_id
+                )
+                button_entity_ids[attr_name] = entity_id
+        except (KeyError, ValueError, AttributeError):
+            for _, attr_name in button_types:
+                button_entity_ids[attr_name] = None
+
+        # Add button entity IDs to the attributes
+        attributes.update(button_entity_ids)
+
+        return attributes
+
+    @property
+    def icon(self) -> str | None:
+        """Return the icon based on chore state.
+
+        Maps chore status to an appropriate Material Design Icon:
+        - pending: checkbox-blank (not started)
+        - claimed: clipboard-check (assignee claims)
+        - approved: checkbox-marked-circle (approver approves)
+        - overdue: alert-circle (not done in time)
+        - fallback: chore's custom icon or default
+        """
+        chore_info: ChoreData = cast(
+            "ChoreData", self.coordinator.chores_data.get(self._chore_id, {})
+        )
+
+        # Fallback: use chore's custom icon or None for icons.json
+        return chore_info.get(const.DATA_CHORE_ICON) or None
+
+
+# ------------------------------------------------------------------------------------------
+class AssigneePointsSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Sensor for a assignee's total points balance.
+
+    Primary currency sensor - tracks current spendable points balance. Uses
+    MEASUREMENT state class for graphing. Exposes comprehensive point statistics
+    in attributes including earnings, spending, bonuses, and penalties.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_ASSIGNEE_POINTS_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        assignee_id: str,
+        assignee_name: str,
+        points_label: str,
+        points_icon: str,
+    ):
+        """Initialize the sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            assignee_id: Unique identifier for the assignee.
+            assignee_name: Display name of the assignee.
+            points_label: User-configured label for points (e.g., "Points", "Stars").
+            points_icon: User-configured icon for points display.
+        """
+
+        super().__init__(coordinator)
+        self._assignee_id = assignee_id
+        self._assignee_name = assignee_name
+        self._points_label = points_label
+        self._points_icon = points_icon
+        self._attr_unique_id = f"{entry.entry_id}_{assignee_id}{const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_POINTS_SENSOR}"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_ASSIGNEE_NAME: assignee_name,
+            const.TRANS_KEY_SENSOR_ATTR_POINTS: self._points_label,
+        }
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # Legacy entity_id template kept as a comment-only reference
+        self._attr_device_info = create_assignee_device_info_from_coordinator(
+            self.coordinator, assignee_id, assignee_name, entry
+        )
+
+    @property
+    def native_value(self) -> Any:
+        """Return the assignee's total points."""
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        return assignee_info.get(const.DATA_USER_POINTS, const.DEFAULT_ZERO)
+
+    @property
+    def native_unit_of_measurement(self):
+        """Return the points label."""
+        return self._points_label or const.LABEL_POINTS
+
+    @property
+    def icon(self) -> str | None:
+        """Return custom icon or None for icons.json fallback.
+
+        Returns user-configured points icon if set, otherwise None to allow
+        icons.json to provide range-based icon based on current points.
+        """
+        return self._points_icon or None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose all point stats as attributes.
+
+        Phase 7G.1: All point data now comes from two sources:
+        1. Persistent all_time stats from point_data.periods.all_time.all_time
+           (earned, spent, by_source, highest_balance)
+        2. Temporal stats from PRES_* cache (today, week, month, year)
+
+        Net values are DERIVED (earned + spent), never stored.
+
+        All-time earned/spent/highest are published exactly as stored; the
+        boot-time point ledger repair keeps them reconciled with the balance
+        and the by_source breakdown (#306).
+
+        Attribute order: common fields first (purpose, assignee_name),
+        then all point_stat_* fields sorted alphabetically.
+        """
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+
+        # Common fields first (consistent ordering across sensors)
+        attributes: dict[str, Any] = {
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_POINTS,
+            const.ATTR_USER_NAME: self._assignee_name,
+            const.ATTR_POINTS_MULTIPLIER: assignee_info.get(
+                const.DATA_USER_POINTS_MULTIPLIER,
+                const.DEFAULT_ASSIGNEE_POINTS_MULTIPLIER,
+            ),
+        }
+
+        # === Phase 7G.1: Get persistent all_time stats using get_period_total ===
+        point_periods: dict[str, Any] = assignee_info.get(
+            const.DATA_USER_POINT_PERIODS, {}
+        )
+        period_key_mapping = {
+            const.PERIOD_ALL_TIME: const.DATA_USER_POINT_PERIODS_ALL_TIME
+        }
+
+        # Extract all_time values using get_period_total
+        earned_all_time = self.coordinator.stats.get_period_total(
+            point_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_POINT_PERIOD_POINTS_EARNED,
+            period_key_mapping=period_key_mapping,
+        )
+        spent_all_time = self.coordinator.stats.get_period_total(
+            point_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_POINT_PERIOD_POINTS_SPENT,
+            period_key_mapping=period_key_mapping,
+        )
+        highest_balance = self.coordinator.stats.get_period_total(
+            point_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_POINT_PERIOD_HIGHEST_BALANCE,
+            period_key_mapping=period_key_mapping,
+        )
+
+        # Get by_source dict (nested structure requires manual access)
+        all_time_periods: dict[str, Any] = point_periods.get(
+            const.DATA_USER_POINT_PERIODS_ALL_TIME, {}
+        )
+        all_time_entry: dict[str, Any] = all_time_periods.get(const.PERIOD_ALL_TIME, {})
+        by_source_all_time = dict(
+            all_time_entry.get(const.DATA_USER_POINT_PERIOD_BY_SOURCE, {})
+        )
+
+        # All-time values are published as stored (#306): read-time guards used to
+        # recompute them here and contradict the by_source breakdown beside them.
+        pres_stats = self.coordinator.statistics_manager.get_stats(self._assignee_id)
+        current_points = float(assignee_info.get(const.DATA_USER_POINTS, 0.0))
+        net_all_time = round(
+            earned_all_time + spent_all_time, const.DATA_FLOAT_PRECISION
+        )
+        by_source_net = round(
+            sum(by_source_all_time.values()), const.DATA_FLOAT_PRECISION
+        )
+        if net_all_time != current_points or by_source_net != net_all_time:
+            const.LOGGER.warning(
+                "AssigneePointsSensor: all-time point ledger mismatch for '%s': "
+                "balance=%s, earned+spent=%s, by_source_net=%s "
+                "(storage is reconciled by boot repair on startup)",
+                self._assignee_name,
+                current_points,
+                net_all_time,
+                by_source_net,
+            )
+
+        # Add persistent all_time stats with backward-compatible attribute names
+        attributes[f"{const.ATTR_PREFIX_POINT_STAT}points_earned_all_time"] = (
+            earned_all_time
+        )
+        attributes[f"{const.ATTR_PREFIX_POINT_STAT}highest_balance_all_time"] = (
+            highest_balance
+        )
+        attributes[f"{const.ATTR_PREFIX_POINT_STAT}points_spent_all_time"] = (
+            spent_all_time
+        )
+        attributes[f"{const.ATTR_PREFIX_POINT_STAT}points_net_all_time"] = net_all_time
+        attributes[f"{const.ATTR_PREFIX_POINT_STAT}points_by_source_all_time"] = (
+            by_source_all_time
+        )
+
+        # === Add temporal stats from presentation cache ===
+        # PRES_KID_* keys map to backward-compatible names by stripping "pres_user_" prefix
+        for pres_key, value in pres_stats.items():
+            if pres_key.startswith(("pres_user_points_", "pres_user_avg_points_")):
+                # Strip "pres_user_" prefix to get backward-compatible attribute name
+                attr_key = pres_key.removeprefix("pres_user_")
+                attributes[f"{const.ATTR_PREFIX_POINT_STAT}{attr_key}"] = value
+
+        return attributes
+
+
+# ------------------------------------------------------------------------------------------
+class AssigneeChoresSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Sensor showing chores count with all chore statistics as attributes.
+
+    This sensor provides a central view of all chore-related metrics for a assignee,
+    similar to how AssigneePointsSensor works for points tracking.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_CHORES_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        assignee_id: str,
+        assignee_name: str,
+    ):
+        """Initialize the sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            assignee_id: Unique identifier for the assignee.
+            assignee_name: Display name of the assignee.
+        """
+        super().__init__(coordinator)
+        self._assignee_id = assignee_id
+        self._assignee_name = assignee_name
+        self._attr_unique_id = (
+            f"{entry.entry_id}_{assignee_id}{const.SENSOR_KC_UID_SUFFIX_CHORES_SENSOR}"
+        )
+        # Icon defined in icons.json
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_ASSIGNEE_NAME: assignee_name
+        }
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # Legacy entity_id template kept as a comment-only reference
+        self._attr_device_info = create_assignee_device_info_from_coordinator(
+            self.coordinator, assignee_id, assignee_name, entry
+        )
+
+    @property
+    def native_value(self) -> Any:
+        """Return the total number of chores completed by the assignee."""
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        # Use get_period_total for all_time approved count
+        chore_periods = assignee_info.get(const.DATA_USER_CHORE_PERIODS, {})
+        period_key_mapping = {
+            const.PERIOD_ALL_TIME: const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME
+        }
+        return self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_APPROVED,
+            period_key_mapping=period_key_mapping,
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose all chore stats as attributes.
+
+        Dynamically includes all DATA_KID_CHORE_STATS fields prefixed with
+        'chore_stat_' for frontend access (approved, claimed, overdue counts, etc.).
+
+        Phase 7.5: Merges persistent stats (all_time, streak) from storage
+        with temporal stats (today, week, month, year) from presentation cache.
+        Temporal stats use PRES_* keys mapped to backward-compatible attribute names.
+
+        Attribute order organized into logical groups for better UX:
+        1. Identity (purpose, assignee_name)
+        2. Current Status (current_due_today, current_claimed, current_approved, current_overdue)
+        3. Today (approved_today, claimed_today, missed_today, completed_today, points_today)
+        4. This Week (approved_week, claimed_week, missed_week, completed_week, points_week)
+        5. This Month (approved_month, claimed_month, missed_month, completed_month, points_month)
+        6. This Year (approved_year, claimed_year, missed_year, completed_year, points_year)
+        7. All-Time (approved_all_time, claimed_all_time, missed_all_time, completed_all_time,
+                 disapproved_all_time, overdue_all_time, points_all_time,
+                 longest_streak, longest_missed_streak)
+        """
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        # Use get_period_total for persistent all-time stats
+        chore_periods = assignee_info.get(const.DATA_USER_CHORE_PERIODS, {})
+        period_key_mapping = {
+            const.PERIOD_ALL_TIME: const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME
+        }
+
+        # Get temporal stats from presentation cache
+        pres_stats = self.coordinator.statistics_manager.get_chore_stats(
+            self._assignee_id
+        )
+
+        # Build unified lookup dict for easier access
+        all_stats: dict[str, Any] = {}
+
+        # Add persistent all-time stats using get_period_total
+        all_stats["approved_all_time"] = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_APPROVED,
+            period_key_mapping=period_key_mapping,
+        )
+        all_stats["claimed_all_time"] = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED,
+            period_key_mapping=period_key_mapping,
+        )
+        all_stats["missed_all_time"] = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_MISSED,
+            period_key_mapping=period_key_mapping,
+        )
+        all_stats["overdue_all_time"] = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE,
+            period_key_mapping=period_key_mapping,
+        )
+        overdue_duration_total_all_time = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+            period_key_mapping=period_key_mapping,
+        )
+        overdue_duration_count_all_time = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+            period_key_mapping=period_key_mapping,
+        )
+        all_stats["avg_overdue_seconds_all_time"] = calculate_average(
+            overdue_duration_total_all_time,
+            overdue_duration_count_all_time,
+        )
+        all_stats["longest_overdue_seconds_all_time"] = (
+            self.coordinator.stats.get_period_total(
+                chore_periods,
+                const.PERIOD_ALL_TIME,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+                period_key_mapping=period_key_mapping,
+            )
+        )
+        all_stats["completed_all_time"] = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_COMPLETED,
+            period_key_mapping=period_key_mapping,
+        )
+        all_stats["points_all_time"] = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_POINTS,
+            period_key_mapping=period_key_mapping,
+        )
+        all_stats["longest_streak"] = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_LONGEST_STREAK,
+            period_key_mapping=period_key_mapping,
+        )
+        all_stats["longest_missed_streak"] = self.coordinator.stats.get_period_total(
+            chore_periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_CHORE_DATA_PERIOD_MISSED_LONGEST_STREAK,
+            period_key_mapping=period_key_mapping,
+        )
+
+        # Add temporal stats (strip PRES prefixes)
+        # NOTE: all_time stats are storage-only, not in cache (can't calculate due to retention)
+        for pres_key, value in pres_stats.items():
+            if pres_key.startswith("pres_user_chores_"):
+                attr_key = pres_key.removeprefix(
+                    "pres_user_chores_"
+                )  # "pres_user_chores_approved_today" -> "approved_today"
+                # Skip all_time keys - they come from storage only
+                if not attr_key.endswith("_all_time"):
+                    all_stats[attr_key] = value
+            elif pres_key.startswith("pres_user_top_chores_"):
+                attr_key = pres_key.removeprefix(
+                    "pres_user_"
+                )  # "pres_user_top_chores_xxx" -> "top_chores_xxx"
+                all_stats[attr_key] = value
+
+        # Build attributes in logical order
+        attributes: dict[str, Any] = {}
+
+        # Group 1: Identity
+        attributes[const.ATTR_PURPOSE] = const.TRANS_KEY_PURPOSE_CHORES
+        attributes[const.ATTR_USER_NAME] = self._assignee_name
+
+        # Group 2: Current Status
+        for key in [
+            "current_due_today",
+            "current_claimed",
+            "current_approved",
+            "current_overdue",
+        ]:
+            if key in all_stats:
+                attributes[f"{const.ATTR_PREFIX_CHORE_STAT}{key}"] = all_stats[key]
+
+        # Group 3: Today
+        for key in [
+            "approved_today",
+            "claimed_today",
+            "missed_today",
+            "avg_overdue_seconds_today",
+            "longest_overdue_seconds_today",
+            "completed_today",
+            "points_today",
+        ]:
+            if key in all_stats:
+                attributes[f"{const.ATTR_PREFIX_CHORE_STAT}{key}"] = all_stats[key]
+
+        # Group 4: This Week
+        for key in [
+            "approved_week",
+            "claimed_week",
+            "missed_week",
+            "avg_overdue_seconds_week",
+            "longest_overdue_seconds_week",
+            "completed_week",
+            "points_week",
+            "avg_per_day_week",
+        ]:
+            if key in all_stats:
+                attributes[f"{const.ATTR_PREFIX_CHORE_STAT}{key}"] = all_stats[key]
+
+        # Group 5: This Month
+        for key in [
+            "approved_month",
+            "claimed_month",
+            "missed_month",
+            "avg_overdue_seconds_month",
+            "longest_overdue_seconds_month",
+            "completed_month",
+            "points_month",
+            "avg_per_day_month",
+        ]:
+            if key in all_stats:
+                attributes[f"{const.ATTR_PREFIX_CHORE_STAT}{key}"] = all_stats[key]
+
+        # Group 6: This Year
+        for key in [
+            "approved_year",
+            "claimed_year",
+            "missed_year",
+            "avg_overdue_seconds_year",
+            "longest_overdue_seconds_year",
+            "completed_year",
+            "points_year",
+            "avg_per_day_year",
+        ]:
+            if key in all_stats:
+                attributes[f"{const.ATTR_PREFIX_CHORE_STAT}{key}"] = all_stats[key]
+
+        # Group 7: All-Time
+        for key in [
+            "approved_all_time",
+            "claimed_all_time",
+            "missed_all_time",
+            "completed_all_time",
+            "disapproved_all_time",
+            "overdue_all_time",
+            "avg_overdue_seconds_all_time",
+            "longest_overdue_seconds_all_time",
+            "points_all_time",
+            "longest_streak",
+            "longest_missed_streak",
+        ]:
+            if key in all_stats:
+                attributes[f"{const.ATTR_PREFIX_CHORE_STAT}{key}"] = all_stats[key]
+
+        # Group 8: Top Chores (if present)
+        for key in sorted([k for k in all_stats if k.startswith("top_chores_")]):
+            attributes[f"{const.ATTR_PREFIX_CHORE_STAT}{key}"] = all_stats[key]
+
+        return attributes
+
+
+# ------------------------------------------------------------------------------------------
+class AssigneeBadgesSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Sensor that returns the highest cumulative badge a assignee currently has,
+    and calculates how many points are needed to reach the next cumulative badge.
+
+    Tracks cumulative badge progression including maintenance requirements, grace periods,
+    baseline/cycle points, and provides comprehensive badge metadata in attributes.
+    Icon dynamically reflects the current highest badge.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_ASSIGNEE_BADGES_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        assignee_id: str,
+        assignee_name: str,
+    ):
+        """Initialize the sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            assignee_id: Unique identifier for the assignee.
+            assignee_name: Display name of the assignee.
+        """
+
+        super().__init__(coordinator)
+        self._entry = entry
+        self._assignee_id = assignee_id
+        self._assignee_name = assignee_name
+        self._attr_unique_id = f"{entry.entry_id}_{assignee_id}{const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_BADGES_SENSOR}"
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_ASSIGNEE_NAME: assignee_name
+        }
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # Legacy entity_id template kept as a comment-only reference
+        self._attr_device_info = create_assignee_device_info_from_coordinator(
+            self.coordinator, assignee_id, assignee_name, entry
+        )
+
+    @property
+    def native_value(self) -> str:
+        """Return the badge name of the highest-threshold badge the assignee has earned."""
+        # Phase 3A: Use computed progress instead of storage read
+        cumulative_badge_progress_info = (
+            self.coordinator.gamification_manager.get_cumulative_badge_progress(
+                self._assignee_id
+            )
+        )
+        return str(
+            cumulative_badge_progress_info.get(
+                const.CUMULATIVE_BADGE_PROGRESS_HIGHEST_EARNED_BADGE_NAME,
+                const.SENTINEL_NONE_TEXT,
+            )
+        )
+
+    @property
+    def icon(self):
+        """Return the icon for the highest badge."""
+        # Phase 3A: Use computed progress instead of storage read
+        cumulative_badge_progress_info = (
+            self.coordinator.gamification_manager.get_cumulative_badge_progress(
+                self._assignee_id
+            )
+        )
+        highest_badge_id = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_HIGHEST_EARNED_BADGE_ID,
+            const.SENTINEL_NONE_TEXT,
+        )
+        highest_badge_info: BadgeData = cast(
+            "BadgeData", self.coordinator.badges_data.get(highest_badge_id, {})
+        )
+        return highest_badge_info.get(const.DATA_BADGE_ICON) or None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Provide additional details about the highest cumulative badge.
+
+        Phase 3A: Use computed progress instead of storage reads. All derived
+        fields (current/next/highest badge info) are computed on-read, only
+        state fields (status, cycle_points, dates) read from storage.
+        """
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+
+        # Phase 3A: Get computed progress (all derived fields calculated here)
+        cumulative_badge_progress_info = (
+            self.coordinator.gamification_manager.get_cumulative_badge_progress(
+                self._assignee_id
+            )
+        )
+
+        # Extract computed fields from progress dict (using CUMULATIVE_BADGE_PROGRESS_* constants)
+        current_badge_id = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_CURRENT_BADGE_ID, const.SENTINEL_NONE_TEXT
+        )
+        current_badge_name = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_CURRENT_BADGE_NAME,
+            const.SENTINEL_NONE_TEXT,
+        )
+        highest_earned_badge_id = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_HIGHEST_EARNED_BADGE_ID,
+            const.SENTINEL_NONE_TEXT,
+        )
+        highest_earned_badge_name = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_HIGHEST_EARNED_BADGE_NAME,
+            const.SENTINEL_NONE_TEXT,
+        )
+        next_higher_badge_id = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_HIGHER_BADGE_ID,
+            const.SENTINEL_NONE_TEXT,
+        )
+        next_higher_badge_name = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_HIGHER_BADGE_NAME,
+            const.SENTINEL_NONE_TEXT,
+        )
+        next_lower_badge_id = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_LOWER_BADGE_ID,
+            const.SENTINEL_NONE_TEXT,
+        )
+        next_lower_badge_name = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_LOWER_BADGE_NAME,
+            const.SENTINEL_NONE_TEXT,
+        )
+        badge_status = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_STATUS, const.SENTINEL_NONE_TEXT
+        )
+        highest_badge_threshold_value = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_HIGHEST_EARNED_THRESHOLD,
+            const.DEFAULT_ZERO,
+        )
+        points_to_next_badge = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_NEXT_HIGHER_POINTS_NEEDED,
+            const.DEFAULT_ZERO,
+        )
+        if isinstance(points_to_next_badge, int | float):
+            points_to_next_badge = round(
+                points_to_next_badge, const.DATA_FLOAT_PRECISION
+            )
+        cycle_points = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_CYCLE_POINTS, const.DEFAULT_ZERO
+        )
+        grace_end_date = cumulative_badge_progress_info.get(
+            const.CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_GRACE_END_DATE, None
+        )
+
+        # Defensive: Handle badges_earned as either dict (v42+) or list (legacy v41)
+        badges_earned_data = assignee_info.get(const.DATA_USER_BADGES_EARNED, {})
+        if isinstance(badges_earned_data, dict):
+            # V42+ format: dict of badge_id -> badge_info
+            earned_badge_list = [
+                badge_info.get(const.DATA_USER_BADGES_EARNED_NAME)
+                for badge_info in badges_earned_data.values()
+            ]
+        elif isinstance(badges_earned_data, list):
+            # Legacy v41 format: list of badge name strings (e.g., ["Badge 1", "Badge 2"])
+            earned_badge_list = badges_earned_data
+        else:
+            # Fallback: empty list
+            earned_badge_list = []
+
+        maintenance_badge_id = (
+            highest_earned_badge_id
+            if highest_earned_badge_id
+            and highest_earned_badge_id != const.SENTINEL_NONE_TEXT
+            else current_badge_id
+        )
+
+        # Use current_badge_id from computed progress to look up badge details
+        current_badge_info: BadgeData = cast(
+            "BadgeData", self.coordinator.badges_data.get(current_badge_id, {})
+        )
+
+        # Maintenance metadata should always come from highest earned badge context
+        maintenance_badge_info: BadgeData = cast(
+            "BadgeData", self.coordinator.badges_data.get(maintenance_badge_id, {})
+        )
+
+        stored_labels = current_badge_info.get(const.DATA_BADGE_LABELS, [])
+        friendly_labels = [
+            get_friendly_label(self.hass, label)
+            for label in cast("list", stored_labels)
+        ]
+
+        # Get last awarded date and award count for the highest earned badge (if any)
+        # Defensive: Handle badges_earned as either dict (v42+) or list (legacy v41)
+        badges_earned_data = assignee_info.get(const.DATA_USER_BADGES_EARNED, {})
+        if isinstance(badges_earned_data, dict):
+            badge_earned = badges_earned_data.get(maintenance_badge_id, {})
+        else:
+            # Legacy v41: list format, no per-badge metadata
+            badge_earned = {}
+
+        last_awarded_date = badge_earned.get(
+            const.DATA_USER_BADGES_EARNED_LAST_AWARDED, const.SENTINEL_NONE
+        )
+        # Phase 4B: Read award_count from periods.all_time.all_time (Lean Item pattern)
+        periods = badge_earned.get(const.DATA_USER_BADGES_EARNED_PERIODS, {})
+        period_key_mapping = {
+            const.PERIOD_ALL_TIME: const.DATA_USER_BADGES_EARNED_PERIODS_ALL_TIME
+        }
+        award_count = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_BADGES_EARNED_AWARD_COUNT,
+            period_key_mapping=period_key_mapping,
+        )
+
+        extra_attrs = {}
+        # Add description if present
+        description = current_badge_info.get(const.DATA_BADGE_DESCRIPTION, "")
+        if description:
+            extra_attrs[const.DATA_BADGE_DESCRIPTION] = description
+
+        # Phase 3A: No baseline field in storage - removed
+        extra_attrs[const.ATTR_BADGE_CUMULATIVE_CYCLE_POINTS] = cycle_points
+
+        # Read maintenance_end_date from storage (state field)
+        assignee_cumulative_progress_storage = assignee_info.get(
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS, {}
+        )
+        maintenance_end_date = assignee_cumulative_progress_storage.get(
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_END_DATE, None
+        )
+
+        target_info = maintenance_badge_info.get(const.DATA_BADGE_TARGET, {})
+
+        # maintenance_rules is an int inside target_info
+        maintenance_rules = target_info.get(const.DATA_BADGE_MAINTENANCE_RULES, 0)
+        maintenance_end_date = cumulative_badge_progress_info.get(
+            const.DATA_USER_CUMULATIVE_BADGE_PROGRESS_MAINTENANCE_END_DATE, None
+        )
+        if maintenance_rules > 0 and maintenance_end_date:
+            extra_attrs[const.ATTR_BADGE_CUMULATIVE_MAINTENANCE_END_DATE] = (
+                maintenance_end_date
+            )
+            extra_attrs[const.ATTR_BADGE_CUMULATIVE_GRACE_END_DATE] = grace_end_date
+            extra_attrs[const.ATTR_BADGE_CUMULATIVE_MAINTENANCE_POINTS_REQUIRED] = (
+                maintenance_rules
+            )
+            points_to_maintenance = max(0, maintenance_rules - cycle_points)
+            extra_attrs[const.ATTR_BADGE_CUMULATIVE_POINTS_TO_MAINTENANCE] = (
+                points_to_maintenance
+            )
+
+        # Add reset_schedule fields if recurring_frequency is present
+        reset_schedule = maintenance_badge_info.get(const.DATA_BADGE_RESET_SCHEDULE, {})
+        if reset_schedule:
+            extra_attrs[const.DATA_BADGE_RESET_SCHEDULE] = {
+                key: value
+                for key, value in reset_schedule.items()
+                if key
+                not in {
+                    const.DATA_BADGE_RESET_SCHEDULE_START_DATE,
+                    const.DATA_BADGE_RESET_SCHEDULE_END_DATE,
+                }
+            }
+
+        # Add Target fields if present
+        if target_info:
+            extra_attrs[const.DATA_BADGE_TARGET] = target_info
+
+        # Add awards if present
+        extra_attrs[const.DATA_BADGE_AWARDS] = (
+            self.coordinator.gamification_manager.get_structured_badge_awards(
+                maintenance_badge_info
+            )
+        )
+
+        # Look up SystemBadgeSensor entity IDs for current, next_higher, next_lower badges
+        # These allow the dashboard to directly reference badge definition sensors
+        badge_eid_map = [
+            (current_badge_id, const.ATTR_CURRENT_BADGE_EID),
+            (highest_earned_badge_id, const.ATTR_HIGHEST_EARNED_BADGE_EID),
+            (next_higher_badge_id, const.ATTR_NEXT_HIGHER_BADGE_EID),
+            (next_lower_badge_id, const.ATTR_NEXT_LOWER_BADGE_EID),
+        ]
+        badge_entity_ids: dict[str, str | None] = {}
+        try:
+            entity_registry = async_get(self.hass)
+            for badge_id, attr_name in badge_eid_map:
+                # Skip if badge_id is None/sentinel
+                if not badge_id or badge_id == const.SENTINEL_NONE_TEXT:
+                    badge_entity_ids[attr_name] = None
+                    continue
+                # Look up the SystemBadgeSensor entity ID (badge definition)
+                unique_id = f"{self._entry.entry_id}_{badge_id}{const.SENSOR_KC_UID_SUFFIX_BADGE_SENSOR}"
+                entity_id = entity_registry.async_get_entity_id(
+                    "sensor", const.DOMAIN, unique_id
+                )
+                badge_entity_ids[attr_name] = entity_id
+        except (KeyError, ValueError, AttributeError):
+            for _, attr_name in badge_eid_map:
+                badge_entity_ids[attr_name] = None
+
+        return {
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_USER_BADGES,
+            const.ATTR_USER_NAME: self._assignee_name,
+            const.ATTR_LABELS: friendly_labels,
+            const.ATTR_ALL_EARNED_BADGES: earned_badge_list,
+            const.ATTR_HIGHEST_BADGE_THRESHOLD_VALUE: highest_badge_threshold_value,
+            const.ATTR_POINTS_TO_NEXT_BADGE: points_to_next_badge,
+            # Current badge (highest earned or target if none earned)
+            const.ATTR_CURRENT_BADGE_NAME: current_badge_name,
+            const.ATTR_CURRENT_BADGE_EID: badge_entity_ids.get(
+                const.ATTR_CURRENT_BADGE_EID
+            ),
+            # Highest earned badge
+            const.ATTR_HIGHEST_EARNED_BADGE_NAME: highest_earned_badge_name,
+            const.ATTR_HIGHEST_EARNED_BADGE_EID: badge_entity_ids.get(
+                const.ATTR_HIGHEST_EARNED_BADGE_EID
+            ),
+            # Next higher badge (goal/target)
+            const.ATTR_NEXT_HIGHER_BADGE_NAME: next_higher_badge_name,
+            const.ATTR_NEXT_HIGHER_BADGE_EID: badge_entity_ids.get(
+                const.ATTR_NEXT_HIGHER_BADGE_EID
+            ),
+            # Next lower badge (previously earned)
+            const.ATTR_NEXT_LOWER_BADGE_NAME: next_lower_badge_name,
+            const.ATTR_NEXT_LOWER_BADGE_EID: badge_entity_ids.get(
+                const.ATTR_NEXT_LOWER_BADGE_EID
+            ),
+            const.ATTR_BADGE_STATUS: badge_status,
+            const.DATA_USER_BADGES_EARNED_LAST_AWARDED: last_awarded_date,
+            const.DATA_USER_BADGES_EARNED_AWARD_COUNT: award_count,
+            **extra_attrs,
+        }
+
+
+# ------------------------------------------------------------------------------------------
+class AssigneeBadgeProgressSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Badge Progress Sensor for a assignee's progress on a specific non-cumulative badge.
+
+    Tracks individual badge progress as percentage (0-100). Supports achievement,
+    challenge, daily, and periodic badge types. Provides comprehensive progress
+    metadata including criteria met, tracked chores, start/end dates, and award history.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_ASSIGNEE_BADGE_PROGRESS_SENSOR
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = PERCENTAGE
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        assignee_id: str,
+        assignee_name: str,
+        badge_id: str,
+        badge_name: str,
+    ):
+        """Initialize the AssigneeBadgeProgressSensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            assignee_id: Unique identifier for the assignee.
+            assignee_name: Display name of the assignee.
+            badge_id: Unique identifier for the badge.
+            badge_name: Display name of the badge.
+        """
+        super().__init__(coordinator)
+        self._entry = entry
+        self._assignee_id = assignee_id
+        self._assignee_name = assignee_name
+        self._badge_id = badge_id
+        self._badge_name = badge_name
+        self._attr_unique_id = f"{entry.entry_id}_{assignee_id}_{badge_id}{const.SENSOR_KC_UID_SUFFIX_BADGE_PROGRESS_SENSOR}"
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_ASSIGNEE_NAME: assignee_name,
+            const.TRANS_KEY_SENSOR_ATTR_BADGE_NAME: badge_name,
+        }
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # self.entity_id = f"{const.SENSOR_KC_PREFIX}{assignee_name}{const.SENSOR_KC_EID_MIDFIX_BADGE_PROGRESS_SENSOR}{badge_name}"
+        self._attr_device_info = create_assignee_device_info_from_coordinator(
+            self.coordinator, assignee_id, assignee_name, entry
+        )
+
+    @property
+    def native_value(self) -> float:
+        """Return the badge's overall progress as a percentage."""
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        badge_progress = assignee_info.get(const.DATA_USER_BADGE_PROGRESS, {}).get(
+            self._badge_id, {}
+        )
+        progress = badge_progress.get(
+            const.DATA_USER_BADGE_PROGRESS_OVERALL_PROGRESS, 0.0
+        )
+        return round(progress * 100, const.DATA_FLOAT_PRECISION)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return the badge progress details as attributes."""
+        badge_info: BadgeData = cast(
+            "BadgeData", self.coordinator.badges_data.get(self._badge_id, {})
+        )
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        badge_progress = assignee_info.get(const.DATA_USER_BADGE_PROGRESS, {}).get(
+            self._badge_id, {}
+        )
+
+        # Defensive: Handle badges_earned as either dict (v42+) or list (legacy v41)
+        badges_earned_data = assignee_info.get(const.DATA_USER_BADGES_EARNED, {})
+        if isinstance(badges_earned_data, dict):
+            badge_earned = badges_earned_data.get(self._badge_id, {})
+        else:
+            # Legacy v41: list format, no per-badge metadata
+            badge_earned = {}
+
+        last_awarded_date = badge_earned.get(
+            const.DATA_USER_BADGES_EARNED_LAST_AWARDED, const.SENTINEL_NONE
+        )
+        # Phase 4B: Read award_count from periods.all_time.all_time (Lean Item pattern)
+        periods = badge_earned.get(const.DATA_USER_BADGES_EARNED_PERIODS, {})
+        period_key_mapping = {
+            const.PERIOD_ALL_TIME: const.DATA_USER_BADGES_EARNED_PERIODS_ALL_TIME
+        }
+        award_count = self.coordinator.stats.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            const.DATA_USER_BADGES_EARNED_AWARD_COUNT,
+            period_key_mapping=period_key_mapping,
+        )
+
+        badge_labels = [
+            get_friendly_label(self.hass, label)
+            for label in cast("list", badge_info.get(const.DATA_BADGE_LABELS, []))
+        ]
+
+        tracked_chores_cfg = badge_info.get(const.DATA_BADGE_TRACKED_CHORES, {})
+        selected_chore_ids = (
+            tracked_chores_cfg.get(
+                const.DATA_BADGE_TRACKED_CHORES_SELECTED_CHORES,
+                [],
+            )
+            if isinstance(tracked_chores_cfg, dict)
+            else []
+        )
+        required_chores = [
+            cast("ChoreData", self.coordinator.chores_data.get(chore_id, {})).get(
+                const.DATA_CHORE_NAME
+            )
+            or chore_id
+            for chore_id in selected_chore_ids
+        ]
+
+        structured_awards = (
+            self.coordinator.gamification_manager.get_structured_badge_awards(
+                badge_info
+            )
+        )
+
+        reset_schedule_raw = badge_info.get(const.DATA_BADGE_RESET_SCHEDULE, {})
+        if not isinstance(reset_schedule_raw, dict):
+            reset_schedule_raw = {}
+
+        recurring_frequency = str(
+            reset_schedule_raw.get(
+                const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY,
+                const.FREQUENCY_NONE,
+            )
+        )
+        start_date_raw = reset_schedule_raw.get(
+            const.DATA_BADGE_RESET_SCHEDULE_START_DATE
+        )
+        start_date = start_date_raw if isinstance(start_date_raw, str) else None
+        end_date_raw = reset_schedule_raw.get(const.DATA_BADGE_RESET_SCHEDULE_END_DATE)
+        end_date = end_date_raw if isinstance(end_date_raw, str) else None
+        reset_schedule = {
+            const.DATA_BADGE_RESET_SCHEDULE_RECURRING_FREQUENCY: recurring_frequency,
+            const.DATA_BADGE_RESET_SCHEDULE_START_DATE: start_date,
+            const.DATA_BADGE_RESET_SCHEDULE_END_DATE: end_date,
+        }
+
+        target_raw = badge_info.get(const.DATA_BADGE_TARGET, {})
+        target = (
+            cast("dict[str, Any]", target_raw) if isinstance(target_raw, dict) else {}
+        )
+
+        system_badge_eid: str | None = None
+        try:
+            entity_registry = async_get(self.hass)
+            unique_id = f"{self._entry.entry_id}_{self._badge_id}{const.SENSOR_KC_UID_SUFFIX_BADGE_SENSOR}"
+            system_badge_eid = entity_registry.async_get_entity_id(
+                "sensor", const.DOMAIN, unique_id
+            )
+        except (KeyError, ValueError, AttributeError):
+            system_badge_eid = None
+
+        # Build a dictionary with only the requested fields
+        attributes = {
+            # Group 1: Identity
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_BADGE_PROGRESS,
+            const.ATTR_USER_NAME: self._assignee_name,
+            const.ATTR_BADGE_NAME: badge_progress.get(
+                const.DATA_USER_BADGE_PROGRESS_NAME
+            ),
+            # Group 2: Status/progress
+            const.DATA_USER_BADGE_PROGRESS_STATUS: badge_progress.get(
+                const.DATA_USER_BADGE_PROGRESS_STATUS
+            ),
+            const.DATA_BADGE_TYPE: badge_info.get(const.DATA_BADGE_TYPE),
+            const.DATA_USER_BADGE_PROGRESS_OVERALL_PROGRESS: badge_progress.get(
+                const.DATA_USER_BADGE_PROGRESS_OVERALL_PROGRESS
+            ),
+            const.DATA_USER_BADGE_PROGRESS_CRITERIA_MET: badge_progress.get(
+                const.DATA_USER_BADGE_PROGRESS_CRITERIA_MET
+            ),
+            const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY: badge_progress.get(
+                const.DATA_USER_BADGE_PROGRESS_LAST_UPDATE_DAY
+            ),
+            # Retained per-day streak counts, so the pre-break value stays readable
+            # after a reset to zero. Unlike the progress state above, which caps at
+            # 1.0, this is not saturated.
+            const.DATA_USER_BADGE_PROGRESS_STREAK_HISTORY: badge_progress.get(
+                const.DATA_USER_BADGE_PROGRESS_STREAK_HISTORY, {}
+            ),
+            # Group 3: Target definition
+            const.DATA_BADGE_TARGET_TYPE: target.get(const.DATA_BADGE_TARGET_TYPE),
+            const.DATA_BADGE_TARGET_THRESHOLD_VALUE: target.get(
+                const.DATA_BADGE_TARGET_THRESHOLD_VALUE
+            ),
+            const.ATTR_TARGET: target,
+            const.ATTR_REQUIRED_CHORES: required_chores,
+            const.ATTR_LABELS: badge_labels,
+            const.ATTR_DESCRIPTION: str(
+                badge_info.get(const.DATA_BADGE_DESCRIPTION, const.SENTINEL_EMPTY)
+            ),
+            # Group 4: Schedule/cycle
+            const.ATTR_RESET_SCHEDULE: reset_schedule,
+            # Group 5: Associations
+            const.ATTR_ASSOCIATED_ACHIEVEMENT: badge_info.get(
+                const.DATA_BADGE_ASSOCIATED_ACHIEVEMENT, None
+            ),
+            const.ATTR_ASSOCIATED_CHALLENGE: badge_info.get(
+                const.DATA_BADGE_ASSOCIATED_CHALLENGE, None
+            ),
+            # Group 6: Awards
+            const.ATTR_BADGE_AWARDS: structured_awards,
+            # Group 7: Earn history
+            const.DATA_USER_BADGES_EARNED_LAST_AWARDED: last_awarded_date,
+            const.DATA_USER_BADGES_EARNED_AWARD_COUNT: award_count,
+            # Group 8: Cross-link
+            const.ATTR_SYSTEM_BADGE_EID: system_badge_eid,
+        }
+
+        occasion_type = badge_info.get(const.DATA_BADGE_OCCASION_TYPE)
+        if isinstance(occasion_type, str) and occasion_type:
+            attributes[const.ATTR_OCCASION_TYPE] = occasion_type
+
+        # Convert tracked chore IDs to friendly names and add to attributes
+        tracked_chores_cfg = badge_info.get(const.DATA_BADGE_TRACKED_CHORES, {})
+        tracked_chore_ids_raw: list[str] | Any = tracked_chores_cfg.get(
+            const.DATA_BADGE_TRACKED_CHORES_SELECTED_CHORES, []
+        )
+        tracked_chore_ids: list[str] = (
+            tracked_chore_ids_raw if isinstance(tracked_chore_ids_raw, list) else []
+        )
+        if tracked_chore_ids:
+            chore_names: list[str] = [
+                str(
+                    cast(
+                        "ChoreData", self.coordinator.chores_data.get(chore_id, {})
+                    ).get(const.DATA_CHORE_NAME)
+                    or chore_id
+                )
+                for chore_id in tracked_chore_ids
+            ]
+            attributes[const.DATA_BADGE_TRACKED_CHORES] = chore_names
+        else:
+            attributes[const.DATA_BADGE_TRACKED_CHORES] = []
+
+        return attributes
+
+    @property
+    def icon(self) -> str | None:
+        """Return the icon for the badge."""
+        badge_info: BadgeData = cast(
+            "BadgeData", self.coordinator.badges_data.get(self._badge_id, {})
+        )
+        icon = badge_info.get(const.DATA_BADGE_ICON)
+        return str(icon) if icon else None
+
+
+# ------------------------------------------------------------------------------------------
+class SystemBadgeSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Sensor representing a single badge in ChoreOps.
+
+    Provides system-wide badge configuration and metadata including badge type
+    (cumulative, achievement, challenge, daily, periodic, special), target values,
+    associated achievements/challenges, tracked chores, and award items (points,
+    rewards, bonuses, penalties, multipliers). Tracks which assignees have earned the
+    badge and which assignees are assigned to it. Supports occasion-based badges for
+    special events.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_BADGE_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        badge_id: str,
+        badge_name: str,
+    ):
+        """Initialize the sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            badge_id: Unique identifier for the badge.
+            badge_name: Display name of the badge.
+        """
+        super().__init__(coordinator)
+        self._entry = entry
+        self._badge_id = badge_id
+        self._badge_name = badge_name
+        self._attr_unique_id = (
+            f"{entry.entry_id}_{badge_id}{const.SENSOR_KC_UID_SUFFIX_BADGE_SENSOR}"
+        )
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_BADGE_NAME: badge_name
+        }
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # self.entity_id = f"{const.SENSOR_KC_PREFIX}{badge_name}{const.SENSOR_KC_EID_SUFFIX_BADGE_SENSOR}"
+        self._attr_device_info = create_system_device_info(entry)
+
+    @property
+    def native_value(self) -> int:
+        """State: number of assignees who have earned this badge."""
+        badge_info: BadgeData = cast(
+            "BadgeData", self.coordinator.badges_data.get(self._badge_id, {})
+        )
+        assignees_earned_ids = badge_info.get(const.DATA_BADGE_EARNED_BY, [])
+        return len(assignees_earned_ids)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Full badge info, including per-assignee earned stats and periods."""
+        badge_info: BadgeData = cast(
+            "BadgeData", self.coordinator.badges_data.get(self._badge_id, {})
+        )
+        attributes: dict[str, Any] = {
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_BADGE,
+            const.ATTR_BADGE_NAME: self._badge_name,
+            const.ATTR_DESCRIPTION: badge_info.get(
+                const.DATA_BADGE_DESCRIPTION, const.SENTINEL_EMPTY
+            ),
+        }
+        attributes[const.ATTR_BADGE_TYPE] = badge_info.get(
+            const.DATA_BADGE_TYPE, const.BADGE_TYPE_CUMULATIVE
+        )
+        attributes[const.ATTR_LABELS] = [
+            get_friendly_label(self.hass, label)
+            for label in cast("list", badge_info.get(const.DATA_BADGE_LABELS, []))
+        ]
+        # Per-assignee earned stats
+        assignees_earned_ids = badge_info.get(const.DATA_BADGE_EARNED_BY, [])
+        assignees_earned = []
+        for assignee_id in cast("list", assignees_earned_ids):
+            assignee_info = self.coordinator.assignees_data.get(assignee_id)
+            if not assignee_info:
+                continue
+            assignees_earned.append(
+                assignee_info.get(const.DATA_USER_NAME, assignee_id)
+            )
+
+        attributes[const.ATTR_USERS_EARNED] = assignees_earned
+
+        # Per-assignee assigned stats
+        assigned_assignees_ids = badge_info.get(const.DATA_BADGE_ASSIGNED_USER_IDS, [])
+        assigned_assignees = []
+        for assignee_id in assigned_assignees_ids:
+            assignee_info = self.coordinator.assignees_data.get(assignee_id)
+            if not assignee_info:
+                continue
+            assigned_assignees.append(
+                assignee_info.get(const.DATA_USER_NAME, assignee_id)
+            )
+
+        attributes[const.ATTR_USERS_ASSIGNED] = assigned_assignees
+
+        attributes[const.ATTR_TARGET] = badge_info.get(const.DATA_BADGE_TARGET, None)
+        attributes[const.ATTR_ASSOCIATED_ACHIEVEMENT] = badge_info.get(
+            const.DATA_BADGE_ASSOCIATED_ACHIEVEMENT, None
+        )
+        attributes[const.ATTR_ASSOCIATED_CHALLENGE] = badge_info.get(
+            const.DATA_BADGE_ASSOCIATED_CHALLENGE, None
+        )
+        occasion_type = badge_info.get(const.DATA_BADGE_OCCASION_TYPE, None)
+        if occasion_type:
+            attributes[const.ATTR_OCCASION_TYPE] = occasion_type
+
+        # Get tracked chores from nested structure: tracked_chores.selected_chores
+        tracked_chores = badge_info.get(const.DATA_BADGE_TRACKED_CHORES, {})
+        selected_chore_ids = tracked_chores.get(
+            const.DATA_BADGE_TRACKED_CHORES_SELECTED_CHORES, []
+        )
+        attributes[const.ATTR_REQUIRED_CHORES] = [
+            cast("ChoreData", self.coordinator.chores_data.get(chore_id, {})).get(
+                const.DATA_CHORE_NAME
+            )
+            or chore_id
+            for chore_id in selected_chore_ids
+        ]
+
+        attributes[const.ATTR_BADGE_AWARDS] = (
+            self.coordinator.gamification_manager.get_structured_badge_awards(
+                badge_info
+            )
+        )
+
+        attributes[const.ATTR_RESET_SCHEDULE] = badge_info.get(
+            const.DATA_BADGE_RESET_SCHEDULE, None
+        )
+
+        return attributes
+
+    @property
+    def icon(self) -> str | None:
+        badge_info: BadgeData = cast(
+            "BadgeData", self.coordinator.badges_data.get(self._badge_id, {})
+        )
+        icon = badge_info.get(const.DATA_BADGE_ICON)
+        return str(icon) if icon else None
+
+
+# ------------------------------------------------------------------------------------------
+class SystemChoreSharedStateSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Sensor that shows the global state of a shared or shared_first chore.
+
+    Tracks system-wide chore state independent of individual assignee status.
+    Supports both SHARED (multiple assignees can complete) and SHARED_FIRST
+    (first assignee to complete wins) completion criteria.
+
+    Provides comprehensive chore configuration including recurring frequency
+    (daily/weekly/monthly/custom), applicable days, due dates, default points,
+    partial completion settings, multiple claims per day allowance, and total
+    approvals today across all assigned assignees. Useful for monitoring chores that
+    multiple assignees can claim simultaneously or competitively.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_SHARED_CHORE_GLOBAL_STATUS_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        chore_id: str,
+        chore_name: str,
+    ):
+        """Initialize the sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            chore_id: Unique identifier for the shared chore.
+            chore_name: Display name of the shared chore.
+        """
+        super().__init__(coordinator)
+        self._entry = entry
+        self._chore_id = chore_id
+        self._chore_name = chore_name
+        self._attr_unique_id = f"{entry.entry_id}_{chore_id}{const.SENSOR_KC_UID_SUFFIX_SHARED_CHORE_GLOBAL_STATE_SENSOR}"
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_CHORE_NAME: chore_name,
+        }
+        self._attr_device_info = create_system_device_info(entry)
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # self.entity_id = f"{const.SENSOR_KC_PREFIX}{const.SENSOR_KC_EID_MIDFIX_SHARED_CHORE_GLOBAL_STATUS_SENSOR}{chore_name}"
+
+    @property
+    def native_value(self) -> str:
+        """Return the global state for the chore.
+
+        Returns manager-projected global UI state from persisted global state.
+        """
+        global_state_context = (
+            self.coordinator.chore_manager.get_global_chore_state_context(
+                self._chore_id
+            )
+        )
+        return global_state_context["ui_state"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return additional attributes for the chore.
+
+        Attributes organized by category:
+        1. Identity & Meta - purpose, name, description, icon, assigned assignees, labels
+        2. Configuration - points, completion_criteria, approval_reset, frequency, days, due_date
+        3. Statistics - today's approvals across all assigned assignees
+        4. Timestamps - last_claimed, last_completed (chore-level)
+        """
+        chore_info: ChoreData = cast(
+            "ChoreData", self.coordinator.chores_data.get(self._chore_id, {})
+        )
+        assigned_assignees_ids = chore_info.get(const.DATA_CHORE_ASSIGNED_USER_IDS, [])
+        assigned_assignees_names = [
+            name
+            for k_id in assigned_assignees_ids
+            if (
+                name := get_item_name_or_log_error(
+                    "assignee",
+                    k_id,
+                    self.coordinator.assignees_data.get(k_id, {}),
+                    const.DATA_USER_NAME,
+                )
+            )
+        ]
+
+        stored_labels = chore_info.get(const.DATA_CHORE_LABELS, [])
+        friendly_labels = [
+            get_friendly_label(self.hass, label)
+            for label in cast("list", stored_labels)
+        ]
+
+        # Get today's approvals from periods structure (not legacy flat field)
+        total_approvals_today = const.DEFAULT_ZERO
+        today_local_iso = dt_today_local().isoformat()
+
+        for assignee_id in assigned_assignees_ids:
+            assignee_data: AssigneeData = cast(
+                "AssigneeData", self.coordinator.assignees_data.get(assignee_id, {})
+            )
+            # Access: assignee_data[DATA_USER_CHORE_DATA][chore_id][periods][daily][today_iso][approved]
+            assignee_chore_data = assignee_data.get(const.DATA_USER_CHORE_DATA, {}).get(
+                self._chore_id, {}
+            )
+            periods = assignee_chore_data.get(const.DATA_USER_CHORE_DATA_PERIODS, {})
+            daily_periods = periods.get(const.DATA_USER_CHORE_DATA_PERIODS_DAILY, {})
+            today_period = daily_periods.get(today_local_iso, {})
+            total_approvals_today += today_period.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_APPROVED, const.DEFAULT_ZERO
+            )
+
+        attributes = {
+            # --- 0. Rotation state ---
+            const.ATTR_CHORE_ROTATION_CYCLE_OVERRIDE: chore_info.get(
+                const.DATA_CHORE_ROTATION_CYCLE_OVERRIDE, False
+            ),
+            # --- 1. Identity & Meta ---
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_SHARED_CHORE,
+            const.ATTR_CHORE_NAME: self._chore_name,
+            const.ATTR_DESCRIPTION: chore_info.get(
+                const.DATA_CHORE_DESCRIPTION, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_ASSIGNED_USER_NAMES: assigned_assignees_names,
+            const.ATTR_LABELS: friendly_labels,
+            # --- 2. Configuration ---
+            const.ATTR_DEFAULT_POINTS: chore_info.get(
+                const.DATA_CHORE_DEFAULT_POINTS, const.DEFAULT_ZERO
+            ),
+            const.ATTR_COMPLETION_CRITERIA: chore_info.get(
+                const.DATA_CHORE_COMPLETION_CRITERIA,
+                const.COMPLETION_CRITERIA_INDEPENDENT,
+            ),
+            const.ATTR_APPROVAL_RESET_TYPE: chore_info.get(
+                const.DATA_CHORE_APPROVAL_RESET_TYPE,
+                const.DEFAULT_APPROVAL_RESET_TYPE,
+            ),
+            const.ATTR_RECURRING_FREQUENCY: chore_info.get(
+                const.DATA_CHORE_RECURRING_FREQUENCY, const.SENTINEL_NONE_TEXT
+            ),
+            const.ATTR_APPLICABLE_DAYS: chore_info.get(
+                const.DATA_CHORE_APPLICABLE_DAYS, []
+            ),
+            # Return None when no due_date - dashboard templates use None check
+            const.ATTR_DUE_DATE: chore_info.get(const.DATA_CHORE_DUE_DATE),
+            const.ATTR_DUE_WINDOW_START: self._get_due_window_start_iso(),
+            # --- 3. Statistics ---
+            const.ATTR_CHORE_APPROVALS_TODAY: total_approvals_today,
+            # --- 4. Timestamps ---
+            const.ATTR_LAST_CLAIMED: chore_info.get(const.DATA_CHORE_LAST_CLAIMED),
+            const.ATTR_LAST_APPROVED: chore_info.get(const.DATA_CHORE_LAST_COMPLETED),
+        }
+
+        # Add SHARED_FIRST specific attributes (who claimed/completed)
+        completion_criteria = chore_info.get(
+            const.DATA_CHORE_COMPLETION_CRITERIA, const.COMPLETION_CRITERIA_INDEPENDENT
+        )
+        if completion_criteria == const.COMPLETION_CRITERIA_SHARED_FIRST:
+            # Ownership values are display names (string or list[str])
+            claimed_by_value = chore_info.get(const.DATA_CHORE_CLAIMED_BY)
+            completed_by_value = chore_info.get(const.DATA_CHORE_COMPLETED_BY)
+
+            claimed_by_names = (
+                [
+                    value
+                    for value in claimed_by_value
+                    if isinstance(value, str) and value
+                ]
+                if isinstance(claimed_by_value, list)
+                else [claimed_by_value]
+                if isinstance(claimed_by_value, str) and claimed_by_value
+                else []
+            )
+            completed_by_names = (
+                [
+                    value
+                    for value in completed_by_value
+                    if isinstance(value, str) and value
+                ]
+                if isinstance(completed_by_value, list)
+                else [completed_by_value]
+                if isinstance(completed_by_value, str) and completed_by_value
+                else []
+            )
+
+            attributes[const.ATTR_CHORE_CLAIMED_BY] = (
+                claimed_by_names[0] if claimed_by_names else None
+            )
+            attributes[const.ATTR_CHORE_COMPLETED_BY] = (
+                completed_by_names[0] if completed_by_names else None
+            )
+
+        if (
+            chore_info.get(const.DATA_CHORE_RECURRING_FREQUENCY)
+            in const.CUSTOM_INTERVAL_FREQUENCIES
+        ):
+            attributes[const.ATTR_CUSTOM_FREQUENCY_INTERVAL] = chore_info.get(
+                const.DATA_CHORE_CUSTOM_INTERVAL
+            )
+            attributes[const.ATTR_CUSTOM_FREQUENCY_UNIT] = chore_info.get(
+                const.DATA_CHORE_CUSTOM_INTERVAL_UNIT
+            )
+
+        return attributes
+
+    def _get_due_window_start_iso(self) -> str | None:
+        """Get the due window start time as ISO string."""
+        due_window_start = self.coordinator.chore_manager.get_due_window_start(
+            self._chore_id, None
+        )
+        return due_window_start.isoformat() if due_window_start else None
+
+    def _get_time_until_due(self) -> str | None:
+        """Get human-readable time remaining until due window starts.
+
+        Returns "0d 0h 0m" if window already started (past) or if due window
+        is disabled (0), returns same as time_until_overdue.
+        """
+        chore_info: ChoreData = cast(
+            "ChoreData", self.coordinator.chores_data.get(self._chore_id, {})
+        )
+        due_window_offset = chore_info.get(
+            const.DATA_CHORE_DUE_WINDOW_OFFSET, const.DEFAULT_DUE_WINDOW_OFFSET
+        )
+
+        # If due window disabled (0), match due date behavior
+        if due_window_offset == "0":
+            return self._get_time_until_overdue()
+
+        due_window_start = self.coordinator.chore_manager.get_due_window_start(
+            self._chore_id, None
+        )
+        if not due_window_start:
+            return None
+
+        # Calculate time until window start
+        result = dt_time_until(due_window_start)
+        # If already past (None), return 0d 0h 0m
+        return result or "0d 0h 0m"
+
+    def _get_time_until_overdue(self) -> str | None:
+        """Get human-readable time remaining until due date (overdue).
+
+        Returns "0d 0h 0m" if already overdue (past).
+        """
+        due_date = self.coordinator.chore_manager.get_due_date(self._chore_id, None)
+        if not due_date:
+            return None
+
+        result = dt_time_until(due_date)
+        # If already past (None), return 0d 0h 0m
+        return result or "0d 0h 0m"
+
+    @property
+    def icon(self) -> str | None:
+        """Return the icon for the chore sensor."""
+        chore_info: ChoreData = cast(
+            "ChoreData", self.coordinator.chores_data.get(self._chore_id, {})
+        )
+        return chore_info.get(const.DATA_CHORE_ICON) or None
+
+
+# ------------------------------------------------------------------------------------------
+class AssigneeRewardStatusSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Shows the status of a reward for a particular assignee.
+
+    Tracks reward redemption lifecycle: Not Claimed → Claimed (pending approval) → Approved.
+    Provides reward metadata including cost, claims/approvals counts, and button entity IDs
+    for UI integration.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_REWARD_STATUS_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        assignee_id: str,
+        assignee_name: str,
+        reward_id: str,
+        reward_name: str,
+    ):
+        """Initialize the sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            assignee_id: Unique identifier for the assignee.
+            assignee_name: Display name of the assignee.
+            reward_id: Unique identifier for the reward.
+            reward_name: Display name of the reward.
+        """
+
+        super().__init__(coordinator)
+        self._entry = entry
+        self._assignee_id = assignee_id
+        self._assignee_name = assignee_name
+        self._reward_id = reward_id
+        self._reward_name = reward_name
+        self._attr_unique_id = f"{entry.entry_id}_{assignee_id}_{reward_id}{const.SENSOR_KC_UID_SUFFIX_REWARD_STATUS_SENSOR}"
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_ASSIGNEE_NAME: assignee_name,
+            const.TRANS_KEY_SENSOR_ATTR_REWARD_NAME: reward_name,
+        }
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # self.entity_id = f"{const.SENSOR_KC_PREFIX}{assignee_name}{const.SENSOR_KC_EID_MIDFIX_REWARD_STATUS_SENSOR}{reward_name}"
+        self._attr_device_info = create_assignee_device_info_from_coordinator(
+            self.coordinator, assignee_id, assignee_name, entry
+        )
+
+    @property
+    def native_value(self) -> str:
+        """Return the current reward status: 'locked', 'available', or 'requested'."""
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        reward_data = assignee_info.get(const.DATA_USER_REWARD_DATA, {}).get(
+            self._reward_id, {}
+        )
+
+        # Check pending_count for requested status
+        pending_count = reward_data.get(const.DATA_USER_REWARD_DATA_PENDING_COUNT, 0)
+        if pending_count > 0:
+            return const.REWARD_STATE_REQUESTED
+
+        # Check if assignee can afford the reward
+        assignee_points = assignee_info.get(const.DATA_USER_POINTS, 0)
+        reward_info: RewardData = cast(
+            "RewardData", self.coordinator.rewards_data.get(self._reward_id, {})
+        )
+        reward_cost = round_points(
+            float(reward_info.get(const.DATA_REWARD_COST, const.DEFAULT_ZERO))
+        )
+
+        if assignee_points >= reward_cost:
+            return const.REWARD_STATE_AVAILABLE
+        return const.REWARD_STATE_LOCKED
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Provide comprehensive reward statistics as attributes.
+
+        Returns period-based claims, approvals, disapprovals, points spent,
+        timestamps, and calculated rates for dashboard and automation use.
+        """
+        reward_info: RewardData = cast(
+            "RewardData", self.coordinator.rewards_data.get(self._reward_id, {})
+        )
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        reward_data = assignee_info.get(const.DATA_USER_REWARD_DATA, {}).get(
+            self._reward_id, {}
+        )
+
+        stored_labels = reward_info.get(const.DATA_REWARD_LABELS, [])
+        friendly_labels = [
+            get_friendly_label(self.hass, label)
+            for label in cast("list", stored_labels)
+        ]
+
+        # Get current period keys
+        now_local = dt_now_local()
+        today_local_iso = dt_today_local().isoformat()
+        week_local_iso = now_local.strftime("%Y-W%V")
+        month_local_iso = now_local.strftime("%Y-%m")
+        year_local_iso = now_local.strftime("%Y")
+
+        # Get period data
+        periods = reward_data.get(const.DATA_USER_REWARD_DATA_PERIODS, {})
+        daily = periods.get(const.DATA_USER_REWARD_DATA_PERIODS_DAILY, {})
+        weekly = periods.get(const.DATA_USER_REWARD_DATA_PERIODS_WEEKLY, {})
+        monthly = periods.get(const.DATA_USER_REWARD_DATA_PERIODS_MONTHLY, {})
+        yearly = periods.get(const.DATA_USER_REWARD_DATA_PERIODS_YEARLY, {})
+        all_time_bucket = periods.get(const.DATA_USER_REWARD_DATA_PERIODS_ALL_TIME, {})
+
+        # Calculate period stats
+        today_stats: PeriodicStatsEntry = daily.get(today_local_iso, {})
+        week_stats: PeriodicStatsEntry = weekly.get(week_local_iso, {})
+        month_stats: PeriodicStatsEntry = monthly.get(month_local_iso, {})
+        year_stats: PeriodicStatsEntry = yearly.get(year_local_iso, {})
+        all_time_stats: PeriodicStatsEntry = all_time_bucket.get(
+            const.PERIOD_ALL_TIME, {}
+        )
+
+        claimed_today = today_stats.get(const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED, 0)
+        claimed_week = week_stats.get(const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED, 0)
+        claimed_month = month_stats.get(const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED, 0)
+        claimed_year = year_stats.get(const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED, 0)
+        claimed_all_time = all_time_stats.get(
+            const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED, const.DEFAULT_ZERO
+        )
+
+        approved_today = today_stats.get(const.DATA_USER_REWARD_DATA_PERIOD_APPROVED, 0)
+        approved_week = week_stats.get(const.DATA_USER_REWARD_DATA_PERIOD_APPROVED, 0)
+        approved_month = month_stats.get(const.DATA_USER_REWARD_DATA_PERIOD_APPROVED, 0)
+        approved_year = year_stats.get(const.DATA_USER_REWARD_DATA_PERIOD_APPROVED, 0)
+        approved_all_time = all_time_stats.get(
+            const.DATA_USER_REWARD_DATA_PERIOD_APPROVED, const.DEFAULT_ZERO
+        )
+
+        disapproved_today = today_stats.get(
+            const.DATA_USER_REWARD_DATA_PERIOD_DISAPPROVED, 0
+        )
+        disapproved_week = week_stats.get(
+            const.DATA_USER_REWARD_DATA_PERIOD_DISAPPROVED, 0
+        )
+        disapproved_month = month_stats.get(
+            const.DATA_USER_REWARD_DATA_PERIOD_DISAPPROVED, 0
+        )
+        disapproved_year = year_stats.get(
+            const.DATA_USER_REWARD_DATA_PERIOD_DISAPPROVED, 0
+        )
+        disapproved_all_time = all_time_stats.get(
+            const.DATA_USER_REWARD_DATA_PERIOD_DISAPPROVED, const.DEFAULT_ZERO
+        )
+
+        points_spent_today = today_stats.get(
+            const.DATA_USER_REWARD_DATA_PERIOD_POINTS, 0
+        )
+        points_spent_week = week_stats.get(const.DATA_USER_REWARD_DATA_PERIOD_POINTS, 0)
+        points_spent_month = month_stats.get(
+            const.DATA_USER_REWARD_DATA_PERIOD_POINTS, 0
+        )
+        points_spent_year = year_stats.get(const.DATA_USER_REWARD_DATA_PERIOD_POINTS, 0)
+        points_spent_all_time = all_time_stats.get(
+            const.DATA_USER_REWARD_DATA_PERIOD_POINTS, const.DEFAULT_ZERO
+        )
+
+        # Calculate rates
+        approval_rate = (
+            round((approved_all_time / claimed_all_time) * 100, 1)
+            if claimed_all_time > 0
+            else 0.0
+        )
+
+        # Calculate claim rate per day (week = 7 days, month = 30 days average)
+        claim_rate_week = round(claimed_week / 7, 2) if claimed_week > 0 else 0.0
+        claim_rate_month = round(claimed_month / 30, 2) if claimed_month > 0 else 0.0
+
+        # Get timestamps
+        last_claimed = reward_data.get(const.DATA_USER_REWARD_DATA_LAST_CLAIMED)
+        last_approved = reward_data.get(const.DATA_USER_REWARD_DATA_LAST_APPROVED)
+        last_disapproved = reward_data.get(const.DATA_USER_REWARD_DATA_LAST_DISAPPROVED)
+
+        # Resolve assigned user names from stored UUIDs
+        assigned_ids: list[str] = reward_info.get(
+            const.DATA_REWARD_ASSIGNED_USER_IDS, []
+        )
+        assigned_user_names = [
+            name
+            for k_id in assigned_ids
+            if (name := get_assignee_name_by_id(self.coordinator, k_id))
+        ]
+
+        # Get pending claims count
+        pending_claims = reward_data.get(
+            const.DATA_USER_REWARD_DATA_PENDING_COUNT, const.DEFAULT_ZERO
+        )
+
+        # Get claim, approve, and disapprove button entity IDs
+        claim_button_eid = None
+        approve_button_eid = None
+        disapprove_button_eid = None
+        try:
+            entity_registry = async_get(self.hass)
+            # Claim button uses UID suffix pattern (v0.43+)
+            claim_unique_id = f"{self._entry.entry_id}_{self._assignee_id}_{self._reward_id}{const.BUTTON_KC_UID_SUFFIX_ASSIGNEE_REWARD_REDEEM}"
+            claim_button_eid = entity_registry.async_get_entity_id(
+                "button", const.DOMAIN, claim_unique_id
+            )
+
+            # Approve and disapprove buttons use UID suffixes
+            approve_unique_id = f"{self._entry.entry_id}_{self._assignee_id}_{self._reward_id}{const.BUTTON_KC_UID_SUFFIX_APPROVE_REWARD}"
+            approve_button_eid = entity_registry.async_get_entity_id(
+                "button", const.DOMAIN, approve_unique_id
+            )
+
+            disapprove_unique_id = f"{self._entry.entry_id}_{self._assignee_id}_{self._reward_id}{const.BUTTON_KC_UID_SUFFIX_DISAPPROVE_REWARD}"
+            disapprove_button_eid = entity_registry.async_get_entity_id(
+                "button", const.DOMAIN, disapprove_unique_id
+            )
+        except (KeyError, ValueError, AttributeError):
+            pass
+
+        # Return attributes in logical order: common, status, timestamps, periods, rates, buttons, labels
+        return {
+            # Common fields
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_REWARD_STATUS,
+            const.ATTR_USER_NAME: self._assignee_name,
+            const.ATTR_REWARD_NAME: self._reward_name,
+            const.ATTR_DESCRIPTION: reward_info.get(
+                const.DATA_REWARD_DESCRIPTION, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_ASSIGNED_USER_NAMES: assigned_user_names,
+            const.ATTR_COST: reward_info.get(
+                const.DATA_REWARD_COST, const.DEFAULT_REWARD_COST
+            ),
+            # Status tracking
+            const.ATTR_REWARD_PENDING_CLAIMS: pending_claims,
+            # Timestamps
+            const.ATTR_REWARD_LAST_CLAIMED: last_claimed,
+            const.ATTR_REWARD_LAST_APPROVED: last_approved,
+            const.ATTR_REWARD_LAST_DISAPPROVED: last_disapproved,
+            # Claims by period
+            const.ATTR_REWARD_CLAIMED_TODAY: claimed_today,
+            const.ATTR_REWARD_CLAIMED_WEEK: claimed_week,
+            const.ATTR_REWARD_CLAIMED_MONTH: claimed_month,
+            const.ATTR_REWARD_CLAIMED_YEAR: claimed_year,
+            const.ATTR_REWARD_CLAIMED_ALL_TIME: claimed_all_time,
+            # Approvals by period
+            const.ATTR_REWARD_APPROVED_TODAY: approved_today,
+            const.ATTR_REWARD_APPROVED_WEEK: approved_week,
+            const.ATTR_REWARD_APPROVED_MONTH: approved_month,
+            const.ATTR_REWARD_APPROVED_YEAR: approved_year,
+            const.ATTR_REWARD_APPROVED_ALL_TIME: approved_all_time,
+            # Disapprovals by period
+            const.ATTR_REWARD_DISAPPROVED_TODAY: disapproved_today,
+            const.ATTR_REWARD_DISAPPROVED_WEEK: disapproved_week,
+            const.ATTR_REWARD_DISAPPROVED_MONTH: disapproved_month,
+            const.ATTR_REWARD_DISAPPROVED_YEAR: disapproved_year,
+            const.ATTR_REWARD_DISAPPROVED_ALL_TIME: disapproved_all_time,
+            # Points spent by period
+            const.ATTR_REWARD_POINTS_SPENT_TODAY: points_spent_today,
+            const.ATTR_REWARD_POINTS_SPENT_WEEK: points_spent_week,
+            const.ATTR_REWARD_POINTS_SPENT_MONTH: points_spent_month,
+            const.ATTR_REWARD_POINTS_SPENT_YEAR: points_spent_year,
+            const.ATTR_REWARD_POINTS_SPENT_ALL_TIME: points_spent_all_time,
+            # Calculated rates
+            const.ATTR_REWARD_APPROVAL_RATE: approval_rate,
+            const.ATTR_REWARD_CLAIM_RATE_WEEK: claim_rate_week,
+            const.ATTR_REWARD_CLAIM_RATE_MONTH: claim_rate_month,
+            # Button entity IDs
+            const.ATTR_REWARD_CLAIM_BUTTON_ENTITY_ID: claim_button_eid,
+            const.ATTR_REWARD_APPROVE_BUTTON_ENTITY_ID: approve_button_eid,
+            const.ATTR_REWARD_DISAPPROVE_BUTTON_ENTITY_ID: disapprove_button_eid,
+            # Labels
+            const.ATTR_LABELS: friendly_labels,
+        }
+
+    @property
+    def icon(self) -> str | None:
+        """Use the reward's custom icon if set, else fallback to icons.json."""
+        reward_info: RewardData = cast(
+            "RewardData", self.coordinator.rewards_data.get(self._reward_id, {})
+        )
+        return reward_info.get(const.DATA_REWARD_ICON) or None
+
+
+# ------------------------------------------------------------------------------------------
+class SystemAchievementSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Sensor representing an achievement.
+
+    Provides system-wide achievement definition and tracks aggregated progress
+    across all assigned assignees as a percentage (0-100). Supports three achievement
+    types: TOTAL (cumulative completions with baselines), STREAK (consecutive
+    completions), and DAILY_MIN (minimum daily requirements). Includes achievement
+    metadata such as target values, reward points, criteria, associated chore,
+    and list of assignees who have earned the achievement.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_ACHIEVEMENT_STATE_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        achievement_id: str,
+        achievement_name: str,
+    ):
+        """Initialize the SystemAchievementSensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            achievement_id: Unique identifier for the achievement.
+            achievement_name: Display name of the achievement.
+        """
+        super().__init__(coordinator)
+        self._entry = entry
+        self._achievement_id = achievement_id
+        self._achievement_name = achievement_name
+        self._attr_unique_id = f"{entry.entry_id}_{achievement_id}{const.SENSOR_KC_UID_SUFFIX_ACHIEVEMENT_SENSOR}"
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_ACHIEVEMENT_NAME: achievement_name,
+        }
+        self._attr_device_info = create_system_device_info(entry)
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # self.entity_id = f"{const.SENSOR_KC_PREFIX}{const.SENSOR_KC_EID_MIDFIX_ACHIEVEMENT_SENSOR}{achievement_name}"
+
+    @property
+    def native_value(self) -> Any:
+        """Return the overall progress percentage toward the achievement."""
+
+        achievement: AchievementData = cast(
+            "AchievementData",
+            self.coordinator.achievements_data.get(self._achievement_id, {}),
+        )
+        target = achievement.get(const.DATA_ACHIEVEMENT_TARGET_VALUE, 1)
+        assigned_assignees = achievement.get(
+            const.DATA_ACHIEVEMENT_ASSIGNED_USER_IDS, []
+        )
+
+        if not assigned_assignees:
+            return const.DEFAULT_ZERO
+
+        ach_type = achievement.get(const.DATA_ACHIEVEMENT_TYPE)
+        if ach_type == const.ACHIEVEMENT_TYPE_TOTAL:
+            total_current = const.DEFAULT_ZERO
+            total_effective_target = const.DEFAULT_ZERO
+            selected_chore_id = achievement.get(
+                const.DATA_ACHIEVEMENT_SELECTED_CHORE_ID
+            )
+
+            for assignee_id in assigned_assignees:
+                progress_data: AchievementProgress = achievement.get(
+                    const.DATA_ACHIEVEMENT_PROGRESS, {}
+                ).get(assignee_id, {})
+                baseline = (
+                    progress_data.get(
+                        const.DATA_ACHIEVEMENT_BASELINE, const.DEFAULT_ZERO
+                    )
+                    if isinstance(progress_data, dict)
+                    else const.DEFAULT_ZERO
+                )
+                # v43+: chore_stats deleted, use chore_periods.all_time.all_time (nested)
+                # For scoped achievements (selected chore), read the chore-scoped
+                # all-time total so the progress bar matches the evaluation engine
+                # (issue #245). Unscoped achievements keep the global bucket.
+                if selected_chore_id:
+                    scoped_all_time = self.coordinator.statistics_manager.get_badge_scoped_all_time_stats(
+                        assignee_id,
+                        [selected_chore_id],
+                    )
+                    current_total = scoped_all_time.get(
+                        const.DATA_USER_CHORE_DATA_PERIOD_APPROVED,
+                        const.DEFAULT_ZERO,
+                    )
+                else:
+                    assignee_data = cast(
+                        "AssigneeData",
+                        self.coordinator.assignees_data.get(assignee_id, {}),
+                    )
+                    chore_periods = assignee_data.get(const.DATA_USER_CHORE_PERIODS, {})
+                    all_time_container: dict[str, Any] = cast(
+                        "dict[str, Any]",
+                        chore_periods.get(
+                            const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME, {}
+                        ),
+                    )
+                    all_time_bucket: dict[str, Any] = cast(
+                        "dict[str, Any]",
+                        all_time_container.get(const.PERIOD_ALL_TIME, {}),
+                    )
+                    current_total = all_time_bucket.get(
+                        const.DATA_USER_CHORE_DATA_PERIOD_APPROVED,
+                        const.DEFAULT_ZERO,
+                    )
+                # Baseline guard: mirror the evaluation engine so a global baseline
+                # that exceeds the scoped total does not clamp display to 0.
+                if float(cast("Any", baseline)) > int(current_total):
+                    baseline = const.DEFAULT_ZERO
+                total_current += int(current_total)
+                total_effective_target += baseline + target  # type: ignore[operator]
+
+            percent = (
+                (int(total_current) / total_effective_target * 100)
+                if total_effective_target > const.DEFAULT_ZERO
+                else const.DEFAULT_ZERO
+            )
+
+        elif ach_type == const.ACHIEVEMENT_TYPE_STREAK:
+            total_current = const.DEFAULT_ZERO
+
+            for assignee_id in assigned_assignees:
+                progress_data_2: AchievementProgress = achievement.get(
+                    const.DATA_ACHIEVEMENT_PROGRESS, {}
+                ).get(assignee_id, {})
+                total_current += (
+                    progress_data_2.get(
+                        const.DATA_ACHIEVEMENT_CURRENT_STREAK, const.DEFAULT_ZERO
+                    )
+                    if isinstance(progress_data_2, dict)
+                    else const.DEFAULT_ZERO
+                )
+
+            global_target = target * len(assigned_assignees)
+
+            percent = (
+                (total_current / global_target * 100)
+                if global_target > const.DEFAULT_ZERO
+                else const.DEFAULT_ZERO
+            )
+
+        elif ach_type == const.ACHIEVEMENT_TYPE_DAILY_MIN:
+            total_progress = const.DEFAULT_ZERO
+
+            for assignee_id in assigned_assignees:
+                # Use Phase 7.5 cache API for temporal stats (not storage)
+                cache_stats = self.coordinator.statistics_manager.get_chore_stats(
+                    assignee_id
+                )
+                daily = cache_stats.get(
+                    const.PRES_USER_CHORES_APPROVED_TODAY, const.DEFAULT_ZERO
+                )
+                assignee_progress = (
+                    100
+                    if daily >= target
+                    else (daily / target * 100)
+                    if target > const.DEFAULT_ZERO
+                    else const.DEFAULT_ZERO
+                )
+                total_progress += assignee_progress
+
+            percent = total_progress / len(assigned_assignees)
+
+        else:
+            percent = const.DEFAULT_ZERO
+
+        return min(100, round(percent, const.DATA_FLOAT_PRECISION))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return extra attributes for this achievement."""
+        achievement: AchievementData = cast(
+            "AchievementData",
+            self.coordinator.achievements_data.get(self._achievement_id, {}),
+        )
+        progress = achievement.get(const.DATA_ACHIEVEMENT_PROGRESS, {})
+        assignees_progress = {}
+
+        earned_by = []
+        for assignee_id, data in progress.items():
+            if data.get(const.DATA_ACHIEVEMENT_AWARDED, False):
+                assignee_name = (
+                    get_assignee_name_by_id(self.coordinator, assignee_id)
+                    or assignee_id
+                )
+                earned_by.append(assignee_name)
+
+        associated_chore = const.SENTINEL_EMPTY
+        selected_chore_id = achievement.get(const.DATA_ACHIEVEMENT_SELECTED_CHORE_ID)
+        if selected_chore_id:
+            associated_chore = (
+                cast(
+                    "ChoreData", self.coordinator.chores_data.get(selected_chore_id, {})
+                ).get(const.DATA_CHORE_NAME)
+                or const.SENTINEL_EMPTY
+            )
+
+        assigned_assignees_ids = achievement.get(
+            const.DATA_ACHIEVEMENT_ASSIGNED_USER_IDS, []
+        )
+        assigned_assignees_names = [
+            name
+            for k_id in assigned_assignees_ids
+            if (
+                name := get_item_name_or_log_error(
+                    "assignee",
+                    k_id,
+                    self.coordinator.assignees_data.get(k_id, {}),
+                    const.DATA_USER_NAME,
+                )
+            )
+        ]
+        ach_type = achievement.get(const.DATA_ACHIEVEMENT_TYPE)
+        for assignee_id in assigned_assignees_ids:
+            assignee_name = (
+                get_assignee_name_by_id(self.coordinator, assignee_id) or assignee_id
+            )
+            progress_data: AchievementProgress = achievement.get(
+                const.DATA_ACHIEVEMENT_PROGRESS, {}
+            ).get(assignee_id, {})
+            if ach_type == const.ACHIEVEMENT_TYPE_TOTAL:
+                assignees_progress[assignee_name] = progress_data.get(
+                    const.DATA_ACHIEVEMENT_CURRENT_VALUE, const.DEFAULT_ZERO
+                )
+            elif ach_type == const.ACHIEVEMENT_TYPE_STREAK:
+                assignees_progress[assignee_name] = progress_data.get(
+                    const.DATA_ACHIEVEMENT_CURRENT_STREAK, const.DEFAULT_ZERO
+                )
+            elif (
+                achievement.get(const.DATA_ACHIEVEMENT_TYPE)
+                == const.ACHIEVEMENT_TYPE_DAILY_MIN
+            ):
+                # Use Phase 7.5 cache API for temporal stats (not storage)
+                cache_stats = self.coordinator.statistics_manager.get_chore_stats(
+                    assignee_id
+                )
+                assignees_progress[assignee_name] = cache_stats.get(
+                    const.PRES_USER_CHORES_APPROVED_TODAY, const.DEFAULT_ZERO
+                )
+            else:
+                assignees_progress[assignee_name] = const.DEFAULT_ZERO
+
+        stored_labels = achievement.get(const.DATA_ACHIEVEMENT_LABELS, [])
+        friendly_labels = [
+            get_friendly_label(self.hass, label)
+            for label in cast("list", stored_labels)
+        ]
+
+        return {
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_ACHIEVEMENT,
+            const.ATTR_ACHIEVEMENT_NAME: self._achievement_name,
+            const.ATTR_DESCRIPTION: achievement.get(
+                const.DATA_ACHIEVEMENT_DESCRIPTION, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_ASSIGNED_USER_NAMES: assigned_assignees_names,
+            const.ATTR_TYPE: ach_type,
+            const.ATTR_ASSOCIATED_CHORE: associated_chore,
+            const.ATTR_CRITERIA: achievement.get(
+                const.DATA_ACHIEVEMENT_CRITERIA, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_TARGET_VALUE: achievement.get(
+                const.DATA_ACHIEVEMENT_TARGET_VALUE
+            ),
+            const.ATTR_REWARD_POINTS: achievement.get(
+                const.DATA_ACHIEVEMENT_REWARD_POINTS
+            ),
+            const.ATTR_USERS_EARNED: earned_by,
+            const.ATTR_LABELS: friendly_labels,
+        }
+
+    @property
+    def icon(self) -> str | None:
+        """Return achievement custom icon or None for icons.json fallback."""
+        achievement_info: AchievementData = cast(
+            "AchievementData",
+            self.coordinator.achievements_data.get(self._achievement_id, {}),
+        )
+        return achievement_info.get(const.DATA_ACHIEVEMENT_ICON) or None
+
+
+# ------------------------------------------------------------------------------------------
+class SystemChallengeSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Sensor representing a challenge.
+
+    Provides system-wide challenge definition and tracks aggregated progress
+    across all assigned assignees as a percentage (0-100). Supports two challenge
+    types: TOTAL_WITHIN_WINDOW (simple count toward target within date range)
+    and DAILY_MIN (required daily minimum summed across all days in window).
+    Includes challenge metadata such as start/end dates, target values, reward
+    points, criteria, associated chore, and list of assignees who have earned the
+    challenge reward.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_CHALLENGE_STATE_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        challenge_id: str,
+        challenge_name: str,
+    ):
+        """Initialize the ChallengeSensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            challenge_id: Unique identifier for the challenge.
+            challenge_name: Display name of the challenge.
+        """
+        super().__init__(coordinator)
+        self._entry = entry
+        self._challenge_id = challenge_id
+        self._challenge_name = challenge_name
+        self._attr_unique_id = f"{entry.entry_id}_{challenge_id}{const.SENSOR_KC_UID_SUFFIX_CHALLENGE_SENSOR}"
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_CHALLENGE_NAME: challenge_name,
+        }
+        self._attr_device_info = create_system_device_info(entry)
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # self.entity_id = f"{const.SENSOR_KC_PREFIX}{const.SENSOR_KC_EID_MIDFIX_CHALLENGE_SENSOR}{challenge_name}"
+
+    @property
+    def native_value(self) -> Any:
+        """Return the overall progress percentage toward the challenge."""
+
+        challenge: ChallengeData = cast(
+            "ChallengeData",
+            self.coordinator.challenges_data.get(self._challenge_id, {}),
+        )
+        target = challenge.get(const.DATA_CHALLENGE_TARGET_VALUE, 1)
+        assigned_assignees = challenge.get(const.DATA_CHALLENGE_ASSIGNED_USER_IDS, [])
+
+        if not assigned_assignees:
+            return const.DEFAULT_ZERO
+
+        challenge_type = challenge.get(const.DATA_CHALLENGE_TYPE)
+        total_progress = const.DEFAULT_ZERO
+
+        for assignee_id in assigned_assignees:
+            progress_data: ChallengeProgress = challenge.get(
+                const.DATA_CHALLENGE_PROGRESS, {}
+            ).get(assignee_id, {})
+
+            if challenge_type == const.CHALLENGE_TYPE_TOTAL_WITHIN_WINDOW:
+                total_progress += progress_data.get(
+                    const.DATA_CHALLENGE_COUNT, const.DEFAULT_ZERO
+                )
+
+            elif challenge_type == const.CHALLENGE_TYPE_DAILY_MIN:
+                if isinstance(progress_data, dict):
+                    daily_counts = progress_data.get(
+                        const.DATA_CHALLENGE_DAILY_COUNTS, {}
+                    )
+                    total_progress += sum(daily_counts.values())
+
+                else:
+                    total_progress += const.DEFAULT_ZERO
+
+            else:
+                total_progress += const.DEFAULT_ZERO
+
+        global_target = target * len(assigned_assignees)
+
+        percent = (
+            (total_progress / global_target * 100)
+            if global_target > const.DEFAULT_ZERO
+            else const.DEFAULT_ZERO
+        )
+
+        return min(100, round(percent, const.DATA_FLOAT_PRECISION))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return extra attributes for this challenge."""
+        challenge: ChallengeData = cast(
+            "ChallengeData",
+            self.coordinator.challenges_data.get(self._challenge_id, {}),
+        )
+        progress = challenge.get(const.DATA_CHALLENGE_PROGRESS, {})
+        assignees_progress = {}
+        challenge_type = challenge.get(const.DATA_CHALLENGE_TYPE)
+
+        earned_by = []
+        for assignee_id, data in progress.items():
+            if data.get(const.DATA_CHALLENGE_AWARDED, False):
+                assignee_name = (
+                    get_assignee_name_by_id(self.coordinator, assignee_id)
+                    or assignee_id
+                )
+                earned_by.append(assignee_name)
+
+        associated_chore = const.SENTINEL_EMPTY
+        selected_chore_id = challenge.get(const.DATA_CHALLENGE_SELECTED_CHORE_ID)
+        if selected_chore_id:
+            associated_chore = (
+                cast(
+                    "ChoreData", self.coordinator.chores_data.get(selected_chore_id, {})
+                ).get(const.DATA_CHORE_NAME)
+                or const.SENTINEL_EMPTY
+            )
+
+        assigned_assignees_ids = challenge.get(
+            const.DATA_CHALLENGE_ASSIGNED_USER_IDS, []
+        )
+        assigned_assignees_names = [
+            name
+            for k_id in assigned_assignees_ids
+            if (
+                name := get_item_name_or_log_error(
+                    "assignee",
+                    k_id,
+                    self.coordinator.assignees_data.get(k_id, {}),
+                    const.DATA_USER_NAME,
+                )
+            )
+        ]
+
+        for assignee_id in assigned_assignees_ids:
+            assignee_name = (
+                get_assignee_name_by_id(self.coordinator, assignee_id) or assignee_id
+            )
+            progress_data: ChallengeProgress = challenge.get(
+                const.DATA_CHALLENGE_PROGRESS, {}
+            ).get(assignee_id, {})
+            if challenge_type == const.CHALLENGE_TYPE_TOTAL_WITHIN_WINDOW:
+                assignees_progress[assignee_name] = progress_data.get(
+                    const.DATA_CHALLENGE_COUNT, const.DEFAULT_ZERO
+                )
+            elif challenge_type == const.CHALLENGE_TYPE_DAILY_MIN:
+                if isinstance(progress_data, dict):
+                    assignees_progress[assignee_name] = sum(
+                        progress_data.get(
+                            const.DATA_CHALLENGE_DAILY_COUNTS, {}
+                        ).values()
+                    )
+                else:
+                    assignees_progress[assignee_name] = const.DEFAULT_ZERO
+            else:
+                assignees_progress[assignee_name] = const.DEFAULT_ZERO
+
+        stored_labels = challenge.get(const.DATA_CHALLENGE_LABELS, [])
+        friendly_labels = [
+            get_friendly_label(self.hass, label)
+            for label in cast("list", stored_labels)
+        ]
+
+        return {
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_CHALLENGE,
+            const.ATTR_CHALLENGE_NAME: self._challenge_name,
+            const.ATTR_DESCRIPTION: challenge.get(
+                const.DATA_CHALLENGE_DESCRIPTION, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_ASSIGNED_USER_NAMES: assigned_assignees_names,
+            const.ATTR_TYPE: challenge_type,
+            const.ATTR_ASSOCIATED_CHORE: associated_chore,
+            const.ATTR_CRITERIA: challenge.get(
+                const.DATA_CHALLENGE_CRITERIA, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_TARGET_VALUE: challenge.get(const.DATA_CHALLENGE_TARGET_VALUE),
+            const.ATTR_REWARD_POINTS: challenge.get(const.DATA_CHALLENGE_REWARD_POINTS),
+            const.ATTR_START_DATE: challenge.get(const.DATA_CHALLENGE_START_DATE),
+            const.ATTR_END_DATE: challenge.get(const.DATA_CHALLENGE_END_DATE),
+            const.ATTR_USERS_EARNED: earned_by,
+            const.ATTR_LABELS: friendly_labels,
+        }
+
+    @property
+    def icon(self) -> str | None:
+        """Return challenge custom icon or None for icons.json fallback."""
+        challenge_info: ChallengeData = cast(
+            "ChallengeData",
+            self.coordinator.challenges_data.get(self._challenge_id, {}),
+        )
+        return challenge_info.get(const.DATA_CHALLENGE_ICON) or None
+
+
+# ------------------------------------------------------------------------------------------
+class AssigneeAchievementProgressSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Sensor representing a assignee's progress toward a specific achievement.
+
+    Tracks achievement progress as a percentage (0-100) for individual assignee/achievement
+    combinations. Supports multiple achievement types: TOTAL (cumulative count with
+    baseline), STREAK (consecutive completions), and DAILY_MIN (daily minimum
+    requirements). Provides comprehensive metadata including target value, reward
+    points, criteria, associated chore, and award status.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_ACHIEVEMENT_PROGRESS_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        assignee_id: str,
+        assignee_name: str,
+        achievement_id: str,
+        achievement_name: str,
+    ):
+        """Initialize the sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            assignee_id: Unique identifier for the assignee.
+            assignee_name: Display name of the assignee.
+            achievement_id: Unique identifier for the achievement.
+            achievement_name: Display name of the achievement.
+        """
+        super().__init__(coordinator)
+        self._entry = entry
+        self._assignee_id = assignee_id
+        self._assignee_name = assignee_name
+        self._achievement_id = achievement_id
+        self._achievement_name = achievement_name
+        self._attr_unique_id = f"{entry.entry_id}_{assignee_id}_{achievement_id}{const.SENSOR_KC_UID_SUFFIX_ACHIEVEMENT_PROGRESS_SENSOR}"
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_ASSIGNEE_NAME: assignee_name,
+            const.TRANS_KEY_SENSOR_ATTR_ACHIEVEMENT_NAME: achievement_name,
+        }
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # self.entity_id = f"{const.SENSOR_KC_PREFIX}{assignee_name}{const.SENSOR_KC_EID_MIDFIX_ACHIEVEMENT_PROGRESS_SENSOR}{achievement_name}"
+        self._attr_device_info = create_assignee_device_info_from_coordinator(
+            self.coordinator, assignee_id, assignee_name, entry
+        )
+
+    @property
+    def native_value(self) -> float:
+        """Return the progress percentage toward the achievement.
+
+        Calculates percentage based on achievement type:
+        - TOTAL: (current_value / (baseline + target)) * 100
+        - STREAK: (current_streak / target) * 100
+        - DAILY_MIN: (daily_completions / target) * 100
+
+        Returns:
+            Progress percentage capped at 100.0, rounded to 1 decimal place.
+        """
+        achievement: AchievementData = cast(
+            "AchievementData",
+            self.coordinator.achievements_data.get(self._achievement_id, {}),
+        )
+        target = achievement.get(const.DATA_ACHIEVEMENT_TARGET_VALUE, 1)
+        ach_type = achievement.get(const.DATA_ACHIEVEMENT_TYPE)
+
+        if ach_type == const.ACHIEVEMENT_TYPE_TOTAL:
+            progress_data: AchievementProgress = achievement.get(
+                const.DATA_ACHIEVEMENT_PROGRESS, {}
+            ).get(self._assignee_id, {})
+
+            baseline = (
+                progress_data.get(const.DATA_ACHIEVEMENT_BASELINE, const.DEFAULT_ZERO)
+                if isinstance(progress_data, dict)
+                else const.DEFAULT_ZERO
+            )
+
+            # v43+: chore_stats deleted, use chore_periods.all_time.all_time (nested)
+            # For scoped achievements (selected chore), read the chore-scoped
+            # all-time total so the progress bar matches the evaluation engine
+            # (issue #245). Unscoped achievements keep the global bucket.
+            selected_chore_id = achievement.get(
+                const.DATA_ACHIEVEMENT_SELECTED_CHORE_ID
+            )
+            if selected_chore_id:
+                scoped_all_time = (
+                    self.coordinator.statistics_manager.get_badge_scoped_all_time_stats(
+                        self._assignee_id,
+                        [selected_chore_id],
+                    )
+                )
+                current_total = scoped_all_time.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_APPROVED,
+                    const.DEFAULT_ZERO,
+                )
+            else:
+                assignee_data = cast(
+                    "AssigneeData",
+                    self.coordinator.assignees_data.get(self._assignee_id, {}),
+                )
+                chore_periods = assignee_data.get(const.DATA_USER_CHORE_PERIODS, {})
+                all_time_container: dict[str, Any] = cast(
+                    "dict[str, Any]",
+                    chore_periods.get(const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME, {}),
+                )
+                all_time_bucket: dict[str, Any] = cast(
+                    "dict[str, Any]",
+                    all_time_container.get(const.PERIOD_ALL_TIME, {}),
+                )
+                current_total = all_time_bucket.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_APPROVED, const.DEFAULT_ZERO
+                )
+
+            # Baseline guard: mirror the evaluation engine so a global baseline
+            # that exceeds the scoped total does not clamp display to 0.
+            if float(cast("Any", baseline)) > int(current_total):
+                baseline = const.DEFAULT_ZERO
+
+            effective_target = baseline + target  # type: ignore[operator]
+
+            percent = (
+                (int(current_total) / effective_target * 100)
+                if effective_target > const.DEFAULT_ZERO
+                else const.DEFAULT_ZERO
+            )
+
+        elif ach_type == const.ACHIEVEMENT_TYPE_STREAK:
+            progress_data_elif: AchievementProgress = achievement.get(
+                const.DATA_ACHIEVEMENT_PROGRESS, {}
+            ).get(self._assignee_id, {})
+
+            progress = (
+                progress_data_elif.get(
+                    const.DATA_ACHIEVEMENT_CURRENT_STREAK, const.DEFAULT_ZERO
+                )
+                if isinstance(progress_data_elif, dict)
+                else const.DEFAULT_ZERO
+            )
+
+            percent = (
+                (progress / target * 100)
+                if target > const.DEFAULT_ZERO
+                else const.DEFAULT_ZERO
+            )
+
+        elif ach_type == const.ACHIEVEMENT_TYPE_DAILY_MIN:
+            # Use Phase 7.5 cache API for temporal stats (not storage)
+            cache_stats = self.coordinator.statistics_manager.get_chore_stats(
+                self._assignee_id
+            )
+            daily = cache_stats.get(
+                const.PRES_USER_CHORES_APPROVED_TODAY, const.DEFAULT_ZERO
+            )
+
+            percent = (
+                (daily / target * 100)
+                if target > const.DEFAULT_ZERO
+                else const.DEFAULT_ZERO
+            )
+
+        else:
+            percent = const.DEFAULT_ZERO
+
+        return min(100, round(percent, const.DATA_FLOAT_PRECISION))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return extra attributes for the achievement progress."""
+        achievement: AchievementData = cast(
+            "AchievementData",
+            self.coordinator.achievements_data.get(self._achievement_id, {}),
+        )
+        target = achievement.get(const.DATA_ACHIEVEMENT_TARGET_VALUE, 1)
+        progress_data: AchievementProgress = achievement.get(
+            const.DATA_ACHIEVEMENT_PROGRESS, {}
+        ).get(self._assignee_id, {})
+        raw_progress = const.DEFAULT_ZERO
+
+        awarded = (
+            progress_data.get(const.DATA_ACHIEVEMENT_AWARDED, False)
+            if isinstance(progress_data, dict)
+            else False
+        )
+
+        if achievement.get(const.DATA_ACHIEVEMENT_TYPE) == const.ACHIEVEMENT_TYPE_TOTAL:
+            current_value = (
+                progress_data.get(
+                    const.DATA_ACHIEVEMENT_CURRENT_VALUE, const.DEFAULT_ZERO
+                )
+                if isinstance(progress_data, dict)
+                else const.DEFAULT_ZERO
+            )
+            raw_progress = (
+                int(current_value)
+                if isinstance(current_value, (int, float, str))
+                else const.DEFAULT_ZERO
+            )
+
+        elif (
+            achievement.get(const.DATA_ACHIEVEMENT_TYPE)
+            == const.ACHIEVEMENT_TYPE_STREAK
+        ):
+            raw_progress = (
+                progress_data.get(
+                    const.DATA_ACHIEVEMENT_CURRENT_STREAK, const.DEFAULT_ZERO
+                )
+                if isinstance(progress_data, dict)
+                else const.DEFAULT_ZERO
+            )
+
+        elif (
+            achievement.get(const.DATA_ACHIEVEMENT_TYPE)
+            == const.ACHIEVEMENT_TYPE_DAILY_MIN
+        ):
+            # Use Phase 7.5 cache API for temporal stats (not storage)
+            cache_stats = self.coordinator.statistics_manager.get_chore_stats(
+                self._assignee_id
+            )
+            raw_progress = cache_stats.get(
+                const.PRES_USER_CHORES_APPROVED_TODAY, const.DEFAULT_ZERO
+            )
+
+        associated_chore = const.SENTINEL_EMPTY
+        selected_chore_id = achievement.get(const.DATA_ACHIEVEMENT_SELECTED_CHORE_ID)
+        if selected_chore_id:
+            associated_chore = (
+                cast(
+                    "ChoreData", self.coordinator.chores_data.get(selected_chore_id, {})
+                ).get(const.DATA_CHORE_NAME)
+                or const.SENTINEL_EMPTY
+            )
+
+        assigned_assignees_ids = achievement.get(
+            const.DATA_ACHIEVEMENT_ASSIGNED_USER_IDS, []
+        )
+        assigned_assignees_names = [
+            name
+            for k_id in assigned_assignees_ids
+            if (
+                name := get_item_name_or_log_error(
+                    "assignee",
+                    k_id,
+                    self.coordinator.assignees_data.get(k_id, {}),
+                    const.DATA_USER_NAME,
+                )
+            )
+        ]
+
+        stored_labels = achievement.get(const.DATA_ACHIEVEMENT_LABELS, [])
+        friendly_labels = [
+            get_friendly_label(self.hass, label)
+            for label in cast("list", stored_labels)
+        ]
+
+        return {
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_ACHIEVEMENT_PROGRESS,
+            const.ATTR_USER_NAME: self._assignee_name,
+            const.ATTR_ACHIEVEMENT_NAME: self._achievement_name,
+            const.ATTR_DESCRIPTION: achievement.get(
+                const.DATA_ACHIEVEMENT_DESCRIPTION, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_ASSIGNED_USER_NAMES: assigned_assignees_names,
+            const.ATTR_TYPE: achievement.get(const.DATA_ACHIEVEMENT_TYPE),
+            const.ATTR_ASSOCIATED_CHORE: associated_chore,
+            const.ATTR_CRITERIA: achievement.get(
+                const.DATA_ACHIEVEMENT_CRITERIA, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_TARGET_VALUE: target,
+            const.ATTR_REWARD_POINTS: achievement.get(
+                const.DATA_ACHIEVEMENT_REWARD_POINTS
+            ),
+            const.ATTR_RAW_PROGRESS: raw_progress,
+            const.ATTR_AWARDED: awarded,
+            const.ATTR_LABELS: friendly_labels,
+        }
+
+    @property
+    def icon(self) -> str | None:
+        """Return the icon for the achievement."""
+        achievement: AchievementData = cast(
+            "AchievementData",
+            self.coordinator.achievements_data.get(self._achievement_id, {}),
+        )
+        return achievement.get(const.DATA_ACHIEVEMENT_ICON) or None
+
+
+# ------------------------------------------------------------------------------------------
+class AssigneeChallengeProgressSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Sensor representing a assignee's progress toward a specific challenge.
+
+    Tracks challenge progress as a percentage (0-100) for individual assignee/challenge
+    combinations. Supports two challenge types: TOTAL_WITHIN_WINDOW (simple count
+    toward target) and DAILY_MIN (required daily minimums summed across date range).
+    Includes comprehensive metadata such as start/end dates, target values, reward
+    points, associated chore, and award status.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_CHALLENGE_PROGRESS_SENSOR
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        assignee_id: str,
+        assignee_name: str,
+        challenge_id: str,
+        challenge_name: str,
+    ):
+        """Initialize the sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            assignee_id: Unique identifier for the assignee.
+            assignee_name: Display name of the assignee.
+            challenge_id: Unique identifier for the challenge.
+            challenge_name: Display name of the challenge.
+        """
+        super().__init__(coordinator)
+        self._entry = entry
+        self._assignee_id = assignee_id
+        self._assignee_name = assignee_name
+        self._challenge_id = challenge_id
+        self._challenge_name = challenge_name
+        self._attr_unique_id = f"{entry.entry_id}_{assignee_id}_{challenge_id}{const.SENSOR_KC_UID_SUFFIX_CHALLENGE_PROGRESS_SENSOR}"
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_ASSIGNEE_NAME: assignee_name,
+            const.TRANS_KEY_SENSOR_ATTR_CHALLENGE_NAME: challenge_name,
+        }
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # self.entity_id = f"{const.SENSOR_KC_PREFIX}{assignee_name}{const.SENSOR_KC_EID_MIDFIX_CHALLENGE_PROGRESS_SENSOR}{challenge_name}"
+        self._attr_device_info = create_assignee_device_info_from_coordinator(
+            self.coordinator, assignee_id, assignee_name, entry
+        )
+
+    @property
+    def native_value(self) -> float:
+        """Return the challenge progress percentage.
+
+        Calculates percentage based on challenge type:
+        - TOTAL_WITHIN_WINDOW: (count / target) * 100
+        - DAILY_MIN: (sum_of_daily_counts / (required_daily * num_days)) * 100
+
+        Returns:
+            Progress percentage capped at 100.0, rounded to 1 decimal place.
+        """
+        challenge: ChallengeData = cast(
+            "ChallengeData",
+            self.coordinator.challenges_data.get(self._challenge_id, {}),
+        )
+        target = challenge.get(const.DATA_CHALLENGE_TARGET_VALUE, 1)
+        challenge_type = challenge.get(const.DATA_CHALLENGE_TYPE)
+        progress_data: ChallengeProgress = challenge.get(
+            const.DATA_CHALLENGE_PROGRESS, {}
+        ).get(self._assignee_id, {})
+
+        if challenge_type == const.CHALLENGE_TYPE_TOTAL_WITHIN_WINDOW:
+            raw_progress = (
+                progress_data.get(const.DATA_CHALLENGE_COUNT, const.DEFAULT_ZERO)
+                if isinstance(progress_data, dict)
+                else const.DEFAULT_ZERO
+            )
+
+        elif challenge_type == const.CHALLENGE_TYPE_DAILY_MIN:
+            if isinstance(progress_data, dict):
+                daily_counts = progress_data.get(const.DATA_CHALLENGE_DAILY_COUNTS, {})
+                raw_progress = sum(daily_counts.values())
+
+                start_date = dt_util.parse_datetime(
+                    challenge.get(const.DATA_CHALLENGE_START_DATE) or ""
+                )
+                end_date = dt_util.parse_datetime(
+                    challenge.get(const.DATA_CHALLENGE_END_DATE) or ""
+                )
+
+                if start_date and end_date:
+                    num_days = (end_date.date() - start_date.date()).days + 1
+
+                else:
+                    num_days = 1
+                required_daily = challenge.get(const.DATA_CHALLENGE_REQUIRED_DAILY, 1)
+                target = required_daily * num_days
+
+            else:
+                raw_progress = const.DEFAULT_ZERO
+
+        else:
+            raw_progress = const.DEFAULT_ZERO
+
+        percent = (
+            (raw_progress / target * 100)
+            if target > const.DEFAULT_ZERO
+            else const.DEFAULT_ZERO
+        )
+
+        return min(100, round(percent, const.DATA_FLOAT_PRECISION))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return extra attributes for the challenge progress."""
+        challenge: ChallengeData = cast(
+            "ChallengeData",
+            self.coordinator.challenges_data.get(self._challenge_id, {}),
+        )
+        target = challenge.get(const.DATA_CHALLENGE_TARGET_VALUE, 1)
+        challenge_type = challenge.get(const.DATA_CHALLENGE_TYPE)
+        progress_data: ChallengeProgress = challenge.get(
+            const.DATA_CHALLENGE_PROGRESS, {}
+        ).get(self._assignee_id, {})
+        awarded = (
+            progress_data.get(const.DATA_CHALLENGE_AWARDED, False)
+            if isinstance(progress_data, dict)
+            else False
+        )
+
+        if challenge_type == const.CHALLENGE_TYPE_TOTAL_WITHIN_WINDOW:
+            raw_progress = (
+                progress_data.get(const.DATA_CHALLENGE_COUNT, const.DEFAULT_ZERO)
+                if isinstance(progress_data, dict)
+                else const.DEFAULT_ZERO
+            )
+        elif challenge_type == const.CHALLENGE_TYPE_DAILY_MIN:
+            if isinstance(progress_data, dict):
+                daily_counts = progress_data.get(const.DATA_CHALLENGE_DAILY_COUNTS, {})
+                raw_progress = sum(daily_counts.values())
+            else:
+                raw_progress = const.DEFAULT_ZERO
+        else:
+            raw_progress = const.DEFAULT_ZERO
+
+        associated_chore = const.SENTINEL_EMPTY
+        selected_chore_id = challenge.get(const.DATA_CHALLENGE_SELECTED_CHORE_ID)
+        if selected_chore_id:
+            associated_chore = (
+                cast(
+                    "ChoreData", self.coordinator.chores_data.get(selected_chore_id, {})
+                ).get(const.DATA_CHORE_NAME)
+                or const.SENTINEL_EMPTY
+            )
+
+        assigned_assignees_ids = challenge.get(
+            const.DATA_CHALLENGE_ASSIGNED_USER_IDS, []
+        )
+        assigned_assignees_names = [
+            name
+            for k_id in assigned_assignees_ids
+            if (
+                name := get_item_name_or_log_error(
+                    "assignee",
+                    k_id,
+                    self.coordinator.assignees_data.get(k_id, {}),
+                    const.DATA_USER_NAME,
+                )
+            )
+        ]
+
+        stored_labels = challenge.get(const.DATA_CHALLENGE_LABELS, [])
+        friendly_labels = [
+            get_friendly_label(self.hass, label)
+            for label in cast("list", stored_labels)
+        ]
+
+        return {
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_CHALLENGE_PROGRESS,
+            const.ATTR_USER_NAME: self._assignee_name,
+            const.ATTR_CHALLENGE_NAME: self._challenge_name,
+            const.ATTR_DESCRIPTION: challenge.get(
+                const.DATA_CHALLENGE_DESCRIPTION, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_ASSIGNED_USER_NAMES: assigned_assignees_names,
+            const.ATTR_TYPE: challenge_type,
+            const.ATTR_ASSOCIATED_CHORE: associated_chore,
+            const.ATTR_CRITERIA: challenge.get(
+                const.DATA_CHALLENGE_CRITERIA, const.SENTINEL_EMPTY
+            ),
+            const.ATTR_TARGET_VALUE: target,
+            const.ATTR_REWARD_POINTS: challenge.get(const.DATA_CHALLENGE_REWARD_POINTS),
+            const.ATTR_START_DATE: challenge.get(const.DATA_CHALLENGE_START_DATE),
+            const.ATTR_END_DATE: challenge.get(const.DATA_CHALLENGE_END_DATE),
+            const.ATTR_RAW_PROGRESS: raw_progress,
+            const.ATTR_AWARDED: awarded,
+            const.ATTR_LABELS: friendly_labels,
+        }
+
+    @property
+    def icon(self) -> str | None:
+        """Return the icon for the challenge.
+
+        Use the icon provided in the challenge data if set, else fallback to default.
+        """
+        challenge: ChallengeData = cast(
+            "ChallengeData",
+            self.coordinator.challenges_data.get(self._challenge_id, {}),
+        )
+        return challenge.get(const.DATA_CHALLENGE_ICON) or None
+
+
+# ------------------------------------------------------------------------------------------
+class SystemDashboardTranslationSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """System-level sensor providing dashboard UI translations for a specific language.
+
+    Created once per language in use across all assignees and approvers. Provides the
+    `ui_translations` dict attribute containing all 40+ localization keys for
+    the ChoreOps dashboard. Multiple assignees using the same language share one
+    translation sensor, reducing overall attribute storage.
+
+    Entity ID format: sensor.kc_ui_dashboard_lang_{language_code}
+    Example: sensor.kc_ui_dashboard_lang_en, sensor.kc_ui_dashboard_lang_es
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_DASHBOARD_TRANSLATION
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        language_code: str,
+    ):
+        """Initialize the translation sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            language_code: ISO language code (e.g., 'en', 'es', 'de').
+        """
+        super().__init__(coordinator)
+        self._entry = entry
+        self._language_code = language_code
+        self._attr_unique_id = f"{entry.entry_id}_{language_code}{const.SENSOR_KC_UID_SUFFIX_DASHBOARD_LANG}"
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_ATTR_LANGUAGE: language_code,
+        }
+        self._attr_device_info = create_system_device_info(entry)
+
+        # Translations cache - loaded async on entity add
+        self._ui_translations: dict[str, Any] = {}
+
+    async def async_added_to_hass(self) -> None:
+        """Load translations when entity is added to hass."""
+        await super().async_added_to_hass()
+        self._ui_translations = await load_dashboard_translation(
+            self.hass, self._language_code
+        )
+
+    @property
+    def native_value(self) -> str:
+        """Return the language code as the sensor state."""
+        return self._language_code
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the ui_translations dict for dashboard consumption.
+
+        Dashboard templates read this via:
+        state_attr('sensor.kc_ui_dashboard_lang_en', 'ui_translations')
+        """
+        return {
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_DASHBOARD_TRANSLATION,
+            "ui_translations": self._ui_translations,
+            const.TRANS_KEY_ATTR_LANGUAGE: self._language_code,
+        }
+
+    @property
+    def icon(self) -> str | None:
+        """Return None for icons.json fallback."""
+        return None
+
+
+def _serialized_payload_size(payload: dict[str, Any]) -> int:
+    """Return the exact serialized payload size in bytes."""
+    return len(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def _build_chore_shard_payload(
+    chores_attr: list[dict[str, Any]],
+    shard_index: int,
+    shard_count: int,
+) -> dict[str, Any]:
+    """Build the public payload for one chore shard helper."""
+    return {
+        const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_DASHBOARD_CHORE_SHARD_HELPER,
+        const.ATTR_SHARD_INDEX: shard_index,
+        const.ATTR_SHARD_COUNT: shard_count,
+        const.ATTR_HELPER_CONTRACT_VERSION: const.HELPER_CONTRACT_VERSION_V1,
+        "chores": AssigneeDashboardHelperSensor._sanitize_dashboard_chore_rows(
+            chores_attr
+        ),
+    }
+
+
+def build_chore_shard_plan(
+    hass: HomeAssistant,
+    coordinator: ChoreOpsDataCoordinator,
+    entry: ChoreOpsConfigEntry,
+    assignee_id: str,
+    assignee_name: str,
+    *,
+    previous_plan: HelperShardRuntimePlan | None,
+) -> HelperShardRuntimePlan:
+    """Build the current chore shard plan for one assignee."""
+    from .managers.ui_manager import HelperShardRuntimePlan
+
+    helper = AssigneeDashboardHelperSensor(
+        coordinator,
+        entry,
+        assignee_id,
+        assignee_name,
+        "",
+    )
+    entity_registry = async_get(hass)
+    chores_attr = helper._build_chore_rows(entity_registry)
+    assignee_data = cast(
+        "dict[str, Any]", coordinator.assignees_data.get(assignee_id) or {}
+    )
+    assignee_language = cast(
+        "str",
+        assignee_data.get(
+            const.DATA_USER_DASHBOARD_LANGUAGE,
+            const.DEFAULT_DASHBOARD_LANGUAGE,
+        ),
+    )
+    translation_sensor_eid = coordinator.ui_manager.get_translation_sensor_eid(
+        assignee_language
+    )
+    current_mode = (
+        previous_plan.mode
+        if previous_plan is not None
+        else const.HELPER_SHARD_MODE_INLINE
+    )
+
+    inline_payload = helper._build_payload(
+        entity_registry,
+        chores_attr,
+        translation_sensor_eid=translation_sensor_eid,
+        chore_helper_eids=[],
+        shard_runtime={
+            "family": const.HELPER_SHARD_FAMILY_CHORES,
+            "mode": const.HELPER_SHARD_MODE_INLINE,
+            "expected_shard_count": 0,
+            "last_accepted_serialized_size": 0,
+            "last_reconciliation_outcome": "planning",
+        },
+    )
+    inline_size = _serialized_payload_size(inline_payload)
+
+    if current_mode == const.HELPER_SHARD_MODE_SHARDED:
+        if inline_size <= const.HELPER_SHARD_EXIT_BYTES:
+            return HelperShardRuntimePlan(
+                family=const.HELPER_SHARD_FAMILY_CHORES,
+                mode=const.HELPER_SHARD_MODE_INLINE,
+                shard_item_ids=[],
+                expected_shard_count=0,
+                last_accepted_serialized_size=inline_size,
+                last_reconciliation_outcome="planned_mode=inline",
+            )
+    elif inline_size < const.HELPER_SHARD_ENTER_BYTES:
+        return HelperShardRuntimePlan(
+            family=const.HELPER_SHARD_FAMILY_CHORES,
+            mode=const.HELPER_SHARD_MODE_INLINE,
+            shard_item_ids=[],
+            expected_shard_count=0,
+            last_accepted_serialized_size=inline_size,
+            last_reconciliation_outcome="planned_mode=inline",
+        )
+
+    shard_groups: list[list[dict[str, Any]]] = []
+    current_group: list[dict[str, Any]] = []
+
+    for chore in chores_attr:
+        candidate_group = [*current_group, chore]
+        candidate_payload = _build_chore_shard_payload(
+            candidate_group,
+            len(shard_groups) + 1,
+            len(shard_groups) + 1,
+        )
+        if (
+            current_group
+            and _serialized_payload_size(candidate_payload)
+            >= const.HELPER_SHARD_ENTER_BYTES
+        ):
+            shard_groups.append(current_group)
+            current_group = [chore]
+        else:
+            current_group = candidate_group
+
+    if current_group:
+        shard_groups.append(current_group)
+
+    placeholder_eids = [
+        f"sensor.choreops_chore_shard_{index}"
+        for index in range(1, len(shard_groups) + 1)
+    ]
+    sharded_payload = helper._build_payload(
+        entity_registry,
+        [],
+        translation_sensor_eid=translation_sensor_eid,
+        chore_helper_eids=placeholder_eids,
+        shard_runtime={
+            "family": const.HELPER_SHARD_FAMILY_CHORES,
+            "mode": const.HELPER_SHARD_MODE_SHARDED,
+            "expected_shard_count": len(shard_groups),
+            "last_accepted_serialized_size": 0,
+            "last_reconciliation_outcome": "planning",
+        },
+    )
+
+    return HelperShardRuntimePlan(
+        family=const.HELPER_SHARD_FAMILY_CHORES,
+        mode=const.HELPER_SHARD_MODE_SHARDED,
+        shard_item_ids=[
+            [cast("str", chore["_chore_id"]) for chore in shard_group]
+            for shard_group in shard_groups
+        ],
+        expected_shard_count=len(shard_groups),
+        last_accepted_serialized_size=_serialized_payload_size(sharded_payload),
+        last_reconciliation_outcome=(
+            f"planned_mode=sharded shard_count={len(shard_groups)}"
+        ),
+    )
+
+
+class AssigneeDashboardChoreShardSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Dedicated chore-only dashboard helper shard for high-density households."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_DASHBOARD_CHORE_LIST_HELPER
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        assignee_id: str,
+        assignee_name: str,
+        shard_index: int,
+    ) -> None:
+        """Initialize one chore shard helper sensor."""
+        super().__init__(coordinator)
+        self._entry = entry
+        self._assignee_id = assignee_id
+        self._assignee_name = assignee_name
+        self._shard_index = shard_index
+        self._attr_unique_id = coordinator.ui_manager.get_chore_shard_unique_id(
+            assignee_id, shard_index
+        )
+        self._attr_translation_placeholders = {
+            const.ATTR_SHARD_INDEX: str(shard_index),
+            const.TRANS_KEY_SENSOR_ATTR_ASSIGNEE_NAME: assignee_name,
+        }
+        self._attr_device_info = create_assignee_device_info_from_coordinator(
+            coordinator, assignee_id, assignee_name, entry
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Refresh main dashboard helpers after this chore list helper is registered."""
+        await super().async_added_to_hass()
+        self.coordinator.hass.async_create_task(
+            self.coordinator.ui_manager.async_finalize_chore_shards_for_users(
+                [self._assignee_id],
+                registry_only=True,
+            )
+        )
+
+    @property
+    def native_value(self) -> Any:
+        """Return a simple helper state for dashboard availability checks."""
+        return "available"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the minimal public chore shard payload."""
+        plan = self.coordinator.ui_manager.get_helper_shard_plan(
+            self._assignee_id,
+            const.HELPER_SHARD_FAMILY_CHORES,
+        )
+        if plan is None or self._shard_index > len(plan.shard_item_ids):
+            return _build_chore_shard_payload([], self._shard_index, 0)
+
+        helper = AssigneeDashboardHelperSensor(
+            self.coordinator,
+            self._entry,
+            self._assignee_id,
+            self._assignee_name,
+            "",
+        )
+        entity_registry = async_get(self.hass)
+        chores_attr = helper._build_chore_rows(
+            entity_registry,
+            set(plan.shard_item_ids[self._shard_index - 1]),
+        )
+        return _build_chore_shard_payload(
+            chores_attr,
+            self._shard_index,
+            plan.expected_shard_count,
+        )
+
+    @property
+    def icon(self) -> str | None:
+        """Return None for icons.json fallback."""
+        return None
+
+
+# ------------------------------------------------------------------------------------------
+class SystemDashboardHelperSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """System-level helper sensor for shared admin dashboard state."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_SYSTEM_DASHBOARD_HELPER
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+    ):
+        """Initialize the system dashboard helper sensor."""
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = (
+            f"{entry.entry_id}{const.SENSOR_KC_UID_SUFFIX_SYSTEM_DASHBOARD_HELPER}"
+        )
+        self._attr_device_info = create_system_device_info(entry)
+
+    def _get_admin_selector_eid(self) -> str | None:
+        """Return the admin selector entity ID for this config entry."""
+        entity_registry = async_get(self.hass)
+        unique_id = (
+            f"{self._entry.entry_id}"
+            f"{const.SELECT_KC_UID_SUFFIX_SYSTEM_DASHBOARD_ADMIN_ASSIGNEE_SELECT}"
+        )
+        return entity_registry.async_get_entity_id("select", const.DOMAIN, unique_id)
+
+    def _resolve_dashboard_language(self) -> str:
+        """Resolve the shared admin dashboard language for page-level chrome."""
+        return self.coordinator.ui_manager.get_shared_admin_dashboard_language()
+
+    def _get_translation_sensor_eid(self, language_code: str) -> str | None:
+        """Return the translation sensor entity ID for the resolved language."""
+        return self.coordinator.ui_manager.get_translation_sensor_eid(language_code)
+
+    def _get_user_dashboard_helpers(self) -> dict[str, str]:
+        """Return a minimal user-to-helper entity map for shared admin templates."""
+        entity_registry = async_get(self.hass)
+        helper_map: dict[str, str] = {}
+
+        sorted_assignees = sorted(
+            self.coordinator.assignees_data.items(),
+            key=lambda item: (
+                str(item[1].get(const.DATA_USER_NAME, "")).lower(),
+                item[0],
+            ),
+        )
+        for user_id, _user_data in sorted_assignees:
+            unique_id = (
+                f"{self._entry.entry_id}_{user_id}"
+                f"{const.SENSOR_KC_UID_SUFFIX_UI_DASHBOARD_HELPER}"
+            )
+            if entity_id := entity_registry.async_get_entity_id(
+                "sensor", const.DOMAIN, unique_id
+            ):
+                helper_map[user_id] = entity_id
+
+        return helper_map
+
+    @property
+    def native_value(self) -> Any:
+        """Return a simple helper state for dashboard availability checks."""
+        return "available"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return shared-admin helper attributes for admin dashboard templates."""
+        language_code = self._resolve_dashboard_language()
+        return {
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_SYSTEM_DASHBOARD_HELPER,
+            const.ATTR_UI_CONTROL: self.coordinator.ui_manager.get_shared_admin_ui_control(),
+            const.ATTR_INTEGRATION_ENTRY_ID: self._entry.entry_id,
+            const.ATTR_DASHBOARD_LOOKUP_KEY: (
+                f"{self._entry.entry_id}:{const.ATTR_UI_ROOT_SHARED_ADMIN}"
+            ),
+            const.ATTR_USER_DASHBOARD_HELPERS: self._get_user_dashboard_helpers(),
+            const.TRANS_KEY_ATTR_LANGUAGE: language_code,
+            const.ATTR_TRANSLATION_SENSOR_EID: self._get_translation_sensor_eid(
+                language_code
+            ),
+        }
+
+    @property
+    def icon(self) -> str | None:
+        """Return None for icons.json fallback."""
+        return None
+
+
+# ------------------------------------------------------------------------------------------
+class AssigneeDashboardHelperSensor(ChoreOpsCoordinatorEntity, SensorEntity):
+    """Aggregated dashboard helper sensor for a assignee.
+
+    Provides a consolidated view of all assignee-related entities including chores,
+    rewards, badges, bonuses, penalties, achievements, challenges, and point buttons.
+    Serves pre-sorted and pre-filtered entity lists to optimize dashboard template
+    rendering performance.
+
+    Translations are delegated to system-level translation sensors
+    (sensor.kc_ui_dashboard_lang_{code}). This sensor provides a
+    `dashboard_helpers.translation_sensor_eid` attribute pointing to the
+    appropriate translation sensor entity ID based on the assignee's configured
+    dashboard language.
+
+    This sensor is the single source of truth for the ChoreOps dashboard,
+    eliminating expensive frontend list iterations and sorting operations.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = const.TRANS_KEY_SENSOR_DASHBOARD_HELPER
+
+    def __init__(
+        self,
+        coordinator: ChoreOpsDataCoordinator,
+        entry: ChoreOpsConfigEntry,
+        assignee_id: str,
+        assignee_name: str,
+        points_label: str,
+    ):
+        """Initialize the sensor.
+
+        Args:
+            coordinator: ChoreOpsDataCoordinator instance for data access.
+            entry: ConfigEntry for this integration instance.
+            assignee_id: Unique identifier for the assignee.
+            assignee_name: Display name of the assignee.
+            points_label: Customizable label for points currency (e.g., 'Points', 'Stars').
+
+        Note: Translation sensor entity ID is computed dynamically based on assignee's
+        current dashboard language, allowing automatic updates when language changes.
+        """
+        super().__init__(coordinator)
+        self._entry = entry
+        self._assignee_id = assignee_id
+        self._assignee_name = assignee_name
+        self._points_label = points_label
+        self._attr_unique_id = f"{entry.entry_id}_{assignee_id}{const.SENSOR_KC_UID_SUFFIX_UI_DASHBOARD_HELPER}"
+        # Moving to HA native best practice: auto-generate entity_id from unique_id + has_entity_name
+        # rather than manually constructing to support HA core change 01309191283 (Jan 14, 2026)
+        # which enforces stricter entity ID validation (no uppercase, spaces, special chars)
+        # self.entity_id = (
+        #     f"{const.SENSOR_KC_PREFIX}{assignee_name}"
+        #     f"{const.SENSOR_KC_EID_SUFFIX_UI_DASHBOARD_HELPER}"
+        # )
+        self._attr_translation_placeholders = {
+            const.TRANS_KEY_SENSOR_ATTR_ASSIGNEE_NAME: assignee_name
+        }
+        self._attr_device_info = create_assignee_device_info_from_coordinator(
+            self.coordinator, assignee_id, assignee_name, entry
+        )
+
+    def _get_translation_sensor_eid(self) -> str | None:
+        """Get the translation sensor entity ID for this assignee's current language.
+
+        Dynamically computed based on assignee's dashboard_language setting.
+        If the translation sensor doesn't exist yet (new language), triggers
+        creation via coordinator.ensure_translation_sensor_exists().
+
+        Returns:
+            Entity ID of the translation sensor or None if not found in registry
+        """
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        lang_code = assignee_info.get(
+            const.DATA_USER_DASHBOARD_LANGUAGE, const.DEFAULT_DASHBOARD_LANGUAGE
+        )
+
+        # Check if sensor exists; if not, schedule async creation
+        if not self.coordinator.ui_manager.is_translation_sensor_created(lang_code):
+            # Create new sensor asynchronously - entity will update on next cycle
+            self.hass.add_job(
+                self.coordinator.ui_manager.ensure_translation_sensor_exists(lang_code)
+            )
+            # Return None for now (sensor will exist after async creation completes)
+            return None
+
+        # Look up entity ID from registry
+        return self.coordinator.ui_manager.get_translation_sensor_eid(lang_code)
+
+    @staticmethod
+    def _sanitize_dashboard_chore_rows(
+        chores_attr: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Strip internal-only metadata before exposing chore rows."""
+        return [
+            {key: value for key, value in chore.items() if key != "_chore_id"}
+            for chore in chores_attr
+        ]
+
+    @staticmethod
+    def _build_label_entries(
+        hass: HomeAssistant,
+        stored_labels: Any,
+    ) -> list[dict[str, str]]:
+        """Normalize chore labels for dashboard rendering."""
+        raw_labels = [
+            label
+            for label in cast("list", stored_labels)
+            if isinstance(label, str) and label.strip()
+        ]
+        friendly_labels = [get_friendly_label(hass, label) for label in raw_labels]
+        return [
+            {"id": label, "name": friendly_label}
+            for label, friendly_label in zip(raw_labels, friendly_labels, strict=False)
+        ]
+
+    def _build_chore_rows(
+        self,
+        entity_registry,
+        included_chore_ids: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build chore rows for this helper, optionally restricted to specific IDs."""
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        chores_attr: list[dict[str, Any]] = []
+
+        for chore_id, chore_info in self.coordinator.chores_data.items():
+            if included_chore_ids is not None and chore_id not in included_chore_ids:
+                continue
+            if self._assignee_id not in chore_info.get(
+                const.DATA_CHORE_ASSIGNED_USER_IDS, []
+            ):
+                continue
+
+            chore_eid = None
+            if entity_registry:
+                unique_id = (
+                    f"{self._entry.entry_id}_{self._assignee_id}_{chore_id}"
+                    f"{const.SENSOR_KC_UID_SUFFIX_CHORE_STATUS_SENSOR}"
+                )
+                chore_eid = entity_registry.async_get_entity_id(
+                    "sensor", const.DOMAIN, unique_id
+                )
+
+            chore_attrs = self._calculate_chore_attributes(
+                chore_id, chore_info, assignee_info, chore_eid
+            )
+            if chore_attrs:
+                chores_attr.append(chore_attrs)
+
+        chores_attr.sort(
+            key=lambda chore: (
+                chore.get(const.ATTR_CHORE_DUE_DATE) is None,
+                chore.get(const.ATTR_CHORE_DUE_DATE) or "",
+                chore.get(const.ATTR_EID) or "",
+            )
+        )
+        return chores_attr
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator.
+
+        Checks if pending approvals changed to force attribute rebuild.
+        Translation handling is now delegated to the system-level translation sensor.
+        """
+        # Check if pending approvals changed - forces attribute rebuild
+        # Flags are reset in extra_state_attributes after rebuild
+        if (
+            self.coordinator.ui_manager.pending_chore_changed
+            or self.coordinator.ui_manager.pending_reward_changed
+        ):
+            # Flag set - attributes will rebuild in next extra_state_attributes call
+            pass
+
+        super()._handle_coordinator_update()
+
+    def _get_next_monday_7am_local(self) -> datetime:
+        """Calculate the next Monday at 7:00 AM local time.
+
+        Uses snap_to_weekday from schedule_engine to find next Monday.
+        If currently Monday before 7am, returns today at 7am, otherwise next Monday.
+        """
+        now_local = dt_now_local()
+
+        # Calculate days until the upcoming Monday (0 = Monday)
+        # If today is Tuesday (1), (0-1)%7 = 6 days ahead.
+        # If today is Monday (0), (0-0)%7 = 0 days ahead.
+        days_ahead = (0 - now_local.weekday()) % 7
+
+        # Set reference time to Today at 7:00 AM
+        target = now_local.replace(hour=7, minute=0, second=0, microsecond=0)
+
+        # Move forward to the correct day
+        target += timedelta(days=days_ahead)
+
+        # If the result is in the past (e.g., it's Monday 8:00 AM), add 1 week
+        if target <= now_local:
+            target += timedelta(weeks=1)
+
+        return target
+
+    def _calculate_chore_attributes(
+        self,
+        chore_id: str,
+        chore_info: ChoreData,
+        assignee_info: AssigneeData,
+        chore_eid,
+    ) -> dict | None:
+        """Calculate minimal attributes for a single chore in dashboard helper.
+
+        Returns a dictionary with only the essential chore attributes needed for
+        dashboard list rendering and sorting. Additional attributes (due_date,
+        can_claim, can_approve, timestamps, etc.) should be fetched from the
+        chore status sensor via state_attr(chore.eid, 'attribute_name').
+
+        Minimal fields (6 total):
+        - eid: entity_id (for fetching additional attributes from chore sensor)
+        - name: chore name (for display)
+        - state: pending/claimed/completed/overdue (for status coloring)
+        - labels: list of {id, name} label objects (for display and filtering)
+        - primary_group: today/this_week/other (for grouping)
+        - is_today_am: boolean or None (for AM/PM sorting)
+
+        Uses get_chore_status_context() for single bulk fetch instead of
+        multiple individual manager calls.
+
+        Returns None if chore name is missing (data corruption).
+        """
+        chore_name = get_item_name_or_log_error(
+            "chore", chore_id, chore_info, const.DATA_CHORE_NAME
+        )
+        if not chore_name:
+            return None
+
+        hass = self.hass or self.coordinator.hass
+
+        # Single bulk fetch for all status data
+        ctx = self.coordinator.chore_manager.get_chore_status_context(
+            self._assignee_id, chore_id
+        )
+        state = cast("str", ctx[const.CHORE_CTX_STATE])
+        due_date_str = ctx[const.CHORE_CTX_DUE_DATE]
+        is_due = ctx[const.CHORE_CTX_IS_DUE]
+        claim_mode = cast("str | None", ctx.get(const.CHORE_CTX_CLAIM_MODE))
+
+        # Get chore labels (always a list, even if empty)
+        stored_labels = chore_info.get(const.DATA_CHORE_LABELS, [])
+        label_entries = self._build_label_entries(hass, stored_labels)
+
+        # Convert due date to local datetime for grouping calculations
+        due_date_local_dt = None
+        if due_date_str:
+            due_date_utc = dt_to_utc(due_date_str)
+            if due_date_utc:
+                due_date_local_dt = dt_format(
+                    due_date_utc, const.HELPER_RETURN_DATETIME_LOCAL
+                )
+
+        # Calculate is_today_am (only if due date exists and is today)
+        is_today_am = None
+        if due_date_local_dt and isinstance(due_date_local_dt, datetime):
+            today_local = dt_today_local()
+            if due_date_local_dt.date() == today_local and due_date_local_dt.hour < 12:
+                is_today_am = True
+            elif due_date_local_dt.date() == today_local:
+                is_today_am = False
+
+        # Calculate primary_group for dashboard grouping
+        recurring_frequency = chore_info.get(const.DATA_CHORE_RECURRING_FREQUENCY) or ""
+        shows_today_without_due_date = (
+            self.coordinator.chore_manager.no_due_date_daily_matches_today(
+                chore_info,
+                self._assignee_id,
+            )
+        )
+        primary_group = self._calculate_primary_group(
+            state,
+            is_due,
+            due_date_local_dt,
+            recurring_frequency,
+            shows_today_without_due_date,
+            claim_mode,
+        )
+
+        # Return the minimal fields needed for dashboard rendering
+        return {
+            "_chore_id": chore_id,
+            const.ATTR_EID: chore_eid,
+            const.ATTR_NAME: chore_name,
+            const.ATTR_STATE: state,
+            const.ATTR_CHORE_LABELS: label_entries,
+            const.ATTR_CHORE_PRIMARY_GROUP: primary_group,
+            const.ATTR_CHORE_IS_TODAY_AM: is_today_am,
+        }
+
+    def _calculate_primary_group(
+        self,
+        status: str,
+        is_due: bool,
+        due_date_local,
+        recurring_frequency: str,
+        shows_today_without_due_date: bool,
+        claim_mode: str | None = None,
+    ) -> str:
+        """Calculate the primary group for a chore.
+
+        Primary group is determined by the due date timing and due window status.
+        This ensures a chore stays in the same group even when transitioning
+        from pending → due → claimed → approved.
+
+        Chores in blocked claim modes (not_my_turn, standby, paused) that the
+        assignee cannot act on are routed to "other" to avoid inflating the
+        actionable "today" and "this_week" group counts.
+
+        Args:
+            status: The derived display state (from context provider)
+            is_due: Whether chore is in due window (from context provider)
+            due_date_local: Local datetime or None
+            recurring_frequency: Chore frequency string
+            claim_mode: Claim mode string from context, or None if claimable
+
+        Returns: "today", "this_week", or "other"
+        """
+        # Overdue chores always go to today group (past due date)
+        if status == const.CHORE_STATE_OVERDUE:
+            return const.PRIMARY_GROUP_TODAY
+
+        # If chore is in due window (regardless of actual due date), it goes to today
+        if is_due:
+            return const.PRIMARY_GROUP_TODAY
+
+        # Blocked claim modes: route to "other" so non-actionable chores
+        # don't inflate the actionable "today" / "this_week" group counts.
+        if claim_mode in (
+            const.CHORE_CLAIM_MODE_BLOCKED_NOT_MY_TURN,
+            const.CHORE_CLAIM_MODE_BLOCKED_STANDBY,
+            const.CHORE_CLAIM_MODE_BLOCKED_PAUSED,
+        ):
+            return const.PRIMARY_GROUP_OTHER
+
+        # Check due date if available
+        if due_date_local and isinstance(due_date_local, datetime):
+            today_local = dt_today_local()
+
+            # Past due dates -> today group (catches claimed/approved chores that were overdue)
+            if due_date_local.date() < today_local:
+                return const.PRIMARY_GROUP_TODAY
+
+            # Due today -> today group
+            if due_date_local.date() == today_local:
+                return const.PRIMARY_GROUP_TODAY
+
+            # Due before next Monday 7am -> this_week group
+            next_monday_7am = self._get_next_monday_7am_local()
+            if due_date_local < next_monday_7am:
+                return const.PRIMARY_GROUP_THIS_WEEK
+
+            # Due later -> other group
+            return const.PRIMARY_GROUP_OTHER
+
+        # No due date - only weekday-matching daily chores belong in today
+        if (
+            recurring_frequency == const.FREQUENCY_DAILY
+            and shows_today_without_due_date
+        ):
+            return const.PRIMARY_GROUP_TODAY
+
+        return const.PRIMARY_GROUP_OTHER
+
+    @property
+    def native_value(self) -> Any:
+        """Return a simple helper state for dashboard availability checks."""
+        return "available"
+
+    def _build_core_sensors(self, entity_registry) -> dict[str, str | None]:
+        """Build core sensor entity IDs for dashboard use.
+
+        Looks up entity IDs from the registry by unique ID to ensure correct
+        entity references even if users have renamed entities.
+
+        Args:
+            entity_registry: Entity registry instance from hass.
+
+        Returns:
+            dict: {
+                "points_eid": "sensor.kc_assignee_name_points" or None,
+                "chores_eid": "sensor.kc_assignee_name_chores" or None,
+                "badges_eid": "sensor.kc_assignee_name_badges" or None
+            }
+        """
+        sensor_types = [
+            (const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_POINTS_SENSOR, "points_eid"),
+            (const.SENSOR_KC_UID_SUFFIX_CHORES_SENSOR, "chores_eid"),
+            (const.SENSOR_KC_UID_SUFFIX_ASSIGNEE_BADGES_SENSOR, "badges_eid"),
+        ]
+
+        core_sensors = {}
+        for suffix, key in sensor_types:
+            unique_id = f"{self._entry.entry_id}_{self._assignee_id}{suffix}"
+            try:
+                entity_id = entity_registry.async_get_entity_id(
+                    "sensor", const.DOMAIN, unique_id
+                )
+                core_sensors[key] = entity_id
+            except (KeyError, ValueError, AttributeError):
+                core_sensors[key] = None
+
+        return core_sensors
+
+    def _build_dashboard_helpers(
+        self,
+        entity_registry,
+        *,
+        translation_sensor_eid: str | None,
+        chore_helper_eids: list[str],
+    ) -> dict[str, Any]:
+        """Build dashboard helper entity IDs for dashboard use.
+
+        Looks up entity IDs from the registry by unique ID to ensure correct
+        entity references even if users have renamed entities.
+
+        Args:
+            entity_registry: Entity registry instance from hass.
+
+        Returns:
+            dict: {
+                "date_helper_eid": "datetime.kc_assignee_name_ui_dashboard_date_helper" or None,
+                "chore_select_eid": "select.kc_assignee_name_ui_dashboard_chore_list_helper" or None,
+                "translation_sensor_eid": "sensor.kc_ui_dashboard_lang_en" or None
+            }
+        """
+        # Datetime helper uses SUFFIX pattern: entry_id_assignee_id + SUFFIX
+        datetime_unique_id = f"{self._entry.entry_id}_{self._assignee_id}{const.DATETIME_KC_UID_SUFFIX_DATE_HELPER}"
+
+        # Select helper uses SUFFIX pattern: entry_id_assignee_id + SUFFIX
+        select_unique_id = f"{self._entry.entry_id}_{self._assignee_id}{const.SELECT_KC_UID_SUFFIX_ASSIGNEE_DASHBOARD_HELPER_CHORES_SELECT}"
+
+        dashboard_helpers: dict[str, Any] = {
+            const.ATTR_CHORE_HELPER_EIDS: chore_helper_eids,
+        }
+
+        # Look up datetime helper
+        try:
+            entity_id = entity_registry.async_get_entity_id(
+                "datetime", const.DOMAIN, datetime_unique_id
+            )
+            dashboard_helpers["date_helper_eid"] = entity_id
+        except (KeyError, ValueError, AttributeError):
+            dashboard_helpers["date_helper_eid"] = None
+
+        # Look up select helper
+        try:
+            entity_id = entity_registry.async_get_entity_id(
+                "select", const.DOMAIN, select_unique_id
+            )
+            dashboard_helpers["chore_select_eid"] = entity_id
+        except (KeyError, ValueError, AttributeError):
+            dashboard_helpers["chore_select_eid"] = None
+
+        dashboard_helpers[const.ATTR_TRANSLATION_SENSOR_EID] = translation_sensor_eid
+
+        return dashboard_helpers
+
+    def _build_dashboard_config(self) -> dict[str, Any]:
+        """Build resolved dashboard configuration values for template use."""
+        return {
+            const.ATTR_POINTS_PRECISION: self._entry.options.get(
+                const.CONF_DASHBOARD_POINTS_PRECISION,
+                const.DEFAULT_DASHBOARD_POINTS_PRECISION,
+            )
+        }
+
+    def _build_payload(
+        self,
+        entity_registry,
+        chores_attr: list[dict[str, Any]],
+        *,
+        translation_sensor_eid: str | None,
+        chore_helper_eids: list[str],
+        shard_runtime: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build the public dashboard helper payload from prepared inputs."""
+        assignee_info: AssigneeData = cast(
+            "AssigneeData", self.coordinator.assignees_data.get(self._assignee_id, {})
+        )
+        hass = self.hass or self.coordinator.hass
+
+        gamification_enabled = should_create_gamification_entities(
+            self.coordinator, self._assignee_id
+        )
+        chore_workflow_enabled = should_create_workflow_buttons(
+            self.coordinator, self._assignee_id
+        )
+
+        rewards_attr = []
+        if gamification_enabled:
+            for reward_id, reward_info in self.coordinator.rewards_data.items():
+                reward_name = get_item_name_or_log_error(
+                    "reward", reward_id, reward_info, const.DATA_REWARD_NAME
+                )
+                if not reward_name:
+                    continue
+
+                if not is_user_assigned_to_reward(
+                    self.coordinator, self._assignee_id, reward_id
+                ):
+                    continue
+
+                reward_eid = None
+                if entity_registry:
+                    unique_id = (
+                        f"{self._entry.entry_id}_{self._assignee_id}_{reward_id}"
+                        f"{const.SENSOR_KC_UID_SUFFIX_REWARD_STATUS_SENSOR}"
+                    )
+                    reward_eid = entity_registry.async_get_entity_id(
+                        "sensor", const.DOMAIN, unique_id
+                    )
+
+                reward_status = None
+                if reward_eid and hass is not None:
+                    state_obj = hass.states.get(reward_eid)
+                    if state_obj:
+                        reward_status = state_obj.state
+
+                reward_labels = reward_info.get(const.DATA_REWARD_LABELS, [])
+                if not isinstance(reward_labels, list):
+                    reward_labels = []
+
+                reward_data_entry = assignee_info.get(
+                    const.DATA_USER_REWARD_DATA, {}
+                ).get(reward_id, {})
+                periods = reward_data_entry.get(const.DATA_USER_REWARD_DATA_PERIODS, {})
+                period_key_mapping = {
+                    const.PERIOD_ALL_TIME: const.DATA_USER_REWARD_DATA_PERIODS_ALL_TIME
+                }
+                claims_count = self.coordinator.stats.get_period_total(
+                    periods,
+                    const.PERIOD_ALL_TIME,
+                    const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED,
+                    period_key_mapping=period_key_mapping,
+                )
+                approvals_count = self.coordinator.stats.get_period_total(
+                    periods,
+                    const.PERIOD_ALL_TIME,
+                    const.DATA_USER_REWARD_DATA_PERIOD_APPROVED,
+                    period_key_mapping=period_key_mapping,
+                )
+
+                rewards_attr.append(
+                    {
+                        const.ATTR_EID: reward_eid,
+                        const.ATTR_NAME: reward_name,
+                        const.ATTR_STATUS: reward_status,
+                        const.ATTR_LABELS: reward_labels,
+                        const.ATTR_COST: reward_info.get(const.DATA_REWARD_COST, 0),
+                        const.ATTR_CLAIMS: claims_count,
+                        const.ATTR_APPROVALS: approvals_count,
+                    }
+                )
+
+            rewards_attr.sort(
+                key=lambda reward: str(reward.get(const.ATTR_NAME, "")).lower()
+            )
+
+        badges_attr = []
+        if gamification_enabled:
+            for badge_id, badge_info in self.coordinator.badges_data.items():
+                assigned_to = badge_info.get(const.DATA_BADGE_ASSIGNED_USER_IDS, [])
+                if assigned_to and self._assignee_id not in assigned_to:
+                    continue
+                badge_type = badge_info.get(const.DATA_BADGE_TYPE, const.SENTINEL_EMPTY)
+                badge_name = get_item_name_or_log_error(
+                    "badge", badge_id, badge_info, const.DATA_BADGE_NAME
+                )
+                if not badge_name:
+                    continue
+
+                badge_eid = None
+                if entity_registry:
+                    if badge_type == const.BADGE_TYPE_CUMULATIVE:
+                        unique_id = (
+                            f"{self._entry.entry_id}_{badge_id}"
+                            f"{const.SENSOR_KC_UID_SUFFIX_BADGE_SENSOR}"
+                        )
+                    else:
+                        unique_id = (
+                            f"{self._entry.entry_id}_{self._assignee_id}_{badge_id}"
+                            f"{const.SENSOR_KC_UID_SUFFIX_BADGE_PROGRESS_SENSOR}"
+                        )
+                    badge_eid = entity_registry.async_get_entity_id(
+                        "sensor", const.DOMAIN, unique_id
+                    )
+
+                badges_earned = assignee_info.get(const.DATA_USER_BADGES_EARNED, {})
+                is_earned = badge_id in badges_earned
+                badge_earned = (
+                    badges_earned.get(badge_id, {})
+                    if isinstance(badges_earned, dict)
+                    else {}
+                )
+                periods = badge_earned.get(const.DATA_USER_BADGES_EARNED_PERIODS, {})
+                period_key_mapping = {
+                    const.PERIOD_ALL_TIME: const.DATA_USER_BADGES_EARNED_PERIODS_ALL_TIME
+                }
+                earned_count = self.coordinator.stats.get_period_total(
+                    periods,
+                    const.PERIOD_ALL_TIME,
+                    const.DATA_USER_BADGES_EARNED_AWARD_COUNT,
+                    period_key_mapping=period_key_mapping,
+                )
+
+                badge_payload: dict[str, Any] = {
+                    const.ATTR_EID: badge_eid,
+                    const.ATTR_NAME: badge_name,
+                    const.ATTR_BADGE_TYPE: badge_type,
+                    const.ATTR_BADGE_EARNED: is_earned,
+                    const.ATTR_EARNED_COUNT: earned_count,
+                }
+                if badge_type != const.BADGE_TYPE_CUMULATIVE:
+                    badge_progress = assignee_info.get(
+                        const.DATA_USER_BADGE_PROGRESS, {}
+                    ).get(badge_id, {})
+                    badge_payload[const.ATTR_STATUS] = badge_progress.get(
+                        const.DATA_USER_BADGE_PROGRESS_STATUS,
+                        const.SENTINEL_NONE,
+                    )
+                badges_attr.append(badge_payload)
+
+            badges_attr.sort(
+                key=lambda badge: str(badge.get(const.ATTR_NAME, "")).lower()
+            )
+
+        bonuses_attr = []
+        if gamification_enabled:
+            for bonus_id, bonus_info in self.coordinator.bonuses_data.items():
+                bonus_name = get_item_name_or_log_error(
+                    "bonus", bonus_id, bonus_info, const.DATA_BONUS_NAME
+                )
+                if not bonus_name:
+                    continue
+
+                bonus_eid = None
+                if entity_registry:
+                    unique_id = (
+                        f"{self._entry.entry_id}_{self._assignee_id}_{bonus_id}"
+                        f"{const.BUTTON_KC_UID_SUFFIX_APPROVER_BONUS_APPLY}"
+                    )
+                    bonus_eid = entity_registry.async_get_entity_id(
+                        "button", const.DOMAIN, unique_id
+                    )
+
+                bonus_entry = assignee_info.get(const.DATA_USER_BONUS_APPLIES, {}).get(
+                    bonus_id
+                )
+                bonus_applied_count: int | float = 0
+                if bonus_entry:
+                    periods = bonus_entry.get(const.DATA_USER_BONUS_PERIODS, {})
+                    bonus_applied_count = self.coordinator.stats.get_period_total(
+                        periods,
+                        const.PERIOD_ALL_TIME,
+                        const.DATA_USER_BONUS_PERIOD_APPLIES,
+                    )
+
+                bonuses_attr.append(
+                    {
+                        const.ATTR_EID: bonus_eid,
+                        const.ATTR_NAME: bonus_name,
+                        const.ATTR_POINTS: bonus_info.get(const.DATA_BONUS_POINTS, 0),
+                        const.ATTR_APPLIED: bonus_applied_count,
+                    }
+                )
+
+            bonuses_attr.sort(
+                key=lambda bonus: str(bonus.get(const.ATTR_NAME, "")).lower()
+            )
+
+        penalties_attr = []
+        if gamification_enabled:
+            for penalty_id, penalty_info in self.coordinator.penalties_data.items():
+                penalty_name = get_item_name_or_log_error(
+                    "penalty", penalty_id, penalty_info, const.DATA_PENALTY_NAME
+                )
+                if not penalty_name:
+                    continue
+
+                penalty_eid = None
+                if entity_registry:
+                    unique_id = (
+                        f"{self._entry.entry_id}_{self._assignee_id}_{penalty_id}"
+                        f"{const.BUTTON_KC_UID_SUFFIX_APPROVER_PENALTY_APPLY}"
+                    )
+                    penalty_eid = entity_registry.async_get_entity_id(
+                        "button", const.DOMAIN, unique_id
+                    )
+
+                penalty_entry = assignee_info.get(
+                    const.DATA_USER_PENALTY_APPLIES, {}
+                ).get(penalty_id)
+                penalty_applied_count: int | float = 0
+                if penalty_entry:
+                    periods = penalty_entry.get(const.DATA_USER_PENALTY_PERIODS, {})
+                    penalty_applied_count = self.coordinator.stats.get_period_total(
+                        periods,
+                        const.PERIOD_ALL_TIME,
+                        const.DATA_USER_PENALTY_PERIOD_APPLIES,
+                    )
+
+                penalties_attr.append(
+                    {
+                        const.ATTR_EID: penalty_eid,
+                        const.ATTR_NAME: penalty_name,
+                        const.ATTR_POINTS: penalty_info.get(
+                            const.DATA_PENALTY_POINTS, 0
+                        ),
+                        const.ATTR_APPLIED: penalty_applied_count,
+                    }
+                )
+
+            penalties_attr.sort(
+                key=lambda penalty: str(penalty.get(const.ATTR_NAME, "")).lower()
+            )
+
+        achievements_attr = []
+        if gamification_enabled:
+            for (
+                achievement_id,
+                achievement_info,
+            ) in self.coordinator.achievements_data.items():
+                if self._assignee_id not in achievement_info.get(
+                    const.DATA_ACHIEVEMENT_ASSIGNED_USER_IDS, []
+                ):
+                    continue
+                achievement_name = get_item_name_or_log_error(
+                    "achievement",
+                    achievement_id,
+                    achievement_info,
+                    const.DATA_ACHIEVEMENT_NAME,
+                )
+                if not achievement_name:
+                    continue
+                achievement_eid = None
+                if entity_registry:
+                    unique_id = (
+                        f"{self._entry.entry_id}_{self._assignee_id}_{achievement_id}"
+                        f"{const.SENSOR_KC_UID_SUFFIX_ACHIEVEMENT_PROGRESS_SENSOR}"
+                    )
+                    achievement_eid = entity_registry.async_get_entity_id(
+                        "sensor", const.DOMAIN, unique_id
+                    )
+                achievements_attr.append(
+                    {
+                        const.ATTR_EID: achievement_eid,
+                        const.ATTR_NAME: achievement_name,
+                    }
+                )
+
+            achievements_attr.sort(
+                key=lambda achievement: str(
+                    achievement.get(const.ATTR_NAME, "")
+                ).lower()
+            )
+
+        challenges_attr = []
+        if gamification_enabled:
+            for (
+                challenge_id,
+                challenge_info,
+            ) in self.coordinator.challenges_data.items():
+                if self._assignee_id not in challenge_info.get(
+                    const.DATA_CHALLENGE_ASSIGNED_USER_IDS, []
+                ):
+                    continue
+                challenge_name = get_item_name_or_log_error(
+                    "challenge", challenge_id, challenge_info, const.DATA_CHALLENGE_NAME
+                )
+                if not challenge_name:
+                    continue
+                challenge_eid = None
+                if entity_registry:
+                    unique_id = (
+                        f"{self._entry.entry_id}_{self._assignee_id}_{challenge_id}"
+                        f"{const.SENSOR_KC_UID_SUFFIX_CHALLENGE_PROGRESS_SENSOR}"
+                    )
+                    challenge_eid = entity_registry.async_get_entity_id(
+                        "sensor", const.DOMAIN, unique_id
+                    )
+                challenges_attr.append(
+                    {
+                        const.ATTR_EID: challenge_eid,
+                        const.ATTR_NAME: challenge_name,
+                    }
+                )
+
+            challenges_attr.sort(
+                key=lambda challenge: str(challenge.get(const.ATTR_NAME, "")).lower()
+            )
+
+        points_buttons_attr = []
+        if gamification_enabled and entity_registry:
+            from .helpers.entity_helpers import get_points_adjustment_buttons
+
+            buttons = get_points_adjustment_buttons(
+                self.coordinator.hass, self._entry.entry_id, self._assignee_id
+            )
+            points_buttons_attr = [
+                {"eid": button["eid"], "name": button["name"]} for button in buttons
+            ]
+
+        dashboard_language = assignee_info.get(
+            const.DATA_USER_DASHBOARD_LANGUAGE, const.DEFAULT_DASHBOARD_LANGUAGE
+        )
+        pending_approvals = self._build_pending_approvals(entity_registry)
+        self.coordinator.ui_manager.reset_pending_change_flags()
+
+        core_sensors = self._build_core_sensors(entity_registry)
+        dashboard_config = self._build_dashboard_config()
+        dashboard_helpers = self._build_dashboard_helpers(
+            entity_registry,
+            translation_sensor_eid=translation_sensor_eid,
+            chore_helper_eids=chore_helper_eids,
+        )
+        ui_control = self.coordinator.ui_manager.get_dashboard_ui_control(
+            self._assignee_id
+        )
+
+        return {
+            const.ATTR_PURPOSE: const.TRANS_KEY_PURPOSE_DASHBOARD_HELPER,
+            "chores": self._sanitize_dashboard_chore_rows(chores_attr),
+            "rewards": rewards_attr,
+            const.ATTR_UI_CONTROL: ui_control,
+            "badges": badges_attr,
+            "bonuses": bonuses_attr,
+            "penalties": penalties_attr,
+            "achievements": achievements_attr,
+            "challenges": challenges_attr,
+            "points_buttons": points_buttons_attr,
+            "pending_approvals": pending_approvals,
+            "core_sensors": core_sensors,
+            const.ATTR_DASHBOARD_CONFIG: dashboard_config,
+            "dashboard_helpers": dashboard_helpers,
+            const.ATTR_USER_NAME: self._assignee_name,
+            const.ATTR_USER_ID: self._assignee_id,
+            const.ATTR_INTEGRATION_ENTRY_ID: self._entry.entry_id,
+            const.ATTR_DASHBOARD_LOOKUP_KEY: (
+                f"{self._entry.entry_id}:{self._assignee_id}"
+            ),
+            "language": dashboard_language,
+            "gamification_enabled": gamification_enabled,
+            "chore_workflow_enabled": chore_workflow_enabled,
+            "chores_paused": bool(
+                assignee_info.get(const.DATA_USER_CHORES_PAUSED, False)
+            ),
+            "chores_paused_until": assignee_info.get(
+                const.DATA_USER_CHORES_PAUSED_UNTIL
+            ),
+            "chores_paused_unpause_action": assignee_info.get(
+                const.DATA_USER_CHORES_PAUSED_UNPAUSE_ACTION
+            ),
+            const.ATTR_SHARD_RUNTIME: shard_runtime,
+        }
+
+    def _build_pending_approvals(self, entity_registry) -> dict:
+        """Build pending approvals data with button entity IDs.
+
+        Returns:
+            dict: {
+                "chores": [
+                    {
+                        "chore_id": "uuid",
+                        "chore_name": "Take out Trash",
+                        "timestamp": "2024-01-15T10:30:00+00:00",
+                        "approve_button_eid": "button.kc_assignee_a_chore_1_approve",
+                        "disapprove_button_eid": "button.kc_assignee_a_chore_1_disapprove"
+                    }
+                ],
+                "rewards": [...]
+            }
+        """
+        pending_chores = []
+        pending_rewards = []
+
+        # Get all pending approvals from coordinator via manager query methods
+        pending_chore_approvals = (
+            self.coordinator.chore_manager.get_pending_chore_approvals()
+        )
+        pending_reward_approvals = (
+            self.coordinator.reward_manager.get_pending_approvals()
+        )
+
+        # Filter for this assignee's pending chores
+        for approval in pending_chore_approvals:
+            if approval.get(const.DATA_USER_ID) != self._assignee_id:
+                continue
+
+            chore_id = approval.get(const.DATA_CHORE_ID)
+            if not chore_id:
+                continue
+            chore_info: ChoreData = cast(
+                "ChoreData", self.coordinator.chores_data.get(chore_id, {})
+            )
+            chore_name = get_item_name_or_log_error(
+                "chore", chore_id, chore_info, const.DATA_CHORE_NAME
+            )
+            if not chore_name:
+                continue
+
+            # Build button unique IDs and lookup entity IDs
+            approve_uid = (
+                f"{self._entry.entry_id}_{self._assignee_id}_{chore_id}"
+                f"{const.BUTTON_KC_UID_SUFFIX_APPROVE}"
+            )
+            disapprove_uid = (
+                f"{self._entry.entry_id}_{self._assignee_id}_{chore_id}"
+                f"{const.BUTTON_KC_UID_SUFFIX_DISAPPROVE}"
+            )
+
+            approve_eid = None
+            disapprove_eid = None
+            if entity_registry:
+                approve_eid = entity_registry.async_get_entity_id(
+                    "button", const.DOMAIN, approve_uid
+                )
+                disapprove_eid = entity_registry.async_get_entity_id(
+                    "button", const.DOMAIN, disapprove_uid
+                )
+
+            pending_chores.append(
+                {
+                    "chore_id": chore_id,
+                    "chore_name": chore_name,
+                    "timestamp": approval.get(const.DATA_CHORE_TIMESTAMP),
+                    "approve_button_eid": approve_eid,
+                    "disapprove_button_eid": disapprove_eid,
+                }
+            )
+
+        # Filter for this assignee's pending rewards
+        for approval in pending_reward_approvals:
+            if approval.get(const.DATA_USER_ID) != self._assignee_id:
+                continue
+
+            reward_id = approval.get(const.DATA_REWARD_ID)
+            if not reward_id:
+                continue
+            reward_info: RewardData = cast(
+                "RewardData", self.coordinator.rewards_data.get(reward_id, {})
+            )
+            reward_name = get_item_name_or_log_error(
+                "reward", reward_id, reward_info, const.DATA_REWARD_NAME
+            )
+            if not reward_name:
+                continue
+
+            # Build button unique IDs and lookup entity IDs
+            approve_uid = (
+                f"{self._entry.entry_id}_{self._assignee_id}_{reward_id}"
+                f"{const.BUTTON_KC_UID_SUFFIX_APPROVE_REWARD}"
+            )
+            disapprove_uid = (
+                f"{self._entry.entry_id}_{self._assignee_id}_{reward_id}"
+                f"{const.BUTTON_KC_UID_SUFFIX_DISAPPROVE_REWARD}"
+            )
+
+            approve_eid = None
+            disapprove_eid = None
+            if entity_registry:
+                approve_eid = entity_registry.async_get_entity_id(
+                    "button", const.DOMAIN, approve_uid
+                )
+                disapprove_eid = entity_registry.async_get_entity_id(
+                    "button", const.DOMAIN, disapprove_uid
+                )
+
+            pending_rewards.append(
+                {
+                    "reward_id": reward_id,
+                    "reward_name": reward_name,
+                    "timestamp": approval.get(const.DATA_REWARD_TIMESTAMP),
+                    "approve_button_eid": approve_eid,
+                    "disapprove_button_eid": disapprove_eid,
+                }
+            )
+
+        return {"chores": pending_chores, "rewards": pending_rewards}
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return detailed aggregated structure as attributes.
+
+        Format:
+        {
+          "chores": [
+            {"eid": "sensor.assignee_a_chore_1", "name": "Take out Trash", "status": "overdue"},
+            ...
+          ],
+          "rewards": [
+            {"eid": "sensor.assignee_a_reward_1", "name": "Ice Cream", "cost": "10 Points"},
+            ...
+          ],
+        }
+        """
+        try:
+            entity_registry = async_get(self.hass)
+        except (KeyError, ValueError, AttributeError):
+            entity_registry = None
+        chores_attr = self._build_chore_rows(entity_registry)
+
+        plan = self.coordinator.ui_manager.get_helper_shard_plan(
+            self._assignee_id,
+            const.HELPER_SHARD_FAMILY_CHORES,
+        )
+        if plan is None:
+            plan = build_chore_shard_plan(
+                self.hass,
+                self.coordinator,
+                self._entry,
+                self._assignee_id,
+                self._assignee_name,
+                previous_plan=None,
+            )
+            self.coordinator.ui_manager.set_helper_shard_plan(
+                self._assignee_id,
+                const.HELPER_SHARD_FAMILY_CHORES,
+                plan,
+            )
+
+        visible_chores = chores_attr
+        chore_helper_eids: list[str] = []
+        if plan.mode == const.HELPER_SHARD_MODE_SHARDED:
+            visible_chores = []
+            chore_helper_eids = self.coordinator.ui_manager.get_chore_shard_helper_eids(
+                self._assignee_id
+            )
+
+        payload = self._build_payload(
+            entity_registry,
+            visible_chores,
+            translation_sensor_eid=self._get_translation_sensor_eid(),
+            chore_helper_eids=chore_helper_eids,
+            shard_runtime={
+                "family": const.HELPER_SHARD_FAMILY_CHORES,
+                "mode": plan.mode,
+                "expected_shard_count": plan.expected_shard_count,
+                "last_accepted_serialized_size": plan.last_accepted_serialized_size,
+                "last_reconciliation_outcome": plan.last_reconciliation_outcome,
+            },
+        )
+        plan.last_accepted_serialized_size = _serialized_payload_size(payload)
+        payload[const.ATTR_SHARD_RUNTIME]["last_accepted_serialized_size"] = (
+            plan.last_accepted_serialized_size
+        )
+        return payload
+
+    @property
+    def icon(self) -> str | None:
+        """Return None for icons.json fallback."""
+        return None

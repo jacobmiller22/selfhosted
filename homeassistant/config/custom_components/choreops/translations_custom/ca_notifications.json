@@ -1,0 +1,167 @@
+{
+  "_comment_assignee_section": "══════════════════════════════════════════════════════════════",
+  "_comment_assignee_desc": "NOTIFICACIONS ALS ASSIGNATS: To encoratjador, en segona persona i amb emojis, amb un to gamificat. SENSE el prefix \"ChoreOps:\".",
+  "_comment_assignee_footer": "══════════════════════════════════════════════════════════════",
+  "chore_approved_assignee": {
+    "title": "🎉 Tasques aprovades!",
+    "message": "{chore_name} aprovat! Has guanyat {points} {points_label}"
+  },
+  "chore_disapproved_assignee": {
+    "title": "↩️ Tasca retornada",
+    "message": "{chore_name} necessita més feina."
+  },
+  "chore_overdue_assignee": {
+    "title": "⏰ Tasca pendent",
+    "message": "{chore_name} està pendent! Completa-ho ara per guanyar {points} {points_label}"
+  },
+  "chore_overdue_steal_available": {
+    "title": "⚡ Alerta de tasques domèstiques",
+    "message": "{chore_name} està endarrerit i disponible per robar! Completa-ho primer per guanyar {points} {points_label}"
+  },
+  "chore_missed_assignee": {
+    "title": "😔 Tasca caducada",
+    "message": "{chore_name} ha caducat sense completar-se."
+  },
+  "chore_due_reminder_assignee": {
+    "title": "⏰ Recordatori de tasques domèstiques",
+    "message": "{chore_name} es venç en {minutes} minuts! Val {points} {points_label}"
+  },
+  "chore_due_window_assignee": {
+    "title": "🎯 Tasca pendent",
+    "message": "{chore_name} ja ha de ser! Completa-ho en {hours} hora(es) per guanyar {points} {points_label}"
+  },
+  "chore_approved_assignee_no_points": {
+    "message": "{chore_name} aprovat!"
+  },
+  "chore_overdue_assignee_no_points": {
+    "message": "{chore_name} està endarrerit! Completa-ho ara."
+  },
+  "chore_overdue_steal_available_no_points": {
+    "message": "{chore_name} està endarrerit i disponible per robar! Completa-ho primer."
+  },
+  "chore_standby_needed_no_points": {
+    "message": "La tasca de {primary_name}, {chore_name} , està pendent! Reclama-la ara."
+  },
+  "chore_due_reminder_assignee_no_points": {
+    "message": "{chore_name} s'ha d'entregar en {minutes} minuts!"
+  },
+  "chore_due_window_assignee_no_points": {
+    "message": "{chore_name} ja ha de ser entregat! Completeu-ho en {hours} hora(es)"
+  },
+  "reward_approved_assignee": {
+    "title": "🎉 Recompensa aprovada!",
+    "message": "{reward_name} aprovat!"
+  },
+  "reward_disapproved_assignee": {
+    "title": "💭 Sol·licitud de recompensa retornada",
+    "message": "{reward_name} no ha estat aprovat aquesta vegada."
+  },
+  "badge_earned_assignee": {
+    "title": "🥇 Insígnia guanyada!",
+    "message": "Has guanyat la insígnia {badge_name}!"
+  },
+  "achievement_earned_assignee": {
+    "title": "🏆 Assoliment aconseguit!",
+    "message": "T'has guanyat {achievement_name}! Segueix amb la bona feina."
+  },
+  "challenge_completed_assignee": {
+    "title": "🏁 Repte completat!",
+    "message": "Has completat {challenge_name}! Continua amb la bona feina."
+  },
+  "penalty_applied_assignee": {
+    "title": "⚠️ Penalització aplicada",
+    "message": "{penalty_name}: {points} {points_label} deduït. Tornem al bon camí!"
+  },
+  "bonus_applied_assignee": {
+    "title": "⭐ Bonificació aplicada!",
+    "message": "{bonus_name}: Has guanyat la {points} de bonificació {points_label}! Bona feina."
+  },
+  "multiplier_changed_assignee": {
+    "title": "⚖️ Multiplicador actualitzat",
+    "message": "El multiplicador {points_label} ha canviat de {old_multiplier}x a {new_multiplier}x"
+  },
+  "_comment_approver_section": "══════════════════════════════════════════════════════════════",
+  "_comment_approver_desc": "NOTIFICACIONS DE L'APROVATOR: Informatives, en tercera persona, accionables. Format: '{assignee_name}: Acció'. NO hi ha el prefix 'ChoreOps:'.",
+  "_comment_approver_footer": "══════════════════════════════════════════════════════════════",
+  "chore_claimed_approver": {
+    "title": "✋ {assignee_name}: Tasca reclamada",
+    "message": "{assignee_name} reclamat {chore_name}"
+  },
+  "chore_reminder_approver": {
+    "title": "⏰ {assignee_name}: Cal aprovació",
+    "message": "Recordatori: {chore_name} reclamat per {assignee_name} està esperant la teva revisió"
+  },
+  "chore_overdue_approver": {
+    "title": "⚠️ {assignee_name}: Tasca pendent",
+    "message": "La tasca {assignee_name}de {chore_name} està endarrerida (vençuda: {due_date})"
+  },
+  "pending_chores_approver": {
+    "title": "📋 {assignee_name}: {count} Pendent",
+    "message": "{count} tasques pendents de revisió. Últimes: {latest_chore} (+{points} {points_label})"
+  },
+  "pending_chores_approver_no_points": {
+    "message": "{count} tasques pendents de revisió. Últimes: {latest_chore}"
+  },
+  "reward_claimed_approver": {
+    "title": "🎁 {assignee_name}: Sol·licitud de recompensa",
+    "message": "{assignee_name} ha sol·licitat {reward_name} per a {points} {points_label}"
+  },
+  "reward_reminder_approver": {
+    "title": "⏰ {assignee_name}: Recompensa pendent",
+    "message": "Recordatori: {reward_name} sol·licitat per {assignee_name} està esperant la vostra aprovació."
+  },
+  "badge_earned_approver": {
+    "title": "🥇 {assignee_name}: Insígnia guanyada",
+    "message": "{assignee_name} ha guanyat la insígnia {badge_name}!"
+  },
+  "achievement_earned_approver": {
+    "title": "🏆 {assignee_name}: Assoliment",
+    "message": "{assignee_name} guanyat {achievement_name}"
+  },
+  "challenge_completed_approver": {
+    "title": "🏁 {assignee_name}: Repte superat",
+    "message": "{assignee_name} completat {challenge_name}"
+  },
+  "multiplier_changed_approver": {
+    "title": "⚖️ {assignee_name}: Multiplicador actualitzat",
+    "message": "El multiplicador {assignee_name}de {points_label} ha canviat de {old_multiplier}x a {new_multiplier}x"
+  },
+  "_comment_system_section": "══════════════════════════════════════════════════════════════",
+  "_comment_system_desc": "NOTIFICACIONS DEL SISTEMA/ADMINISTRADOR: Operacions de gestió de dades",
+  "_comment_system_footer": "══════════════════════════════════════════════════════════════",
+  "data_reset": {
+    "title": "🔄 ChoreOps: Restabliment de dades",
+    "message": "Les dades del sistema s'han restablert"
+  },
+  "data_reset_global": {
+    "title": "🔄 ChoreOps: Restabliment complet",
+    "message": "Totes les dades del sistema s'han restablert als valors predeterminats"
+  },
+  "data_reset_assignee": {
+    "title": "🔄 ChoreOps: Restabliment de l'assignat",
+    "message": "Restabliment de dades per a {assignee_name}"
+  },
+  "data_reset_item_type": {
+    "title": "🔄 ChoreOps: {item_type} Reinicia",
+    "message": "Totes les dades de {item_type} s'han reiniciat."
+  },
+  "data_reset_item": {
+    "title": "🔄 ChoreOps: Restabliment d'objectes",
+    "message": "S'ha reiniciat {item_type} '{item_name}'"
+  },
+  "_comment_actions_section": "══════════════════════════════════════════════════════════════",
+  "_comment_actions_desc": "BOTONS D'ACCIÓ DE NOTIFICACIÓ: Llenguatge més suau i encoratjador",
+  "_comment_actions_footer": "══════════════════════════════════════════════════════════════",
+  "actions": {
+    "approve": "✅ Aprova",
+    "claim": "✋ Ho he aconseguit!",
+    "complete": "✅ Complet",
+    "disapprove": "↩️ Desaprovar",
+    "remind_30": "⏰ Recorda en 30 minuts",
+    "skip": "⏭️ Omet"
+  },
+  "chore_standby_needed": {
+    "title": "🫲 S'ha sol·licitat l'estat d'espera",
+    "message": "La tasca de {primary_name}, {chore_name} , està pendent! Reclama-la ara per guanyar {points} {points_label}"
+  }
+}

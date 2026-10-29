@@ -1,0 +1,3659 @@
+"""Statistics Manager - Event-driven statistics aggregation.
+
+This manager handles all period-based and all-time statistics:
+- Point stats (earned/spent by period and source)
+- Chore stats (completions by period)
+- Reward stats (claims/approvals by period)
+
+ARCHITECTURE (v0.5.0+ "Clean Break"):
+- StatisticsManager LISTENS to domain events (POINTS_CHANGED, CHORE_APPROVED, etc.)
+- Domain managers (EconomyManager, ChoreManager, RewardManager) emit events ONLY
+- This decouples business logic from historical reporting
+
+Event subscriptions:
+- SIGNAL_SUFFIX_POINTS_CHANGED → _on_points_changed()
+- SIGNAL_SUFFIX_CHORE_APPROVED → _on_chore_approved()
+- SIGNAL_SUFFIX_CHORE_COMPLETED → _on_chore_completed()
+- SIGNAL_SUFFIX_CHORE_CLAIMED → _on_chore_claimed()
+- SIGNAL_SUFFIX_CHORE_DISAPPROVED → _on_chore_disapproved()
+- SIGNAL_SUFFIX_CHORE_OVERDUE → _on_chore_overdue()
+- SIGNAL_SUFFIX_CHORE_OVERDUE_RESOLVED → _on_chore_overdue_resolved()
+- SIGNAL_SUFFIX_REWARD_APPROVED → _on_reward_approved()
+
+PHASE 7.5 ARCHITECTURE (Statistics Presenter & Data Sanitization):
+- Directive 1: Derivative Data is Ephemeral - temporal stats MUST NOT be persisted
+- Directive 2: Manager-Controlled Time - StatisticsManager owns the "Financial Calendar"
+- Directive 3: Cache is Presentation, not Database - must be recreatable from buckets
+
+Cache Architecture:
+- _stats_cache[assignee_id] contains PRES_* keys for presentation (memory-only)
+- Persistent data lives in point_data.periods (buckets) and high-water marks
+- Cache is rebuilt from buckets on startup and on-demand (get_stats API)
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, time
+from typing import TYPE_CHECKING, Any, cast
+
+from homeassistant.core import callback
+
+from .. import const
+from ..engines.chore_engine import ChoreEngine
+from ..utils.dt_utils import (
+    as_utc,
+    dt_local_date_iso,
+    dt_now_local,
+    dt_parse,
+    dt_parse_date,
+    get_default_timezone,
+)
+from ..utils.math_utils import calculate_average
+from .base_manager import BaseManager
+
+if TYPE_CHECKING:
+    from asyncio import TimerHandle
+
+    from homeassistant.core import HomeAssistant
+
+    from ..coordinator import ChoreOpsDataCoordinator
+    from ..engines.statistics_engine import StatisticsEngine
+    from ..type_defs import BadgeScopedCompletionSnapshot, ChoreData
+
+
+__all__ = ["StatisticsManager"]
+
+# Phase 7.5: Cache refresh debounce delay (500ms)
+# Prevents thundering herd on rapid events (e.g., bulk approvals)
+CACHE_REFRESH_DEBOUNCE_SECONDS = 0.5
+
+
+class StatisticsManager(BaseManager):
+    """Manager for event-driven statistics aggregation.
+
+    Responsibilities:
+    - Listen to domain events (POINTS_CHANGED, CHORE_APPROVED, REWARD_APPROVED)
+    - Update period-based statistics (daily/weekly/monthly/yearly/all_time)
+    - Maintain all-time aggregates
+    - Prune old history data
+
+    NOT responsible for:
+    - Computing point balances (EconomyManager)
+    - Business logic (domain managers)
+    - Gamification triggers (GamificationManager)
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator: ChoreOpsDataCoordinator,
+    ) -> None:
+        """Initialize the StatisticsManager.
+
+        Args:
+            hass: Home Assistant instance
+            coordinator: The main ChoreOps coordinator
+        """
+        super().__init__(hass, coordinator)
+        self._coordinator = coordinator
+
+        # Phase 7.5: Presentation cache (memory-only, PRES_* keys)
+        # Cache structure: {assignee_id: {"points": {...}, "chores": {...}, ...}}
+        # This cache holds derived/temporal values that are NOT persisted to storage.
+        # All values can be regenerated from period buckets (point_data.periods).
+        self._stats_cache: dict[str, dict[str, Any]] = {}
+
+        # Phase 7.5: Debounce timers for cache refreshes (500ms per-assignee)
+        # Prevents thundering herd on rapid events (e.g., bulk approvals)
+        self._cache_timers: dict[str, TimerHandle] = {}
+
+    @property
+    def _stats_engine(self) -> StatisticsEngine:
+        """Get the StatisticsEngine from coordinator."""
+        return self._coordinator.stats
+
+    def _emit_stats_updated(self, assignee_id: str) -> None:
+        """Emit a post-statistics update signal for an assignee."""
+        self.emit(const.SIGNAL_SUFFIX_STATS_UPDATED, user_id=assignee_id)
+
+    async def async_setup(self) -> None:
+        """Set up event subscriptions for statistics tracking.
+
+        Subscribe to:
+        - CHORES_READY: Startup cascade - hydrate stats → emit STATS_READY
+        - POINTS_CHANGED: Track point transactions
+        - CHORE_APPROVED: Track chore completions
+        - REWARD_APPROVED: Track reward redemptions
+
+        Phase 7.5:
+        - Midnight Rollover: Clear 'today' cache keys at midnight
+        - Startup Hydration: Now triggered by CHORES_READY signal (cascade)
+        """
+        # Startup cascade - wait for chores to be ready before hydrating stats
+        self.listen(const.SIGNAL_SUFFIX_CHORES_READY, self._on_chores_ready)
+
+        # Subscribe to point change events
+        self.listen(const.SIGNAL_SUFFIX_POINTS_CHANGED, self._on_points_changed)
+
+        # Subscribe to chore events
+        self.listen(const.SIGNAL_SUFFIX_CHORE_APPROVED, self._on_chore_approved)
+        self.listen(
+            const.SIGNAL_SUFFIX_CHORE_POINTS_AWARDED,
+            self._on_chore_points_awarded,
+        )
+        self.listen(const.SIGNAL_SUFFIX_CHORE_COMPLETED, self._on_chore_completed)
+        self.listen(const.SIGNAL_SUFFIX_CHORE_CLAIMED, self._on_chore_claimed)
+        self.listen(const.SIGNAL_SUFFIX_CHORE_DISAPPROVED, self._on_chore_disapproved)
+        self.listen(const.SIGNAL_SUFFIX_CHORE_OVERDUE, self._on_chore_overdue)
+        self.listen(
+            const.SIGNAL_SUFFIX_CHORE_OVERDUE_RESOLVED,
+            self._on_chore_overdue_resolved,
+        )
+        self.listen(const.SIGNAL_SUFFIX_CHORE_MISSED, self._on_chore_missed)
+
+        # Quiet transitions - state changes without bucket writes (snapshot only)
+        self.listen(const.SIGNAL_SUFFIX_CHORE_STATUS_RESET, self._on_chore_status_reset)
+        self.listen(const.SIGNAL_SUFFIX_CHORE_UNDONE, self._on_chore_undone)
+
+        # Structural lifecycle events — refresh cache so summary counts
+        # (current_due_today etc.) reflect assignment changes (Issue #205).
+        self.listen(const.SIGNAL_SUFFIX_CHORE_UPDATED, self._on_chore_updated)
+
+        # Subscribe to reward approval events
+        self.listen(const.SIGNAL_SUFFIX_REWARD_APPROVED, self._on_reward_approved)
+        self.listen(const.SIGNAL_SUFFIX_REWARD_CLAIMED, self._on_reward_claimed)
+        self.listen(const.SIGNAL_SUFFIX_REWARD_DISAPPROVED, self._on_reward_disapproved)
+
+        # Subscribe to badge events (Phase 4: Period Update Ownership)
+        self.listen(const.SIGNAL_SUFFIX_BADGE_EARNED, self._on_badge_earned)
+
+        # Subscribe to bonus/penalty events (Phase 4C: Bonus/Penalty Period Tracking)
+        self.listen(const.SIGNAL_SUFFIX_BONUS_APPLIED, self._on_bonus_applied)
+        self.listen(const.SIGNAL_SUFFIX_PENALTY_APPLIED, self._on_penalty_applied)
+
+        # Midnight rollover - listen to SystemManager's signal (Timer Owner pattern)
+        # Clears 'today' cache keys at midnight so sensors show 0 immediately
+        self.listen(const.SIGNAL_SUFFIX_MIDNIGHT_ROLLOVER, self._on_midnight_rollover)
+
+        # Periodic pulse - refresh current chore snapshot counts that can change
+        # based on time passage without a storage write (for example, due_today).
+        self.listen(const.SIGNAL_SUFFIX_PERIODIC_UPDATE, self._on_periodic_update)
+
+        # Data reset completion signals - invalidate caches when data is reset
+        # Each domain manager emits completion signal after reset; we listen to all
+        self.listen(
+            const.SIGNAL_SUFFIX_CHORE_DATA_RESET_COMPLETE,
+            self._on_data_reset_complete,
+        )
+        self.listen(
+            const.SIGNAL_SUFFIX_POINTS_DATA_RESET_COMPLETE,
+            self._on_data_reset_complete,
+        )
+        self.listen(
+            const.SIGNAL_SUFFIX_BADGE_DATA_RESET_COMPLETE,
+            self._on_data_reset_complete,
+        )
+        self.listen(
+            const.SIGNAL_SUFFIX_ACHIEVEMENT_DATA_RESET_COMPLETE,
+            self._on_data_reset_complete,
+        )
+        self.listen(
+            const.SIGNAL_SUFFIX_CHALLENGE_DATA_RESET_COMPLETE,
+            self._on_data_reset_complete,
+        )
+        self.listen(
+            const.SIGNAL_SUFFIX_REWARD_DATA_RESET_COMPLETE,
+            self._on_data_reset_complete,
+        )
+        self.listen(
+            const.SIGNAL_SUFFIX_PENALTY_DATA_RESET_COMPLETE,
+            self._on_data_reset_complete,
+        )
+        self.listen(
+            const.SIGNAL_SUFFIX_BONUS_DATA_RESET_COMPLETE,
+            self._on_data_reset_complete,
+        )
+
+        # Note: Startup hydration is now triggered by CHORES_READY signal (cascade)
+        # See _on_chores_ready() handler below
+
+        const.LOGGER.debug("StatisticsManager: Event subscriptions initialized")
+
+    # =========================================================================
+    # Event Handlers
+    # =========================================================================
+
+    @callback
+    def _on_midnight_rollover(self, payload: dict[str, Any]) -> None:
+        """Handle midnight rollover - invalidate all caches.
+
+        At midnight, all 'today' values become stale. Rather than surgically
+        removing only PRES_*_TODAY keys, we invalidate the entire cache.
+        Lazy hydration will rebuild on next get_stats() call.
+
+        Args:
+            payload: Event data (unused)
+        """
+        const.LOGGER.info("StatisticsManager: Midnight rollover - clearing cache")
+        self.invalidate_cache()
+
+    @callback
+    def _on_periodic_update(self, payload: dict[str, Any]) -> None:
+        """Refresh time-sensitive chore snapshot stats on coordinator pulse.
+
+        Some current chore presentation values are derived from the current time
+        rather than from explicit state-change events. For example, a chore can
+        become due today as time advances even when no storage write occurs.
+        Refreshing the chore cache on the periodic pulse keeps sensor-backed
+        dashboard summaries aligned with the chore rows.
+
+        Args:
+            payload: Event data (unused)
+        """
+        del payload
+
+        for assignee_id in self._coordinator.assignees_data:
+            self._refresh_chore_cache(assignee_id)
+            self._mark_cache_updated(assignee_id)
+
+    async def _on_points_changed(self, payload: dict[str, Any]) -> None:
+        """Handle POINTS_CHANGED event - update point statistics.
+
+        This is called whenever EconomyManager.deposit() or .withdraw() is invoked.
+        Updates period-based point_data (daily/weekly/monthly/yearly/all_time):
+        - points_earned (positive deltas)
+        - points_spent (negative deltas)
+        - by_source breakdown
+        - highest_balance (all_time only)
+
+        Phase 7G.1 Architecture: All point stats live in point_data.periods.
+        No separate point_stats dict - data is single source of truth.
+
+        Args:
+            payload: Event data containing:
+                - user_id: The assignee's internal ID (canonical)
+                - old_balance: Balance before transaction
+                - new_balance: Balance after transaction
+                - delta: The point change (positive or negative)
+                - source: Transaction source (POINTS_SOURCE_*)
+                - reference_id: Optional related entity ID
+        """
+        # Extract payload values
+        assignee_id = payload.get("user_id", "")
+        old_balance = payload.get("old_balance", 0.0)  # noqa: F841 - future use
+        new_balance = payload.get("new_balance", 0.0)
+        delta = payload.get("delta", 0.0)
+        source = payload.get("source", "")
+
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            const.LOGGER.warning(
+                "StatisticsManager._on_points_changed: Assignee '%s' not found",
+                assignee_id,
+            )
+            return
+
+        # Phase 3B Tenant Rule: Guard against missing point_periods
+        # EconomyManager (Landlord) creates point_periods on-demand before emitting POINTS_CHANGED
+        periods_data: dict[str, Any] | None = assignee_info.get(
+            const.DATA_USER_POINT_PERIODS
+        )
+        if periods_data is None:
+            const.LOGGER.warning(
+                "StatisticsManager._on_points_changed: point_periods missing for assignee '%s' - "
+                "skipping (EconomyManager should have created it before emitting signal)",
+                assignee_id,
+            )
+            return
+
+        # === 1) Record earned/spent to period buckets ===
+
+        now_local = dt_now_local()
+
+        # Determine earned vs spent based on delta sign
+        # Positive delta → points_earned, Negative delta → points_spent
+        if delta > 0:
+            increment_key = const.DATA_USER_POINT_PERIOD_POINTS_EARNED
+        else:
+            increment_key = const.DATA_USER_POINT_PERIOD_POINTS_SPENT
+
+        # Record earned OR spent using StatisticsEngine (handles daily/weekly/monthly/yearly)
+        # NOTE: all_time is handled manually below due to nested bucket structure (all_time.all_time)
+        self._stats_engine.record_transaction(
+            periods_data,
+            {increment_key: delta},
+            reference_date=now_local,
+            include_all_time=False,
+        )
+
+        # === 2) Record by_source to period buckets (nested structure) ===
+        period_ids = self._stats_engine.get_period_keys(now_local)
+        for period_key, period_id in period_ids.items():
+            bucket: dict[str, Any] = periods_data.setdefault(period_key, {})
+            entry: dict[str, Any] = bucket.setdefault(period_id, {})
+            if const.DATA_USER_POINT_PERIOD_BY_SOURCE not in entry or not isinstance(
+                entry[const.DATA_USER_POINT_PERIOD_BY_SOURCE], dict
+            ):
+                entry[const.DATA_USER_POINT_PERIOD_BY_SOURCE] = {}
+            entry[const.DATA_USER_POINT_PERIOD_BY_SOURCE].setdefault(source, 0.0)
+            entry[const.DATA_USER_POINT_PERIOD_BY_SOURCE][source] = round(
+                entry[const.DATA_USER_POINT_PERIOD_BY_SOURCE][source] + delta,
+                const.DATA_FLOAT_PRECISION,
+            )
+
+        # === 3) Record by_source and highest_balance to all_time bucket ===
+        all_time_bucket: dict[str, Any] = periods_data.setdefault(
+            const.DATA_USER_POINT_PERIODS_ALL_TIME, {}
+        )
+        all_time_entry: dict[str, Any] = all_time_bucket.setdefault(
+            const.PERIOD_ALL_TIME, {}
+        )
+
+        # by_source for all_time
+        if (
+            const.DATA_USER_POINT_PERIOD_BY_SOURCE not in all_time_entry
+            or not isinstance(
+                all_time_entry[const.DATA_USER_POINT_PERIOD_BY_SOURCE], dict
+            )
+        ):
+            all_time_entry[const.DATA_USER_POINT_PERIOD_BY_SOURCE] = {}
+        all_time_entry[const.DATA_USER_POINT_PERIOD_BY_SOURCE].setdefault(source, 0.0)
+        all_time_entry[const.DATA_USER_POINT_PERIOD_BY_SOURCE][source] = round(
+            all_time_entry[const.DATA_USER_POINT_PERIOD_BY_SOURCE][source] + delta,
+            const.DATA_FLOAT_PRECISION,
+        )
+
+        # points_earned/spent tracking (all_time only - nested bucket requires manual handling)
+        # record_transaction() writes to periods["all_time"] directly, but we need
+        # periods["all_time"]["all_time"] for consistency with other period structures
+        if delta > 0:
+            current_earned = all_time_entry.get(
+                const.DATA_USER_POINT_PERIOD_POINTS_EARNED, 0.0
+            )
+            all_time_entry[const.DATA_USER_POINT_PERIOD_POINTS_EARNED] = round(
+                current_earned + delta, const.DATA_FLOAT_PRECISION
+            )
+        else:
+            current_spent = all_time_entry.get(
+                const.DATA_USER_POINT_PERIOD_POINTS_SPENT, 0.0
+            )
+            all_time_entry[const.DATA_USER_POINT_PERIOD_POINTS_SPENT] = round(
+                current_spent + delta, const.DATA_FLOAT_PRECISION
+            )
+
+        # highest_balance tracking (all_time only)
+        highest = all_time_entry.get(const.DATA_USER_POINT_PERIOD_HIGHEST_BALANCE, 0.0)
+        all_time_entry[const.DATA_USER_POINT_PERIOD_HIGHEST_BALANCE] = max(
+            highest, new_balance
+        )
+
+        # === 4) Prune old period data ===
+        self._stats_engine.prune_history(periods_data, self.get_retention_config())
+
+        # === 5) Persist changes ===
+        self._coordinator._persist()
+
+        # === 6) Refresh presentation cache (BEFORE notifying sensors) ===
+        # Must refresh cache synchronously before async_set_updated_data() triggers sensor reads
+        self._refresh_point_cache(assignee_id)
+
+        # === 7) Notify Home Assistant of data update ===
+        self._coordinator.async_set_updated_data(self._coordinator._data)
+        self._emit_stats_updated(assignee_id)
+
+        const.LOGGER.debug(
+            "StatisticsManager._on_points_changed: assignee=%s, delta=%.2f, source=%s",
+            assignee_id,
+            delta,
+            source,
+        )
+
+    async def _on_chores_ready(self, payload: dict[str, Any]) -> None:
+        """Handle startup cascade - hydrate stats after chores are ready.
+
+        Cascade Position: CHORES_READY → StatisticsManager → STATS_READY
+
+        Hydrates the statistics cache for all assignees, then signals downstream
+        managers (GamificationManager) to continue their initialization.
+
+        Args:
+            payload: Event data (unused)
+        """
+        const.LOGGER.debug(
+            "StatisticsManager: Processing CHORES_READY - hydrating cache"
+        )
+
+        # Phase 7.5.7: Startup hydration
+        # Build cache for all existing assignees so sensors have data immediately
+        await self._hydrate_cache_all_assignees()
+
+        # Signal cascade continues
+        self.emit(const.SIGNAL_SUFFIX_STATS_READY)
+
+    async def _on_chore_approved(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_APPROVED event - update approval statistics.
+
+        Records approved count to period buckets.
+        Note: Awarded points are tracked via CHORE_POINTS_AWARDED.
+        Completion and streaks are tracked separately via CHORE_COMPLETED signal.
+        """
+        assignee_id = payload.get("user_id", "")
+        chore_id = payload.get("chore_id", "")
+        effective_date = payload.get("effective_date")
+
+        increments: dict[str, int | float] = {
+            const.DATA_USER_CHORE_DATA_PERIOD_APPROVED: 1,
+        }
+
+        if self._record_chore_transaction(
+            assignee_id, chore_id, increments, effective_date
+        ):
+            # Transactional Flush: cache was refreshed inside _record_chore_transaction,
+            # now notify sensors that data has changed
+            self._coordinator.async_set_updated_data(self._coordinator._data)
+            const.LOGGER.debug(
+                "StatisticsManager._on_chore_approved: assignee=%s, chore=%s",
+                assignee_id,
+                chore_id,
+            )
+
+    async def _on_chore_points_awarded(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_POINTS_AWARDED event - record awarded chore points.
+
+        Awarded points are emitted by EconomyManager after multiplier application.
+        """
+        assignee_id = payload.get("user_id", "")
+        chore_id = payload.get("chore_id", "")
+        points_awarded = payload.get("points_awarded", 0.0)
+        effective_date = payload.get("effective_date")
+
+        if points_awarded <= 0:
+            return
+
+        increments: dict[str, int | float] = {
+            const.DATA_USER_CHORE_DATA_PERIOD_POINTS: points_awarded,
+        }
+
+        if self._record_chore_transaction(
+            assignee_id, chore_id, increments, effective_date
+        ):
+            self._coordinator.async_set_updated_data(self._coordinator._data)
+            const.LOGGER.debug(
+                "StatisticsManager._on_chore_points_awarded: assignee=%s, chore=%s, points=%.2f",
+                assignee_id,
+                chore_id,
+                points_awarded,
+            )
+
+    async def _on_chore_completed(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_COMPLETED event - update completion and streak statistics.
+
+        Called when completion criteria is satisfied:
+        - INDEPENDENT: Immediately on approval (one assignee)
+        - SHARED_FIRST: First approving assignee only
+        - SHARED (all): All assignees when last is approved
+
+        Records:
+        - Completion count (always)
+        - Streak tally (if provided, max 1 per day per assignee)
+        - Longest streak in all_time bucket
+        """
+        chore_id = payload.get("chore_id", "")
+        assignee_ids = payload.get("assignee_ids", [])
+        effective_date = payload.get("effective_date")
+        streak_tallies = payload.get(
+            "streak_tallies", {}
+        )  # dict: assignee_id -> streak
+
+        if not assignee_ids:
+            const.LOGGER.warning(
+                "StatisticsManager._on_chore_completed: No assignee_ids for chore=%s",
+                chore_id,
+            )
+            return
+
+        # Record completion for each assignee (batch mode - persist once at end)
+        for assignee_id in assignee_ids:
+            # Build increments for this assignee
+            increments: dict[str, int | float] = {
+                const.DATA_USER_CHORE_DATA_PERIOD_COMPLETED: 1,
+            }
+
+            # Reset missed_streak_tally to 0 (completion breaks missed streak)
+            increments[const.DATA_USER_CHORE_DATA_PERIOD_MISSED_STREAK_TALLY] = 0
+
+            # Handle streak_tally with max-1-per-day enforcement
+            streak_tally = streak_tallies.get(assignee_id)
+            if streak_tally is not None:
+                # Get periods structure to check today's bucket
+                assignee_info = self._get_assignee(assignee_id)
+                if assignee_info:
+                    chore_data = assignee_info.get(const.DATA_USER_CHORE_DATA, {})
+                    assignee_chore_data = chore_data.get(chore_id, {})
+                    periods = assignee_chore_data.get(
+                        const.DATA_USER_CHORE_DATA_PERIODS, {}
+                    )
+                    daily_buckets = periods.get(
+                        const.DATA_USER_CHORE_DATA_PERIODS_DAILY, {}
+                    )
+
+                    # Get today's bucket key
+                    today_key = self._stats_engine.get_period_keys().get("daily")
+
+                    # Check if already set today (max 1 update per day)
+                    should_write_streak = True
+                    if today_key and today_key in daily_buckets:
+                        if (
+                            const.DATA_USER_CHORE_DATA_PERIOD_STREAK_TALLY
+                            in daily_buckets[today_key]
+                        ):
+                            should_write_streak = False
+                            const.LOGGER.debug(
+                                "StatisticsManager._on_chore_completed: SKIP streak_tally "
+                                "(already set today) assignee=%s, chore=%s, date=%s",
+                                assignee_id,
+                                chore_id,
+                                today_key,
+                            )
+
+                    # Add to increments if not already set today
+                    if should_write_streak:
+                        increments[const.DATA_USER_CHORE_DATA_PERIOD_STREAK_TALLY] = (
+                            streak_tally
+                        )
+
+                        # Update longest_streak in all_time bucket if new high
+                        all_time_container = periods.get(
+                            const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME, {}
+                        )
+                        # All-time uses nested structure: periods["all_time"]["all_time"] = {data}
+                        all_time_data = all_time_container.setdefault(
+                            const.PERIOD_ALL_TIME, {}
+                        )
+                        current_longest = all_time_data.get(
+                            const.DATA_USER_CHORE_DATA_PERIOD_LONGEST_STREAK, 0
+                        )
+                        if streak_tally > current_longest:
+                            all_time_data[
+                                const.DATA_USER_CHORE_DATA_PERIOD_LONGEST_STREAK
+                            ] = streak_tally
+
+                            # Also update assignee-level chore_periods for _chores sensor
+                            assignee_chore_periods = assignee_info.get(
+                                const.DATA_USER_CHORE_PERIODS
+                            )
+                            if assignee_chore_periods is not None:
+                                assignee_all_time_container = (
+                                    assignee_chore_periods.get(
+                                        const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME,
+                                        {},
+                                    )
+                                )
+                                assignee_all_time_data = (
+                                    assignee_all_time_container.setdefault(
+                                        const.PERIOD_ALL_TIME, {}
+                                    )
+                                )
+                                assignee_current_longest = assignee_all_time_data.get(
+                                    const.DATA_USER_CHORE_DATA_PERIOD_LONGEST_STREAK,
+                                    0,
+                                )
+                                # Update if this new streak is higher than current assignee-level longest
+                                if streak_tally > assignee_current_longest:
+                                    assignee_all_time_data[
+                                        const.DATA_USER_CHORE_DATA_PERIOD_LONGEST_STREAK
+                                    ] = streak_tally
+
+            if self._record_chore_transaction(
+                assignee_id,
+                chore_id,
+                increments,
+                effective_date,
+                persist=False,  # Batch: persist once after loop
+            ):
+                self._refresh_chore_cache(assignee_id)
+
+        # Persist once after all assignees updated
+        self._coordinator._persist()
+
+        # Transactional Flush: notify sensors that all batch updates are complete
+        self._coordinator.async_set_updated_data(self._coordinator._data)
+        for assignee_id in assignee_ids:
+            if assignee_id:
+                self._emit_stats_updated(assignee_id)
+
+        const.LOGGER.debug(
+            "StatisticsManager._on_chore_completed: chore=%s, assignees=%s",
+            chore_id,
+            assignee_ids,
+        )
+
+    async def _on_chore_claimed(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_CLAIMED event - record claim count to period buckets."""
+        assignee_id = payload.get("user_id", "")
+        chore_id = payload.get("chore_id", "")
+
+        if self._record_chore_transaction(
+            assignee_id,
+            chore_id,
+            {const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED: 1},
+        ):
+            # Transactional Flush: cache was refreshed inside _record_chore_transaction,
+            # now notify sensors that data has changed
+            self._coordinator.async_set_updated_data(self._coordinator._data)
+            const.LOGGER.debug(
+                "StatisticsManager._on_chore_claimed: assignee=%s, chore=%s",
+                assignee_id,
+                chore_id,
+            )
+
+    async def _on_chore_disapproved(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_DISAPPROVED event - record disapproval to period buckets."""
+        assignee_id = payload.get("user_id", "")
+        chore_id = payload.get("chore_id", "")
+
+        if self._record_chore_transaction(
+            assignee_id,
+            chore_id,
+            {const.DATA_USER_CHORE_DATA_PERIOD_DISAPPROVED: 1},
+        ):
+            # Transactional Flush: cache was refreshed inside _record_chore_transaction,
+            # now notify sensors that data has changed
+            self._coordinator.async_set_updated_data(self._coordinator._data)
+            const.LOGGER.debug(
+                "StatisticsManager._on_chore_disapproved: assignee=%s, chore=%s",
+                assignee_id,
+                chore_id,
+            )
+
+    async def _on_chore_overdue(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_OVERDUE event - record overdue count to period buckets.
+
+        Enforces max 1 overdue per day by checking today's bucket value before
+        incrementing. This ensures daily buckets never exceed 1 for overdue count.
+        """
+        assignee_id = payload.get("user_id", "")
+        chore_id = payload.get("chore_id", "")
+
+        # Validate assignee exists
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            const.LOGGER.warning(
+                "StatisticsManager._on_chore_overdue: Invalid assignee_id=%s",
+                assignee_id,
+            )
+            return
+
+        chore_data = assignee_info.get(const.DATA_USER_CHORE_DATA, {})
+        assignee_chore_data = chore_data.get(chore_id, {})
+        periods = assignee_chore_data.get(const.DATA_USER_CHORE_DATA_PERIODS, {})
+        daily_buckets = periods.get(const.DATA_USER_CHORE_DATA_PERIODS_DAILY, {})
+
+        # Get today's bucket key
+        today_key = self._stats_engine.get_period_keys().get("daily")
+
+        # Check if today's bucket already has overdue >= 1 (max 1 per day rule)
+        if today_key and today_key in daily_buckets:
+            existing_overdue = daily_buckets[today_key].get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE, 0
+            )
+            if existing_overdue >= 1:
+                const.LOGGER.debug(
+                    "StatisticsManager._on_chore_overdue: SKIP (already at max 1) "
+                    "assignee=%s, chore=%s, date=%s, current=%d",
+                    assignee_id,
+                    chore_id,
+                    today_key,
+                    existing_overdue,
+                )
+                return
+
+        increments: dict[str, int | float] = {
+            const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE: 1,
+        }
+
+        # Proceed with increment (will create bucket if needed)
+        if self._record_chore_transaction(
+            assignee_id,
+            chore_id,
+            increments,
+        ):
+            # Transactional Flush: cache was refreshed inside _record_chore_transaction,
+            # now notify sensors that data has changed
+            self._coordinator.async_set_updated_data(self._coordinator._data)
+            const.LOGGER.debug(
+                "StatisticsManager._on_chore_overdue: assignee=%s, chore=%s",
+                assignee_id,
+                chore_id,
+            )
+
+    async def _on_chore_overdue_resolved(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_OVERDUE_RESOLVED event - record time in overdue state."""
+        assignee_id = payload.get("user_id", "")
+        chore_id = payload.get("chore_id", "")
+        raw_duration = payload.get(const.CHORE_OVERDUE_RESOLVED_EVENT_DURATION_SECONDS)
+        resolved_at = payload.get(const.CHORE_OVERDUE_RESOLVED_EVENT_RESOLVED_AT)
+
+        if raw_duration is None:
+            const.LOGGER.warning(
+                "StatisticsManager._on_chore_overdue_resolved: Missing duration for assignee=%s, chore=%s",
+                assignee_id,
+                chore_id,
+            )
+            return
+
+        try:
+            overdue_duration_seconds = max(0, int(raw_duration))
+        except (TypeError, ValueError):
+            const.LOGGER.warning(
+                "StatisticsManager._on_chore_overdue_resolved: Invalid duration=%s for assignee=%s, chore=%s",
+                raw_duration,
+                assignee_id,
+                chore_id,
+            )
+            return
+
+        if self._record_chore_transaction(
+            assignee_id,
+            chore_id,
+            {
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS: overdue_duration_seconds,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT: 1,
+            },
+            effective_date=resolved_at,
+            maximums={
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS: overdue_duration_seconds,
+            },
+        ):
+            self._coordinator.async_set_updated_data(self._coordinator._data)
+            const.LOGGER.debug(
+                "StatisticsManager._on_chore_overdue_resolved: assignee=%s, chore=%s, duration=%s",
+                assignee_id,
+                chore_id,
+                overdue_duration_seconds,
+            )
+
+    async def _on_chore_missed(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_MISSED event - record missed to period buckets.
+
+        Phase 5: Handles missed_streak_tally from signal, writes to daily bucket.
+        Enforces max 1 missed per day by checking today's bucket value before
+        incrementing. Updates missed_longest_streak in all_time bucket if new high.
+        """
+        assignee_id = payload.get("user_id", "")
+        chore_id = payload.get("chore_id", "")
+        missed_streak_tally = payload.get("missed_streak_tally")
+
+        # Validate assignee exists
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            const.LOGGER.warning(
+                "StatisticsManager._on_chore_missed: Invalid assignee_id=%s",
+                assignee_id,
+            )
+            return
+
+        chore_data = assignee_info.get(const.DATA_USER_CHORE_DATA, {})
+        assignee_chore_data = chore_data.get(chore_id, {})
+        periods = assignee_chore_data.get(const.DATA_USER_CHORE_DATA_PERIODS, {})
+        daily_buckets = periods.get(const.DATA_USER_CHORE_DATA_PERIODS_DAILY, {})
+
+        # Get today's bucket key
+        today_key = self._stats_engine.get_period_keys().get("daily")
+
+        # Check if today's bucket already has missed >= 1 (max 1 per day rule)
+        if today_key and today_key in daily_buckets:
+            existing_missed = daily_buckets[today_key].get(
+                const.DATA_USER_CHORE_DATA_PERIOD_MISSED, 0
+            )
+            if existing_missed >= 1:
+                const.LOGGER.debug(
+                    "StatisticsManager._on_chore_missed: SKIP (already at max 1) "
+                    "assignee=%s, chore=%s, date=%s, current=%d",
+                    assignee_id,
+                    chore_id,
+                    today_key,
+                    existing_missed,
+                )
+                return
+
+        # Build increments: missed counter + streak_tally snapshot
+        increments: dict[str, int | float] = {
+            const.DATA_USER_CHORE_DATA_PERIOD_MISSED: 1,
+        }
+
+        # Add missed_streak_tally if provided (Phase 5)
+        if missed_streak_tally is not None:
+            increments[const.DATA_USER_CHORE_DATA_PERIOD_MISSED_STREAK_TALLY] = (
+                missed_streak_tally
+            )
+
+            # Update missed_longest_streak in all_time bucket if new high
+            all_time_container = periods.get(
+                const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME, {}
+            )
+            all_time_data = all_time_container.setdefault(const.PERIOD_ALL_TIME, {})
+            current_missed_longest = all_time_data.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_MISSED_LONGEST_STREAK, 0
+            )
+            if missed_streak_tally > current_missed_longest:
+                all_time_data[
+                    const.DATA_USER_CHORE_DATA_PERIOD_MISSED_LONGEST_STREAK
+                ] = missed_streak_tally
+
+                # Also update assignee-level chore_periods for _chores sensor
+                assignee_chore_periods = assignee_info.get(
+                    const.DATA_USER_CHORE_PERIODS
+                )
+                if assignee_chore_periods is not None:
+                    assignee_all_time_container = assignee_chore_periods.get(
+                        const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME, {}
+                    )
+                    assignee_all_time_data = assignee_all_time_container.setdefault(
+                        const.PERIOD_ALL_TIME, {}
+                    )
+                    assignee_current_missed_longest = assignee_all_time_data.get(
+                        const.DATA_USER_CHORE_DATA_PERIOD_MISSED_LONGEST_STREAK, 0
+                    )
+                    if missed_streak_tally > assignee_current_missed_longest:
+                        assignee_all_time_data[
+                            const.DATA_USER_CHORE_DATA_PERIOD_MISSED_LONGEST_STREAK
+                        ] = missed_streak_tally
+
+        # Proceed with increment (will create bucket if needed)
+        if self._record_chore_transaction(assignee_id, chore_id, increments):
+            # Transactional Flush: cache was refreshed inside _record_chore_transaction,
+            # now notify sensors that data has changed
+            self._coordinator.async_set_updated_data(self._coordinator._data)
+            const.LOGGER.debug(
+                "StatisticsManager._on_chore_missed: assignee=%s, chore=%s",
+                assignee_id,
+                chore_id,
+            )
+
+    async def _on_chore_status_reset(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_STATUS_RESET event - refresh snapshot counts.
+
+        STATUS_RESET is a quiet transition (no bucket writes needed).
+        We only need to refresh the chore cache to update current_* counts.
+
+        Uses Transactional Flush pattern: synchronous refresh then notify sensors.
+        No debounce needed - cache calculation is microseconds.
+
+        Args:
+            payload: Event data containing:
+                - assignee_id: The assignee's internal ID
+                - chore_id: The chore's internal ID
+                - chore_name: The chore's display name
+        """
+        assignee_id = payload.get("user_id", "")
+        chore_id = payload.get("chore_id", "")
+
+        if assignee_id:
+            # Transactional Flush: Refresh cache synchronously, then notify sensors
+            self._refresh_chore_cache(assignee_id)
+            self._coordinator.async_set_updated_data(self._coordinator._data)
+            const.LOGGER.debug(
+                "StatisticsManager._on_chore_status_reset: assignee=%s, chore=%s",
+                assignee_id,
+                chore_id,
+            )
+
+    async def _on_chore_undone(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_UNDONE event - refresh snapshot counts.
+
+        UNDONE is a quiet transition (no bucket writes needed).
+        We only need to refresh the chore cache to update current_* counts.
+
+        Note: Point reclamation is handled by EconomyManager via
+        POINTS_CHANGED signal; this handler only refreshes counts.
+
+        Uses Transactional Flush pattern: synchronous refresh then notify sensors.
+        No debounce needed - cache calculation is microseconds.
+
+        Args:
+            payload: Event data containing:
+                - assignee_id: The assignee's internal ID
+                - chore_id: The chore's internal ID
+                - points_to_reclaim: Points that were reclaimed
+        """
+        assignee_id = payload.get("user_id", "")
+        chore_id = payload.get("chore_id", "")
+
+        if assignee_id:
+            # Transactional Flush: Refresh cache synchronously, then notify sensors
+            self._refresh_chore_cache(assignee_id)
+            self._coordinator.async_set_updated_data(self._coordinator._data)
+            const.LOGGER.debug(
+                "StatisticsManager._on_chore_undone: assignee=%s, chore=%s",
+                assignee_id,
+                chore_id,
+            )
+
+    async def _on_chore_updated(self, payload: dict[str, Any]) -> None:
+        """Handle CHORE_UPDATED event — refresh all assignee chore caches.
+
+        Assignment changes can affect the "Due Today" count for multiple
+        assignees.  Rather than tracking old/new assignment lists here,
+        we refresh all caches — the operation is cheap for assignees whose
+        chore_data is empty or unaffected.
+
+        Uses Transactional Flush pattern: synchronous refresh then notify sensors.
+
+        Args:
+            payload: Event data containing chore_id and chore_name.
+        """
+        for assignee_id in self._coordinator.assignees_data:
+            self._refresh_chore_cache(assignee_id)
+        self._coordinator.async_set_updated_data(self._coordinator._data)
+        const.LOGGER.debug(
+            "StatisticsManager._on_chore_updated: chore=%s",
+            payload.get("chore_id", ""),
+        )
+
+    async def _on_reward_approved(self, payload: dict[str, Any]) -> None:
+        """Handle REWARD_APPROVED signal.
+
+        Signal emitted by RewardManager when a reward is approved by approver.
+        Records transaction with points deducted and approval count to BOTH
+        per-reward periods and assignee-level reward_periods (dual-bucket pattern).
+
+        Phase 3: StatisticsManager (Tenant) writes to RewardManager (Landlord) structures.
+
+        Note: Point stats are handled separately by _on_points_changed
+        when EconomyManager.withdraw() is called for the reward cost.
+
+        Uses Transactional Flush pattern: synchronous write+refresh then notify sensors.
+
+        Args:
+            payload: Event data containing:
+                - assignee_id: The assignee's internal ID
+                - reward_id: The reward's internal ID
+                - cost: Points deducted for reward
+                - approver_name: Name of approving approver
+                - effective_date: ISO timestamp for approver-lag-proof bucketing
+        """
+        # Extract payload values
+        assignee_id = payload.get("user_id", "")
+        reward_id = payload.get("reward_id", "")
+        cost = payload.get("cost", 0.0)
+        effective_date = payload.get("effective_date")
+
+        if not assignee_id or not reward_id:
+            const.LOGGER.warning(
+                "StatisticsManager._on_reward_approved: Missing assignee_id or reward_id in signal payload"
+            )
+            return
+
+        # Phase 3: Record transaction to BOTH per-reward periods and assignee-level reward_periods
+        # RewardManager (Landlord) should have called _ensure_assignee_structures(assignee_id, reward_id)
+        success = self._record_reward_transaction(
+            assignee_id=assignee_id,
+            reward_id=reward_id,
+            increments={
+                "approved": 1,
+                "points": cost,  # Points deducted for this approval
+            },
+            effective_date=effective_date,
+            persist=False,  # Persist manually after refresh for transactional flush
+        )
+
+        if not success:
+            const.LOGGER.warning(
+                "StatisticsManager._on_reward_approved: Failed to record transaction for assignee=%s, reward=%s",
+                assignee_id,
+                reward_id,
+            )
+            return
+
+        # Transactional Flush: Persist, refresh caches synchronously, then notify sensors
+        self._coordinator._persist()
+        # Point cache was already refreshed by _on_points_changed (EconomyManager.withdraw)
+        # Reward cache needs update for reward-specific stats (claim counts, etc.)
+        self._refresh_reward_cache(assignee_id)
+        self._coordinator.async_set_updated_data(self._coordinator._data)
+
+        const.LOGGER.debug(
+            "StatisticsManager._on_reward_approved: assignee=%s, reward=%s, cost=%.2f",
+            assignee_id,
+            reward_id,
+            cost,
+        )
+
+    async def _on_reward_claimed(self, payload: dict[str, Any]) -> None:
+        """Handle REWARD_CLAIMED signal.
+
+        Signal emitted by RewardManager when a assignee claims a reward.
+        Records transaction with claimed count to BOTH per-reward periods
+        and assignee-level reward_periods (dual-bucket pattern).
+
+        Phase 3: StatisticsManager (Tenant) writes to RewardManager (Landlord) structures.
+
+        Uses Transactional Flush pattern: synchronous write+refresh then notify sensors.
+
+        Args:
+            payload: Event data containing:
+                - assignee_id: The assignee's internal ID
+                - reward_id: The reward's internal ID
+                - reward_name: The reward's display name
+                - effective_date: ISO timestamp for approver-lag-proof bucketing
+        """
+        assignee_id = payload.get("user_id", "")
+        reward_id = payload.get("reward_id", "")
+        effective_date = payload.get("effective_date")
+
+        if not assignee_id or not reward_id:
+            const.LOGGER.warning(
+                "StatisticsManager._on_reward_claimed: Missing assignee_id or reward_id in signal payload"
+            )
+            return
+
+        # Phase 3: Record transaction to BOTH per-reward periods and assignee-level reward_periods
+        success = self._record_reward_transaction(
+            assignee_id=assignee_id,
+            reward_id=reward_id,
+            increments={
+                "claimed": 1,
+            },
+            effective_date=effective_date,
+            persist=False,  # Persist manually after refresh for transactional flush
+        )
+
+        if not success:
+            const.LOGGER.warning(
+                "StatisticsManager._on_reward_claimed: Failed to record transaction for assignee=%s, reward=%s",
+                assignee_id,
+                reward_id,
+            )
+            return
+
+        # Transactional Flush: Persist, refresh cache synchronously, then notify sensors
+        self._coordinator._persist()
+        self._refresh_reward_cache(assignee_id)
+        self._coordinator.async_set_updated_data(self._coordinator._data)
+
+        const.LOGGER.debug(
+            "StatisticsManager._on_reward_claimed: assignee=%s, reward=%s",
+            assignee_id,
+            reward_id,
+        )
+
+    async def _on_reward_disapproved(self, payload: dict[str, Any]) -> None:
+        """Handle REWARD_DISAPPROVED signal.
+
+        Signal emitted by RewardManager when a approver disapproves a reward.
+        Records transaction with disapproved count to BOTH per-reward periods
+        and assignee-level reward_periods (dual-bucket pattern).
+
+        Phase 3: StatisticsManager (Tenant) writes to RewardManager (Landlord) structures.
+
+        Uses Transactional Flush pattern: synchronous write+refresh then notify sensors.
+
+        Args:
+            payload: Event data containing:
+                - assignee_id: The assignee's internal ID
+                - reward_id: The reward's internal ID
+                - reward_name: The reward's display name
+                - effective_date: ISO timestamp for approver-lag-proof bucketing
+        """
+        assignee_id = payload.get("user_id", "")
+        reward_id = payload.get("reward_id", "")
+        effective_date = payload.get("effective_date")
+
+        if not assignee_id or not reward_id:
+            const.LOGGER.warning(
+                "StatisticsManager._on_reward_disapproved: Missing assignee_id or reward_id in signal payload"
+            )
+            return
+
+        # Phase 3: Record transaction to BOTH per-reward periods and assignee-level reward_periods
+        success = self._record_reward_transaction(
+            assignee_id=assignee_id,
+            reward_id=reward_id,
+            increments={
+                "disapproved": 1,
+            },
+            effective_date=effective_date,
+            persist=False,  # Persist manually after refresh for transactional flush
+        )
+
+        if not success:
+            const.LOGGER.warning(
+                "StatisticsManager._on_reward_disapproved: Failed to record transaction for assignee=%s, reward=%s",
+                assignee_id,
+                reward_id,
+            )
+            return
+
+        # Transactional Flush: Persist, refresh cache synchronously, then notify sensors
+        self._coordinator._persist()
+        self._refresh_reward_cache(assignee_id)
+        self._coordinator.async_set_updated_data(self._coordinator._data)
+
+        const.LOGGER.debug(
+            "StatisticsManager._on_reward_disapproved: assignee=%s, reward=%s",
+            assignee_id,
+            reward_id,
+        )
+
+    async def _on_badge_earned(self, payload: dict[str, Any]) -> None:
+        """Handle BADGE_EARNED signal.
+
+        Signal emitted by GamificationManager when a badge is awarded to a assignee.
+        Records transaction to badges_earned periods (award_count incremented).
+
+        Phase 4: StatisticsManager (Tenant) ONLY writes to period buckets.
+        GamificationManager (Landlord) creates structure, increments award_count.
+
+        Landlord-Tenant Contract:
+        - GamificationManager creates badges_earned[badge_id] with periods structure
+        - GamificationManager increments award_count (business logic)
+        - StatisticsManager ONLY updates period data in existing structure
+
+        Args:
+            payload: Event data containing:
+                - assignee_id: The assignee's internal ID
+                - badge_id: The badge's internal ID
+        """
+        assignee_id = payload.get("user_id", "")
+        badge_id = payload.get("badge_id", "")
+
+        if not assignee_id or not badge_id:
+            const.LOGGER.warning(
+                "StatisticsManager._on_badge_earned: Missing assignee_id or badge_id"
+            )
+            return
+
+        assignee_info = self._coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            const.LOGGER.warning(
+                "StatisticsManager._on_badge_earned: Assignee not found: %s",
+                assignee_id,
+            )
+            return
+
+        # Tenant responsibility: Update period data ONLY (no structure creation)
+        badges_earned = assignee_info.get(const.DATA_USER_BADGES_EARNED, {})
+        badge_entry = badges_earned.get(badge_id)
+
+        if not badge_entry:
+            # Landlord violation - structure should exist before signal emission
+            const.LOGGER.warning(
+                "StatisticsManager._on_badge_earned: Badge entry not found (Landlord should create): assignee=%s, badge=%s",
+                assignee_id,
+                badge_id,
+            )
+            return
+
+        # Get periods bucket (Landlord should have created this)
+        # Note: Use `is None` check, NOT `if not periods`, because Landlord
+        # correctly creates an empty dict {} which is falsy but valid.
+        periods = badge_entry.get(const.DATA_USER_BADGES_EARNED_PERIODS)
+        if periods is None:
+            const.LOGGER.warning(
+                "StatisticsManager._on_badge_earned: Periods bucket missing (Landlord should create): assignee=%s, badge=%s",
+                assignee_id,
+                badge_id,
+            )
+            return
+
+        # Tenant operation: Update period data using StatisticsEngine
+        now_local = dt_now_local()
+        period_mapping = self._stats_engine.get_period_keys(now_local)
+
+        self._stats_engine.record_transaction(
+            cast("dict[str, Any]", periods),
+            {const.DATA_USER_BADGES_EARNED_AWARD_COUNT: 1},
+            period_key_mapping=period_mapping,
+        )
+
+        # Cleanup old period data
+        self._stats_engine.prune_history(
+            cast("dict[str, Any]", periods), self.get_retention_config()
+        )
+
+        # Persist and notify
+        self._coordinator._persist()
+        self._coordinator.async_set_updated_data(self._coordinator._data)
+
+        const.LOGGER.debug(
+            "StatisticsManager._on_badge_earned: assignee=%s, badge=%s",
+            assignee_id,
+            badge_id,
+        )
+
+    async def _on_bonus_applied(self, payload: dict[str, Any]) -> None:
+        """Handle BONUS_APPLIED signal.
+
+        Signal emitted by EconomyManager when a bonus is applied to a assignee.
+        Updates period tracking for the specific bonus UUID and records ledger entry.
+
+        Phase 4C: Bonus/Penalty Period Tracking
+        - Updates item-level periods: bonuses_applied[uuid]["periods"]
+        - No aggregate buckets at assignee level (unlike chores/rewards)
+        - Adds item_name to transaction ledger for human-readable history
+
+        Args:
+            payload: Event data containing:
+                - assignee_id: The assignee's internal ID
+                - bonus_id: The UUID of the bonus entry in bonuses_applied
+                - bonus_name: Human-readable bonus name
+                - points: Points added (positive value)
+                - timestamp: ISO 8601 timestamp (optional, defaults to now)
+        """
+        assignee_id = payload.get("user_id", "")
+        bonus_id = payload.get("bonus_id", "")
+        points = payload.get("points", 0.0)
+        bonus_name = payload.get("bonus_name", "")
+        timestamp_str = payload.get("timestamp")
+
+        # Parse timestamp or use current time
+        dt_obj = dt_parse(timestamp_str) if timestamp_str else dt_now_local()
+        if not dt_obj or not isinstance(dt_obj, datetime):
+            dt_obj = dt_now_local()
+
+        if not assignee_id or not bonus_id:
+            const.LOGGER.warning(
+                "StatisticsManager._on_bonus_applied: Missing assignee_id or bonus_id"
+            )
+            return
+
+        assignee_info = self._coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            const.LOGGER.warning(
+                "StatisticsManager._on_bonus_applied: Assignee not found: %s",
+                assignee_id,
+            )
+            return
+
+        # Tenant responsibility: Read periods created by Landlord (EconomyManager)
+        bonus_applies = assignee_info.get(const.DATA_USER_BONUS_APPLIES, {})
+        bonus_entry = bonus_applies.get(bonus_id)
+        if not bonus_entry:
+            const.LOGGER.warning(
+                "StatisticsManager._on_bonus_applied: Bonus entry not found (Landlord should create): assignee=%s, bonus=%s",
+                assignee_id,
+                bonus_id,
+            )
+            return
+
+        # Tenant: Get periods container from Landlord-created structure
+        # (record_transaction will create daily/weekly/etc buckets on-demand)
+        periods = bonus_entry.get(const.DATA_USER_BONUS_PERIODS)
+        if periods is None:
+            const.LOGGER.warning(
+                "StatisticsManager._on_bonus_applied: Periods key missing (Landlord should create): assignee=%s, bonus=%s",
+                assignee_id,
+                bonus_id,
+            )
+            return
+
+        # Update all period buckets
+        # Note: Do NOT pass period_key_mapping - record_transaction uses default
+        # bucket structure (daily/weekly/etc) and creates date keys inside them
+        self._stats_engine.record_transaction(
+            periods,
+            {
+                const.DATA_USER_BONUS_PERIOD_APPLIES: 1,
+                const.DATA_USER_BONUS_PERIOD_POINTS: points,
+            },
+            reference_date=dt_obj,
+        )
+
+        # Cleanup old period data
+        self._stats_engine.prune_history(periods, self.get_retention_config())
+
+        # Persist and notify
+        self._coordinator._persist()
+        self._coordinator.async_set_updated_data(self._coordinator._data)
+
+        const.LOGGER.debug(
+            "StatisticsManager._on_bonus_applied: assignee=%s, bonus=%s (%s), points=%.2f",
+            assignee_id,
+            bonus_id,
+            bonus_name,
+            points,
+        )
+
+    async def _on_penalty_applied(self, payload: dict[str, Any]) -> None:
+        """Handle PENALTY_APPLIED signal.
+
+        Signal emitted by EconomyManager when a penalty is applied to a assignee.
+        Updates period tracking for the specific penalty UUID and records ledger entry.
+
+        Phase 4C: Bonus/Penalty Period Tracking
+        - Updates item-level periods: penalties_applied[uuid]["periods"]
+        - No aggregate buckets at assignee level (unlike chores/rewards)
+        - Adds item_name to transaction ledger for human-readable history
+
+        Args:
+            payload: Event data containing:
+                - assignee_id: The assignee's internal ID
+                - penalty_id: The UUID of the penalty entry in penalties_applied
+                - penalty_name: Human-readable penalty name
+                - points: Points deducted (negative value)
+                - timestamp: ISO 8601 timestamp (optional, defaults to now)
+        """
+        assignee_id = payload.get("user_id", "")
+        penalty_id = payload.get("penalty_id", "")
+        points = payload.get("points", 0.0)
+        penalty_name = payload.get("penalty_name", "")
+        timestamp_str = payload.get("timestamp")
+
+        # Parse timestamp or use current time
+        dt_obj = dt_parse(timestamp_str) if timestamp_str else dt_now_local()
+        if not dt_obj or not isinstance(dt_obj, datetime):
+            dt_obj = dt_now_local()
+
+        if not assignee_id or not penalty_id:
+            const.LOGGER.warning(
+                "StatisticsManager._on_penalty_applied: Missing assignee_id or penalty_id"
+            )
+            return
+
+        assignee_info = self._coordinator.assignees_data.get(assignee_id)
+        if not assignee_info:
+            const.LOGGER.warning(
+                "StatisticsManager._on_penalty_applied: Assignee not found: %s",
+                assignee_id,
+            )
+            return
+
+        # Tenant responsibility: Read periods created by Landlord (EconomyManager)
+        penalty_applies = assignee_info.get(const.DATA_USER_PENALTY_APPLIES, {})
+        penalty_entry = penalty_applies.get(penalty_id)
+        if not penalty_entry:
+            const.LOGGER.warning(
+                "StatisticsManager._on_penalty_applied: Penalty entry not found (Landlord should create): assignee=%s, penalty=%s",
+                assignee_id,
+                penalty_id,
+            )
+            return
+
+        # Tenant: Get periods container from Landlord-created structure
+        # (record_transaction will create daily/weekly/etc buckets on-demand)
+        periods = penalty_entry.get(const.DATA_USER_PENALTY_PERIODS)
+        if periods is None:
+            const.LOGGER.warning(
+                "StatisticsManager._on_penalty_applied: Periods key missing (Landlord should create): assignee=%s, penalty=%s",
+                assignee_id,
+                penalty_id,
+            )
+            return
+
+        # Update all period buckets
+        # Note: Do NOT pass period_key_mapping - record_transaction uses default
+        # bucket structure (daily/weekly/etc) and creates date keys inside them
+        self._stats_engine.record_transaction(
+            periods,
+            {
+                const.DATA_USER_PENALTY_PERIOD_APPLIES: 1,
+                const.DATA_USER_PENALTY_PERIOD_POINTS: points,
+            },
+            reference_date=dt_obj,
+        )
+
+        # Cleanup old period data
+        self._stats_engine.prune_history(periods, self.get_retention_config())
+
+        # Persist and notify
+        self._coordinator._persist()
+        self._coordinator.async_set_updated_data(self._coordinator._data)
+
+        const.LOGGER.debug(
+            "StatisticsManager._on_penalty_applied: assignee=%s, penalty=%s (%s), points=%.2f",
+            assignee_id,
+            penalty_id,
+            penalty_name,
+            points,
+        )
+
+    async def _on_data_reset_complete(self, payload: dict[str, Any]) -> None:
+        """Handle data reset completion - invalidate affected caches.
+
+        When any domain manager completes a data reset operation, we need to
+        invalidate statistics caches so derived values are recalculated from
+        the updated source data.
+
+        Payload format (standard across all *_DATA_RESET_COMPLETE signals):
+            scope: "global" | "user" | "item_type" | "item"
+            user_id: str | None - specific assignee for user scope
+            item_id: str | None - specific item for item scope
+
+        Args:
+            payload: Event data with scope, user_id, item_id
+        """
+        scope = payload.get("scope", "global")
+        assignee_id = payload.get("user_id")
+
+        const.LOGGER.debug(
+            "StatisticsManager: Data reset complete - scope=%s, assignee_id=%s",
+            scope,
+            assignee_id,
+        )
+
+        if scope in {"global", "item_type"}:
+            # Full reset - invalidate all caches
+            self.invalidate_cache()
+        elif scope == const.DATA_RESET_SCOPE_USER and assignee_id:
+            # Assignee-specific reset - only invalidate that assignee's cache
+            self.invalidate_cache(assignee_id)
+        elif scope == "item":
+            # Item-specific reset - may affect stats, invalidate all for safety
+            if assignee_id:
+                self.invalidate_cache(assignee_id)
+            else:
+                self.invalidate_cache()
+
+    # ────────────────────────────────────────────────────────────────
+    # Transaction Helpers
+    # ────────────────────────────────────────────────────────────────
+
+    def _record_chore_transaction(
+        self,
+        assignee_id: str,
+        chore_id: str,
+        increments: dict[str, int | float],
+        effective_date: str | None = None,
+        maximums: dict[str, int | float] | None = None,
+        persist: bool = True,
+    ) -> bool:
+        """Record a chore transaction to period buckets.
+
+        Common helper for CHORE_APPROVED, CHORE_CLAIMED, CHORE_DISAPPROVED,
+        CHORE_OVERDUE, and CHORE_COMPLETED signals. Handles:
+        - Getting/creating assignee_chore_data.periods structure
+        - Recording increments to period buckets via StatisticsEngine
+        - Pruning old period data
+        - Optionally persisting and refreshing cache
+
+        Args:
+            assignee_id: The assignee's internal ID.
+            chore_id: The chore's internal ID.
+            increments: Dict of metric keys to increment values.
+            effective_date: ISO timestamp for approver-lag-proof bucketing.
+                           If None, uses current time.
+            maximums: Optional metric high-water marks to write to the same buckets.
+            persist: If True, calls _persist() and _refresh_chore_cache().
+                    Set to False when batching multiple assignees.
+
+        Returns:
+            True if successful, False if assignee not found.
+        """
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            const.LOGGER.warning(
+                "StatisticsManager._record_chore_transaction: Assignee '%s' not found",
+                assignee_id,
+            )
+            return False
+
+        # Phase 3B Tenant Rule: Guard against missing landlord-owned structures
+        # ChoreManager (Landlord) creates chore_data on-demand via _get_assignee_chore_data()
+        chore_data: dict[str, Any] | None = assignee_info.get(
+            const.DATA_USER_CHORE_DATA
+        )
+        if chore_data is None:
+            const.LOGGER.warning(
+                "StatisticsManager._record_chore_transaction: chore_data missing for assignee '%s' - "
+                "skipping (ChoreManager should have created it before emitting signal)",
+                assignee_id,
+            )
+            return False
+
+        # Phase 3B Tenant Rule: Guard against missing per-chore entry
+        # ChoreManager creates per-chore entries on-demand via _get_assignee_chore_data()
+        assignee_chore_data: dict[str, Any] | None = chore_data.get(chore_id)
+        if assignee_chore_data is None:
+            const.LOGGER.warning(
+                "StatisticsManager._record_chore_transaction: chore_data entry missing for "
+                "assignee '%s', chore '%s' - skipping (ChoreManager should create on assignment)",
+                assignee_id,
+                chore_id,
+            )
+            return False
+
+        # Phase 3B Tenant Rule: Use ChoreManager's Landlord-created periods structure
+        # ChoreManager (Landlord) should have called _ensure_assignee_structures(assignee_id, chore_id)
+        # before emitting the signal that triggered this transaction
+        periods = assignee_chore_data.get(const.DATA_USER_CHORE_DATA_PERIODS)
+        if periods is None:
+            const.LOGGER.warning(
+                "StatisticsManager._record_chore_transaction: periods structure missing for "
+                "assignee '%s', chore '%s' - ChoreManager should have called _ensure_assignee_structures()",
+                assignee_id,
+                chore_id,
+            )
+            return False
+
+        # Use effective_date for approver-lag-proof bucketing
+        # Parse as local timezone for period bucketing (DEVELOPMENT_STANDARDS § 6)
+        bucket_dt = (
+            cast(
+                "datetime | None",
+                dt_parse(
+                    effective_date, return_type=const.HELPER_RETURN_DATETIME_LOCAL
+                ),
+            )
+            if effective_date
+            else None
+        )
+
+        # Record transaction to per-chore period buckets
+        # NOTE: Do NOT pass period_mapping as period_key_mapping!
+        # period_mapping contains date strings like '2026-01-31'
+        # period_key_mapping expects structure keys like DATA_USER_CHORE_DATA_PERIODS_DAILY
+        # Engine will use default mapping which is correct for chore periods
+        self._stats_engine.record_transaction(
+            periods,
+            increments,
+            reference_date=bucket_dt,
+        )
+        if maximums:
+            self._stats_engine.record_maximum(
+                periods,
+                maximums,
+                reference_date=bucket_dt,
+            )
+
+        # PHASE 2: Also record to assignee-level chore_periods bucket (v44+)
+        # ChoreManager (Landlord) should have created this via _ensure_assignee_structures(assignee_id)
+        assignee_chore_periods = assignee_info.get(const.DATA_USER_CHORE_PERIODS)
+        if assignee_chore_periods is not None:
+            # Record same transaction to aggregated bucket
+            self._stats_engine.record_transaction(
+                assignee_chore_periods,
+                increments,
+                reference_date=bucket_dt,
+            )
+            if maximums:
+                self._stats_engine.record_maximum(
+                    assignee_chore_periods,
+                    maximums,
+                    reference_date=bucket_dt,
+                )
+        else:
+            const.LOGGER.warning(
+                "StatisticsManager._record_chore_transaction: assignee-level chore_periods missing for "
+                "assignee '%s' - ChoreManager should have called _ensure_assignee_structures(assignee_id)",
+                assignee_id,
+            )
+
+        # Prune old period data from both buckets (after all writes complete)
+        retention_config = self.get_retention_config()
+        self._stats_engine.prune_history(periods, retention_config)
+        if assignee_chore_periods is not None:
+            self._stats_engine.prune_history(assignee_chore_periods, retention_config)
+
+        # Optionally persist and refresh cache
+        if persist:
+            self._coordinator._persist()
+            self._refresh_chore_cache(assignee_id)
+            self._emit_stats_updated(assignee_id)
+
+        return True
+
+    def _record_reward_transaction(
+        self,
+        assignee_id: str,
+        reward_id: str,
+        increments: dict[str, int | float],
+        effective_date: str | None = None,
+        persist: bool = True,
+    ) -> bool:
+        """Record a reward transaction to period buckets (dual-bucket pattern).
+
+        Common helper for REWARD_APPROVED, REWARD_CLAIMED, and REWARD_DISAPPROVED
+        signals. Handles:
+        - Getting per-reward periods structure (reward_data[uuid].periods)
+        - Getting assignee-level reward_periods structure (aggregated bucket)
+        - Recording increments to BOTH buckets via StatisticsEngine
+        - Pruning old period data
+        - Optionally persisting and refreshing cache
+
+        Args:
+            assignee_id: The assignee's internal ID.
+            reward_id: The reward's internal ID.
+            increments: Dict of metric keys to increment values.
+            effective_date: ISO timestamp for approver-lag-proof bucketing.
+                           If None, uses current time.
+            persist: If True, calls _persist() and _refresh_reward_cache().
+                    Set to False when batching multiple rewards.
+
+        Returns:
+            True if successful, False if assignee not found or structures missing.
+        """
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            const.LOGGER.warning(
+                "StatisticsManager._record_reward_transaction: Assignee '%s' not found",
+                assignee_id,
+            )
+            return False
+
+        # Phase 3 Tenant Rule: Guard against missing landlord-owned structures
+        # RewardManager (Landlord) creates reward_data on-demand via get_assignee_reward_data()
+        reward_data: dict[str, Any] | None = assignee_info.get(
+            const.DATA_USER_REWARD_DATA
+        )
+        if reward_data is None:
+            const.LOGGER.warning(
+                "StatisticsManager._record_reward_transaction: reward_data missing for assignee '%s' - "
+                "skipping (RewardManager should have created it before emitting signal)",
+                assignee_id,
+            )
+            return False
+
+        # Phase 3 Tenant Rule: Guard against missing per-reward entry
+        # RewardManager creates per-reward entries on-demand via get_assignee_reward_data(create=True)
+        assignee_reward_data: dict[str, Any] | None = reward_data.get(reward_id)
+        if assignee_reward_data is None:
+            const.LOGGER.warning(
+                "StatisticsManager._record_reward_transaction: reward_data entry missing for "
+                "assignee '%s', reward '%s' - skipping (RewardManager should create on redemption)",
+                assignee_id,
+                reward_id,
+            )
+            return False
+
+        # Phase 3 Tenant Rule: Use RewardManager's Landlord-created periods structure
+        # RewardManager (Landlord) should have called _ensure_assignee_structures(assignee_id, reward_id)
+        # before emitting the signal that triggered this transaction
+        periods = assignee_reward_data.get(const.DATA_USER_REWARD_DATA_PERIODS)
+        if periods is None:
+            const.LOGGER.warning(
+                "StatisticsManager._record_reward_transaction: periods structure missing for "
+                "assignee '%s', reward '%s' - RewardManager should have called _ensure_assignee_structures()",
+                assignee_id,
+                reward_id,
+            )
+            return False
+
+        # Use effective_date for approver-lag-proof bucketing
+        # Parse as local timezone for period bucketing (DEVELOPMENT_STANDARDS § 6)
+        bucket_dt = (
+            cast(
+                "datetime | None",
+                dt_parse(
+                    effective_date, return_type=const.HELPER_RETURN_DATETIME_LOCAL
+                ),
+            )
+            if effective_date
+            else None
+        )
+
+        # Record transaction to per-reward period buckets
+        self._stats_engine.record_transaction(
+            periods,
+            increments,
+            reference_date=bucket_dt,
+        )
+
+        # PHASE 3: Also record to assignee-level reward_periods bucket (v43+)
+        # RewardManager (Landlord) should have created this via _ensure_assignee_structures(assignee_id)
+        assignee_reward_periods = assignee_info.get(const.DATA_USER_REWARD_PERIODS)
+        if assignee_reward_periods is not None:
+            # Record same transaction to aggregated bucket
+            self._stats_engine.record_transaction(
+                assignee_reward_periods,
+                increments,
+                reference_date=bucket_dt,
+            )
+        else:
+            const.LOGGER.warning(
+                "StatisticsManager._record_reward_transaction: assignee-level reward_periods missing for "
+                "assignee '%s' - RewardManager should have called _ensure_assignee_structures(assignee_id)",
+                assignee_id,
+            )
+
+        # Prune old period data from both buckets (after all writes complete)
+        retention_config = self.get_retention_config()
+        self._stats_engine.prune_history(periods, retention_config)
+        if assignee_reward_periods is not None:
+            self._stats_engine.prune_history(assignee_reward_periods, retention_config)
+
+        # Optionally persist and refresh cache
+        if persist:
+            self._coordinator._persist()
+            self._refresh_reward_cache(assignee_id)
+            self._emit_stats_updated(assignee_id)
+
+        return True
+
+    # =========================================================================
+    # Query Methods
+    # =========================================================================
+
+    def get_retention_config(self) -> dict[str, int]:
+        """Get retention configuration for period data pruning.
+
+        Reads from config_entry.options for user-configurable retention limits.
+
+        Returns:
+            Dict mapping period types to retention counts.
+        """
+        return {
+            "daily": self._coordinator.config_entry.options.get(
+                const.CONF_RETENTION_DAILY, const.DEFAULT_RETENTION_DAILY
+            ),
+            "weekly": self._coordinator.config_entry.options.get(
+                const.CONF_RETENTION_WEEKLY, const.DEFAULT_RETENTION_WEEKLY
+            ),
+            "monthly": self._coordinator.config_entry.options.get(
+                const.CONF_RETENTION_MONTHLY, const.DEFAULT_RETENTION_MONTHLY
+            ),
+            "yearly": self._coordinator.config_entry.options.get(
+                const.CONF_RETENTION_YEARLY, const.DEFAULT_RETENTION_YEARLY
+            ),
+        }
+
+    def get_report_rollup(
+        self,
+        assignee_id: str,
+        start_iso: str,
+        end_iso: str,
+    ) -> dict[str, Any]:
+        """Return period rollups for report generation.
+
+        This method is the manager-owned query boundary for report helpers.
+        """
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            return self._empty_report_rollup()
+
+        points_periods = cast(
+            "dict[str, Any]",
+            assignee_info.get(const.DATA_USER_POINT_PERIODS, {}),
+        )
+        chore_periods = cast(
+            "dict[str, Any]",
+            assignee_info.get(const.DATA_USER_CHORE_PERIODS, {}),
+        )
+        reward_periods = cast(
+            "dict[str, Any]",
+            assignee_info.get(const.DATA_USER_REWARD_PERIODS, {}),
+        )
+
+        bonus_periods = [
+            cast("dict[str, Any]", entry.get(const.DATA_USER_BONUS_PERIODS, {}))
+            for entry in cast(
+                "dict[str, Any]",
+                assignee_info.get(const.DATA_USER_BONUS_APPLIES, {}),
+            ).values()
+            if isinstance(entry, dict)
+        ]
+        penalty_periods = [
+            cast("dict[str, Any]", entry.get(const.DATA_USER_PENALTY_PERIODS, {}))
+            for entry in cast(
+                "dict[str, Any]",
+                assignee_info.get(const.DATA_USER_PENALTY_APPLIES, {}),
+            ).values()
+            if isinstance(entry, dict)
+        ]
+
+        points_rollup = self._rollup_period_metrics(
+            points_periods,
+            [
+                const.DATA_USER_POINT_PERIOD_POINTS_EARNED,
+                const.DATA_USER_POINT_PERIOD_POINTS_SPENT,
+            ],
+            start_iso,
+            end_iso,
+        )
+        chores_rollup = self._rollup_period_metrics(
+            chore_periods,
+            [
+                const.DATA_USER_CHORE_DATA_PERIOD_APPROVED,
+                const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED,
+                const.DATA_USER_CHORE_DATA_PERIOD_DISAPPROVED,
+                const.DATA_USER_CHORE_DATA_PERIOD_MISSED,
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE,
+            ],
+            start_iso,
+            end_iso,
+        )
+        overdue_duration_rollup = self._rollup_overdue_duration(
+            chore_periods,
+            start_iso,
+            end_iso,
+        )
+        rewards_rollup = self._rollup_period_metrics(
+            reward_periods,
+            [
+                const.DATA_USER_REWARD_DATA_PERIOD_APPROVED,
+                const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED,
+                const.DATA_USER_REWARD_DATA_PERIOD_DISAPPROVED,
+                const.DATA_USER_REWARD_DATA_PERIOD_POINTS,
+            ],
+            start_iso,
+            end_iso,
+        )
+
+        bonuses_rollup = self._rollup_period_collections(
+            bonus_periods,
+            [
+                const.DATA_USER_BONUS_PERIOD_APPLIES,
+                const.DATA_USER_BONUS_PERIOD_POINTS,
+            ],
+            start_iso,
+            end_iso,
+        )
+        penalties_rollup = self._rollup_period_collections(
+            penalty_periods,
+            [
+                const.DATA_USER_PENALTY_PERIOD_APPLIES,
+                const.DATA_USER_PENALTY_PERIOD_POINTS,
+            ],
+            start_iso,
+            end_iso,
+        )
+
+        badge_rollup = self._get_badge_rollup(assignee_info)
+        streak_rollup = self._get_streak_rollup(assignee_info, chore_periods)
+
+        return {
+            "points": {
+                "in_range_earned": round(
+                    float(
+                        points_rollup["in_range"][
+                            const.DATA_USER_POINT_PERIOD_POINTS_EARNED
+                        ]
+                    ),
+                    const.DATA_FLOAT_PRECISION,
+                ),
+                "in_range_spent": round(
+                    float(
+                        points_rollup["in_range"][
+                            const.DATA_USER_POINT_PERIOD_POINTS_SPENT
+                        ]
+                    ),
+                    const.DATA_FLOAT_PRECISION,
+                ),
+                "all_time_earned": round(
+                    float(
+                        points_rollup["all_time"][
+                            const.DATA_USER_POINT_PERIOD_POINTS_EARNED
+                        ]
+                    ),
+                    const.DATA_FLOAT_PRECISION,
+                ),
+                "all_time_spent": round(
+                    float(
+                        points_rollup["all_time"][
+                            const.DATA_USER_POINT_PERIOD_POINTS_SPENT
+                        ]
+                    ),
+                    const.DATA_FLOAT_PRECISION,
+                ),
+            },
+            "chores": {
+                "in_range_approved": int(
+                    chores_rollup["in_range"][
+                        const.DATA_USER_CHORE_DATA_PERIOD_APPROVED
+                    ]
+                ),
+                "in_range_claimed": int(
+                    chores_rollup["in_range"][const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED]
+                ),
+                "in_range_disapproved": int(
+                    chores_rollup["in_range"][
+                        const.DATA_USER_CHORE_DATA_PERIOD_DISAPPROVED
+                    ]
+                ),
+                "in_range_missed": int(
+                    chores_rollup["in_range"][const.DATA_USER_CHORE_DATA_PERIOD_MISSED]
+                ),
+                "in_range_overdue": int(
+                    chores_rollup["in_range"][const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE]
+                ),
+                "in_range_avg_overdue_seconds": overdue_duration_rollup[
+                    "in_range_avg_overdue_seconds"
+                ],
+                "in_range_longest_overdue_seconds": overdue_duration_rollup[
+                    "in_range_longest_overdue_seconds"
+                ],
+                "all_time_approved": int(
+                    chores_rollup["all_time"][
+                        const.DATA_USER_CHORE_DATA_PERIOD_APPROVED
+                    ]
+                ),
+                "all_time_claimed": int(
+                    chores_rollup["all_time"][const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED]
+                ),
+                "all_time_disapproved": int(
+                    chores_rollup["all_time"][
+                        const.DATA_USER_CHORE_DATA_PERIOD_DISAPPROVED
+                    ]
+                ),
+                "all_time_missed": int(
+                    chores_rollup["all_time"][const.DATA_USER_CHORE_DATA_PERIOD_MISSED]
+                ),
+                "all_time_overdue": int(
+                    chores_rollup["all_time"][const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE]
+                ),
+                "all_time_avg_overdue_seconds": overdue_duration_rollup[
+                    "all_time_avg_overdue_seconds"
+                ],
+                "all_time_longest_overdue_seconds": overdue_duration_rollup[
+                    "all_time_longest_overdue_seconds"
+                ],
+            },
+            "rewards": {
+                "in_range_approved": int(
+                    rewards_rollup["in_range"][
+                        const.DATA_USER_REWARD_DATA_PERIOD_APPROVED
+                    ]
+                ),
+                "in_range_claimed": int(
+                    rewards_rollup["in_range"][
+                        const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED
+                    ]
+                ),
+                "in_range_disapproved": int(
+                    rewards_rollup["in_range"][
+                        const.DATA_USER_REWARD_DATA_PERIOD_DISAPPROVED
+                    ]
+                ),
+                "in_range_points_spent": round(
+                    float(
+                        rewards_rollup["in_range"][
+                            const.DATA_USER_REWARD_DATA_PERIOD_POINTS
+                        ]
+                    ),
+                    const.DATA_FLOAT_PRECISION,
+                ),
+                "all_time_approved": int(
+                    rewards_rollup["all_time"][
+                        const.DATA_USER_REWARD_DATA_PERIOD_APPROVED
+                    ]
+                ),
+                "all_time_claimed": int(
+                    rewards_rollup["all_time"][
+                        const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED
+                    ]
+                ),
+                "all_time_disapproved": int(
+                    rewards_rollup["all_time"][
+                        const.DATA_USER_REWARD_DATA_PERIOD_DISAPPROVED
+                    ]
+                ),
+                "all_time_points_spent": round(
+                    float(
+                        rewards_rollup["all_time"][
+                            const.DATA_USER_REWARD_DATA_PERIOD_POINTS
+                        ]
+                    ),
+                    const.DATA_FLOAT_PRECISION,
+                ),
+            },
+            "bonuses": {
+                "in_range_applies": int(
+                    bonuses_rollup["in_range"][const.DATA_USER_BONUS_PERIOD_APPLIES]
+                ),
+                "in_range_points": round(
+                    float(
+                        bonuses_rollup["in_range"][const.DATA_USER_BONUS_PERIOD_POINTS]
+                    ),
+                    const.DATA_FLOAT_PRECISION,
+                ),
+                "all_time_applies": int(
+                    bonuses_rollup["all_time"][const.DATA_USER_BONUS_PERIOD_APPLIES]
+                ),
+                "all_time_points": round(
+                    float(
+                        bonuses_rollup["all_time"][const.DATA_USER_BONUS_PERIOD_POINTS]
+                    ),
+                    const.DATA_FLOAT_PRECISION,
+                ),
+            },
+            "penalties": {
+                "in_range_applies": int(
+                    penalties_rollup["in_range"][const.DATA_USER_PENALTY_PERIOD_APPLIES]
+                ),
+                "in_range_points": round(
+                    float(
+                        penalties_rollup["in_range"][
+                            const.DATA_USER_PENALTY_PERIOD_POINTS
+                        ]
+                    ),
+                    const.DATA_FLOAT_PRECISION,
+                ),
+                "all_time_applies": int(
+                    penalties_rollup["all_time"][const.DATA_USER_PENALTY_PERIOD_APPLIES]
+                ),
+                "all_time_points": round(
+                    float(
+                        penalties_rollup["all_time"][
+                            const.DATA_USER_PENALTY_PERIOD_POINTS
+                        ]
+                    ),
+                    const.DATA_FLOAT_PRECISION,
+                ),
+            },
+            "streaks": streak_rollup,
+            "badges": badge_rollup,
+        }
+
+    def _empty_report_rollup(self) -> dict[str, Any]:
+        """Return canonical empty report rollup structure."""
+        return {
+            "points": {
+                "in_range_earned": 0.0,
+                "in_range_spent": 0.0,
+                "all_time_earned": 0.0,
+                "all_time_spent": 0.0,
+            },
+            "chores": {
+                "in_range_approved": 0,
+                "in_range_claimed": 0,
+                "in_range_disapproved": 0,
+                "in_range_missed": 0,
+                "in_range_overdue": 0,
+                "in_range_avg_overdue_seconds": 0.0,
+                "in_range_longest_overdue_seconds": 0,
+                "all_time_approved": 0,
+                "all_time_claimed": 0,
+                "all_time_disapproved": 0,
+                "all_time_missed": 0,
+                "all_time_overdue": 0,
+                "all_time_avg_overdue_seconds": 0.0,
+                "all_time_longest_overdue_seconds": 0,
+            },
+            "rewards": {
+                "in_range_approved": 0,
+                "in_range_claimed": 0,
+                "in_range_disapproved": 0,
+                "in_range_points_spent": 0.0,
+                "all_time_approved": 0,
+                "all_time_claimed": 0,
+                "all_time_disapproved": 0,
+                "all_time_points_spent": 0.0,
+            },
+            "bonuses": {
+                "in_range_applies": 0,
+                "in_range_points": 0.0,
+                "all_time_applies": 0,
+                "all_time_points": 0.0,
+            },
+            "penalties": {
+                "in_range_applies": 0,
+                "in_range_points": 0.0,
+                "all_time_applies": 0,
+                "all_time_points": 0.0,
+            },
+            "streaks": {
+                "current_streak": 0,
+                "current_missed_streak": 0,
+                "all_time_longest_streak": 0,
+                "all_time_longest_missed_streak": 0,
+            },
+            "badges": {
+                "earned_unique_count": 0,
+                "all_time_award_count": 0,
+                "earned_badge_names": [],
+                "by_badge": {},
+            },
+        }
+
+    def _rollup_overdue_duration(
+        self,
+        periods: dict[str, Any],
+        start_iso: str,
+        end_iso: str,
+    ) -> dict[str, int | float]:
+        """Return average and longest overdue duration rollups."""
+        total_metric = const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS
+        count_metric = const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT
+        max_metric = const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS
+
+        in_range = self._sum_daily_metrics(
+            periods,
+            [total_metric, count_metric],
+            start_iso,
+            end_iso,
+        )
+        in_range_max = self._max_daily_metric(periods, max_metric, start_iso, end_iso)
+
+        all_time_total = self._stats_engine.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            total_metric,
+        )
+        all_time_count = self._stats_engine.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            count_metric,
+        )
+        all_time_max = self._stats_engine.get_period_total(
+            periods,
+            const.PERIOD_ALL_TIME,
+            max_metric,
+        )
+
+        return {
+            "in_range_avg_overdue_seconds": calculate_average(
+                in_range[total_metric],
+                in_range[count_metric],
+            ),
+            "in_range_longest_overdue_seconds": in_range_max,
+            "all_time_avg_overdue_seconds": calculate_average(
+                all_time_total,
+                all_time_count,
+            ),
+            "all_time_longest_overdue_seconds": all_time_max,
+        }
+
+    def _rollup_period_metrics(
+        self,
+        periods: dict[str, Any],
+        metrics: list[str],
+        start_iso: str,
+        end_iso: str,
+    ) -> dict[str, dict[str, int | float]]:
+        """Return in-range and all-time metric totals for one period container."""
+        in_range = self._sum_daily_metrics(periods, metrics, start_iso, end_iso)
+        all_time: dict[str, int | float] = {}
+        for metric in metrics:
+            all_time[metric] = self._stats_engine.get_period_total(
+                periods,
+                const.PERIOD_ALL_TIME,
+                metric,
+            )
+        return {
+            "in_range": in_range,
+            "all_time": all_time,
+        }
+
+    def _rollup_period_collections(
+        self,
+        period_collections: list[dict[str, Any]],
+        metrics: list[str],
+        start_iso: str,
+        end_iso: str,
+    ) -> dict[str, dict[str, int | float]]:
+        """Aggregate in-range and all-time totals across many period containers."""
+        in_range: dict[str, int | float] = dict.fromkeys(metrics, 0)
+        all_time: dict[str, int | float] = dict.fromkeys(metrics, 0)
+
+        for periods in period_collections:
+            period_rollup = self._rollup_period_metrics(
+                periods,
+                metrics,
+                start_iso,
+                end_iso,
+            )
+            for metric in metrics:
+                in_range[metric] = in_range[metric] + period_rollup["in_range"][metric]
+                all_time[metric] = all_time[metric] + period_rollup["all_time"][metric]
+
+        return {
+            "in_range": in_range,
+            "all_time": all_time,
+        }
+
+    def _get_streak_rollup(
+        self,
+        assignee_info: dict[str, Any],
+        chore_periods: dict[str, Any],
+    ) -> dict[str, int]:
+        """Build streak rollup for report payloads."""
+        current_streak = 0
+        current_missed_streak = 0
+
+        assignee_chore_data = assignee_info.get(const.DATA_USER_CHORE_DATA, {})
+        if isinstance(assignee_chore_data, dict):
+            for chore_data in assignee_chore_data.values():
+                if not isinstance(chore_data, dict):
+                    continue
+                current_streak = max(
+                    current_streak,
+                    int(chore_data.get(const.DATA_USER_CHORE_DATA_CURRENT_STREAK, 0)),
+                )
+                current_missed_streak = max(
+                    current_missed_streak,
+                    int(
+                        chore_data.get(
+                            const.DATA_USER_CHORE_DATA_CURRENT_MISSED_STREAK,
+                            0,
+                        )
+                    ),
+                )
+
+        return {
+            "current_streak": current_streak,
+            "current_missed_streak": current_missed_streak,
+            "all_time_longest_streak": int(
+                self._stats_engine.get_period_total(
+                    chore_periods,
+                    const.PERIOD_ALL_TIME,
+                    const.DATA_USER_CHORE_DATA_PERIOD_LONGEST_STREAK,
+                )
+            ),
+            "all_time_longest_missed_streak": int(
+                self._stats_engine.get_period_total(
+                    chore_periods,
+                    const.PERIOD_ALL_TIME,
+                    const.DATA_USER_CHORE_DATA_PERIOD_MISSED_LONGEST_STREAK,
+                )
+            ),
+        }
+
+    def _get_badge_rollup(self, assignee_info: dict[str, Any]) -> dict[str, Any]:
+        """Build badge rollup with per-badge details from assignee badge data."""
+        badges_earned = cast(
+            "dict[str, Any]",
+            assignee_info.get(const.DATA_USER_BADGES_EARNED, {}),
+        )
+        if not isinstance(badges_earned, dict):
+            return {
+                "earned_unique_count": 0,
+                "all_time_award_count": 0,
+                "earned_badge_names": [],
+                "by_badge": {},
+            }
+
+        all_time_award_count = 0
+        earned_badge_names: list[str] = []
+        by_badge: dict[str, dict[str, Any]] = {}
+
+        for badge_id, badge_info in badges_earned.items():
+            if not isinstance(badge_info, dict):
+                continue
+
+            badge_name = str(
+                badge_info.get(const.DATA_USER_BADGES_EARNED_NAME, "")
+            ).strip()
+            if badge_name:
+                earned_badge_names.append(badge_name)
+
+            periods = badge_info.get(const.DATA_USER_BADGES_EARNED_PERIODS, {})
+            award_count = 0
+            if isinstance(periods, dict):
+                all_time_bucket = periods.get(const.PERIOD_ALL_TIME, {})
+                if isinstance(all_time_bucket, dict):
+                    all_time_entry = all_time_bucket.get(const.PERIOD_ALL_TIME, {})
+                    if isinstance(all_time_entry, dict):
+                        raw_count = all_time_entry.get(
+                            const.DATA_USER_BADGES_EARNED_AWARD_COUNT,
+                            0,
+                        )
+                        if isinstance(raw_count, (int, float)):
+                            award_count = int(raw_count)
+
+            if award_count == 0:
+                raw_count = badge_info.get(const.DATA_USER_BADGES_EARNED_AWARD_COUNT, 0)
+                if isinstance(raw_count, (int, float)):
+                    award_count = int(raw_count)
+
+            all_time_award_count += award_count
+            by_badge[str(badge_id)] = {
+                "badge_id": str(badge_id),
+                "badge_name": badge_name,
+                "last_awarded_date": badge_info.get(
+                    const.DATA_USER_BADGES_EARNED_LAST_AWARDED
+                ),
+                "all_time_award_count": award_count,
+                "periods": periods if isinstance(periods, dict) else {},
+            }
+
+        return {
+            "earned_unique_count": len(by_badge),
+            "all_time_award_count": all_time_award_count,
+            "earned_badge_names": sorted(earned_badge_names),
+            "by_badge": by_badge,
+        }
+
+    def _sum_daily_metrics(
+        self,
+        periods: dict[str, Any],
+        metrics: list[str],
+        start_iso: str,
+        end_iso: str,
+    ) -> dict[str, int | float]:
+        """Sum selected metrics across daily period keys in a date range."""
+        parsed_start = dt_parse(start_iso)
+        parsed_end = dt_parse(end_iso)
+        if not isinstance(parsed_start, datetime) or not isinstance(
+            parsed_end, datetime
+        ):
+            return dict.fromkeys(metrics, 0)
+
+        start_key = parsed_start.date().isoformat()
+        end_key = parsed_end.date().isoformat()
+
+        daily_data = periods.get(const.PERIOD_DAILY, {})
+        if not isinstance(daily_data, dict):
+            return dict.fromkeys(metrics, 0)
+
+        sums: dict[str, int | float] = dict.fromkeys(metrics, 0)
+        for day_key, bucket in daily_data.items():
+            if not isinstance(day_key, str) or not isinstance(bucket, dict):
+                continue
+            if day_key < start_key or day_key > end_key:
+                continue
+
+            for metric in metrics:
+                value = bucket.get(metric, 0)
+                if isinstance(value, (int, float)):
+                    sums[metric] = sums[metric] + value
+
+        return sums
+
+    def _max_daily_metric(
+        self,
+        periods: dict[str, Any],
+        metric: str,
+        start_iso: str,
+        end_iso: str,
+    ) -> int | float:
+        """Return the maximum daily metric value in a date range."""
+        parsed_start = dt_parse(start_iso)
+        parsed_end = dt_parse(end_iso)
+        if not isinstance(parsed_start, datetime) or not isinstance(
+            parsed_end, datetime
+        ):
+            return 0
+
+        start_key = parsed_start.date().isoformat()
+        end_key = parsed_end.date().isoformat()
+
+        daily_data = periods.get(const.PERIOD_DAILY, {})
+        if not isinstance(daily_data, dict):
+            return 0
+
+        max_value: int | float = 0
+        for day_key, bucket in daily_data.items():
+            if not isinstance(day_key, str) or not isinstance(bucket, dict):
+                continue
+            if day_key < start_key or day_key > end_key:
+                continue
+
+            value = bucket.get(metric, 0)
+            if isinstance(value, (int, float)):
+                max_value = max(max_value, value)
+
+        return max_value
+
+    def _get_assignee(self, assignee_id: str) -> dict[str, Any] | None:
+        """Get assignee data by ID.
+
+        Returns dict[str, Any] instead of AssigneeData because StatisticsManager
+        accesses dynamic keys like 'point_data' that aren't in the TypedDict.
+
+        Args:
+            assignee_id: The internal UUID of the assignee
+
+        Returns:
+            Assignee data dict or None if not found
+        """
+        return self._coordinator.assignees_data.get(assignee_id)  # type: ignore[return-value]
+
+    def get_badge_scoped_today_stats(
+        self,
+        assignee_id: str,
+        tracked_chores: list[str],
+        *,
+        today_iso: str,
+    ) -> dict[str, Any]:
+        """Get badge-scoped daily stats for gamification evaluation.
+
+        Tenant-owned period read helper for GamificationManager.
+        Reads chore period buckets and returns normalized stats required by
+        GamificationEngine runtime context.
+
+        Args:
+            assignee_id: Assignee internal ID.
+            tracked_chores: Chore IDs in scope for current badge.
+            today_iso: Today date key (YYYY-MM-DD).
+
+        Returns:
+            Dict with keys: today_points, today_approved, total_earned.
+        """
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            return {
+                "today_points": 0.0,
+                "today_approved": 0,
+                "total_earned": 0.0,
+            }
+
+        chore_data = cast(
+            "dict[str, Any]", assignee_info.get(const.DATA_USER_CHORE_DATA, {})
+        )
+
+        total_earned = 0.0
+        today_points = 0.0
+        today_approved = 0
+
+        for chore_id in tracked_chores:
+            chore_entry = cast("dict[str, Any]", chore_data.get(chore_id, {}))
+            periods = cast(
+                "dict[str, Any]",
+                chore_entry.get(const.DATA_USER_CHORE_DATA_PERIODS, {}),
+            )
+
+            total_earned += float(
+                self._stats_engine.get_period_total(
+                    periods,
+                    const.PERIOD_ALL_TIME,
+                    const.DATA_USER_CHORE_DATA_PERIOD_POINTS,
+                )
+            )
+            today_points += float(
+                self._stats_engine.get_period_total(
+                    periods,
+                    const.PERIOD_DAILY,
+                    const.DATA_USER_CHORE_DATA_PERIOD_POINTS,
+                    period_key=today_iso,
+                )
+            )
+            today_approved += int(
+                self._stats_engine.get_period_total(
+                    periods,
+                    const.PERIOD_DAILY,
+                    const.DATA_USER_CHORE_DATA_PERIOD_APPROVED,
+                    period_key=today_iso,
+                )
+            )
+
+        return {
+            "today_points": today_points,
+            "today_approved": today_approved,
+            "total_earned": total_earned,
+        }
+
+    def get_badge_scoped_all_time_stats(
+        self,
+        assignee_id: str,
+        tracked_chores: list[str],
+    ) -> dict[str, Any]:
+        """Get badge-scoped all-time period stats for gamification evaluation.
+
+        Tenant-owned period read helper for GamificationManager.
+        Aggregates the all-time period buckets across only the tracked chores,
+        so scoped achievements/challenges (e.g. "Chore Total" with a selected
+        chore) evaluate against their assigned chore's history rather than the
+        assignee's global all-time totals.
+
+        Only the counters consumed by the gamification engine are aggregated
+        (approved, completed, points). High-water-mark fields such as
+        longest_streak / missed_longest_streak are intentionally NOT summed,
+        since summing maxima across chores would be semantically wrong.
+
+        Args:
+            assignee_id: Assignee internal ID.
+            tracked_chores: Chore IDs in scope for the current target.
+
+        Returns:
+            Aggregated all-time bucket (approved/completed/points) for the
+            tracked chores only. Empty dict when no tracked chores are given.
+        """
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            return {}
+
+        chore_data = cast(
+            "dict[str, Any]", assignee_info.get(const.DATA_USER_CHORE_DATA, {})
+        )
+
+        aggregated: dict[str, Any] = {}
+        for chore_id in tracked_chores:
+            chore_entry = cast("dict[str, Any]", chore_data.get(chore_id, {}))
+            periods = cast(
+                "dict[str, Any]",
+                chore_entry.get(const.DATA_USER_CHORE_DATA_PERIODS, {}),
+            )
+            all_time_data = cast(
+                "dict[str, Any]",
+                periods.get(const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME, {}).get(
+                    const.PERIOD_ALL_TIME, {}
+                ),
+            )
+            for key in (
+                const.DATA_USER_CHORE_DATA_PERIOD_APPROVED,
+                const.DATA_USER_CHORE_DATA_PERIOD_COMPLETED,
+                const.DATA_USER_CHORE_DATA_PERIOD_POINTS,
+            ):
+                value = all_time_data.get(key, 0)
+                if isinstance(value, (int, float)):
+                    aggregated[key] = aggregated.get(key, 0) + value
+
+        return aggregated
+
+    def get_badge_scoped_today_completion(
+        self,
+        assignee_id: str,
+        tracked_chores: list[str],
+        *,
+        today_iso: str,
+        cycle_start_iso: str,
+        only_due_today: bool,
+        last_update_day_iso: str = "",
+        missed_since_advance: bool | None = None,
+    ) -> BadgeScopedCompletionSnapshot:
+        """Get badge-scoped completion snapshot for today.
+
+        Tenant-owned period read helper for GamificationManager.
+
+        Args:
+            assignee_id: Assignee internal ID.
+            tracked_chores: Chore IDs in scope for current badge.
+            today_iso: Today date key (YYYY-MM-DD).
+            cycle_start_iso: First local date of the badge cycle (YYYY-MM-DD).
+                Lets lateness anywhere in the cycle count, not just today.
+            only_due_today: If True, include only chores due today.
+            last_update_day_iso: Day the badge streak last advanced. Bounds the
+                missed-occurrence window; empty means no window to evaluate.
+            missed_since_advance: Precomputed miss result. Callers that build both
+                scope variants of the same badge pass it so the check runs once;
+                `None` computes it.
+
+        Returns:
+            Dict with keys: approved_count, total_count, due_count,
+                approved_due_today, has_overdue, cycle_failed,
+                missed_since_advance.
+                `due_count` and `approved_due_today` express the eligible scope,
+                where a chore only counts when it is actionable today.
+                `cycle_failed` is True when a tracked chore went overdue or was
+                missed on or after `cycle_start_iso`, even if since resolved.
+                `missed_since_advance` is True when an occurrence passed unmet
+                since the streak last advanced.
+        """
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            return {
+                "approved_count": 0,
+                "total_count": 0,
+                "due_count": 0,
+                "approved_due_today": 0,
+                "has_overdue": False,
+                "cycle_failed": False,
+                "missed_since_advance": False,
+            }
+
+        chore_data = cast(
+            "dict[str, Any]", assignee_info.get(const.DATA_USER_CHORE_DATA, {})
+        )
+
+        approved_count = 0
+        total_count = 0
+        due_count = 0
+        approved_due_today = 0
+        has_overdue = False
+        cycle_failed = False
+
+        for chore_id in tracked_chores:
+            chore_info = cast(
+                "dict[str, Any]", self.coordinator.chores_data.get(chore_id, {})
+            )
+            due_today = self._chore_counts_toward_today(
+                chore_id, chore_info, assignee_id, today_iso
+            )
+            if only_due_today and not due_today:
+                continue
+
+            chore_entry = cast("dict[str, Any]", chore_data.get(chore_id, {}))
+            periods = cast(
+                "dict[str, Any]",
+                chore_entry.get(const.DATA_USER_CHORE_DATA_PERIODS, {}),
+            )
+
+            total_count += 1
+            if due_today:
+                due_count += 1
+
+            approved_today = int(
+                self._stats_engine.get_period_total(
+                    periods,
+                    const.PERIOD_DAILY,
+                    const.DATA_USER_CHORE_DATA_PERIOD_APPROVED,
+                    period_key=today_iso,
+                )
+            )
+            if approved_today > 0:
+                approved_count += 1
+                if due_today:
+                    approved_due_today += 1
+
+            if (
+                chore_entry.get(const.DATA_USER_CHORE_DATA_STATE)
+                == const.CHORE_STATE_OVERDUE
+            ):
+                has_overdue = True
+
+            overdue_on = dt_local_date_iso(
+                chore_entry.get(const.DATA_USER_CHORE_DATA_LAST_OVERDUE)
+            )
+            missed_on = dt_local_date_iso(
+                chore_entry.get(const.DATA_USER_CHORE_DATA_LAST_MISSED)
+            )
+            latest_failure = max(
+                (value for value in (overdue_on, missed_on) if value is not None),
+                default=None,
+            )
+            if latest_failure is not None and latest_failure >= cycle_start_iso:
+                cycle_failed = True
+
+        return {
+            "approved_count": approved_count,
+            "total_count": total_count,
+            "due_count": due_count,
+            "approved_due_today": approved_due_today,
+            "has_overdue": has_overdue,
+            "cycle_failed": cycle_failed,
+            "missed_since_advance": (
+                self.has_missed_occurrence_since_advance(
+                    tracked_chores,
+                    last_update_day_iso=last_update_day_iso,
+                    today_iso=today_iso,
+                )
+                if missed_since_advance is None
+                else missed_since_advance
+            ),
+        }
+
+    def has_missed_occurrence_since_advance(
+        self,
+        tracked_chores: list[str],
+        *,
+        last_update_day_iso: str,
+        today_iso: str,
+    ) -> bool:
+        """Return True when a tracked chore missed a scheduled occurrence.
+
+        Backstop for windows that were never evaluated (HA down, catch-up gaps,
+        neutral stretches after a failed day). Days that were evaluated are
+        covered by the day-level rules, so the window is bounded by the streak's
+        own advance day rather than a chore's completion timestamp: occurrences
+        belonging to an already-evaluated day fall before the anchor and cannot
+        break the streak, which is what lets percentage variants tolerate a
+        deliberately skipped chore.
+
+        The upper bound is the start of today, never "now", so today's
+        still-pending occurrence is not treated as missed.
+
+        Args:
+            tracked_chores: Chore IDs in scope for the badge.
+            last_update_day_iso: Day the streak last advanced (may be empty).
+            today_iso: Today's local date key.
+
+        Returns:
+            True when at least one occurrence passed unmet since the anchor.
+            False when there is no window to evaluate or on unparseable input,
+            so a valid streak is never wrongly broken.
+        """
+        anchor_date = dt_parse_date(last_update_day_iso)
+        today_date = dt_parse_date(today_iso)
+        if anchor_date is None or today_date is None or anchor_date >= today_date:
+            return False
+
+        local_tz = get_default_timezone()
+        window_start = as_utc(datetime.combine(anchor_date, time.min, tzinfo=local_tz))
+        window_end = as_utc(datetime.combine(today_date, time.min, tzinfo=local_tz))
+
+        for chore_id in tracked_chores:
+            chore_info = cast(
+                "dict[str, Any]", self.coordinator.chores_data.get(chore_id, {})
+            )
+            if not chore_info:
+                continue
+
+            if ChoreEngine.has_missed_occurrence_between(
+                chore_info,
+                window_start_utc=window_start,
+                window_end_utc=window_end,
+            ):
+                return True
+
+        return False
+
+    def _chore_counts_toward_today(
+        self,
+        chore_id: str,
+        chore_info: dict[str, Any],
+        assignee_id: str,
+        today_iso: str,
+    ) -> bool:
+        """Return True when a chore forms part of the assignee's obligation today.
+
+        Stricter than the schedule primitive below: a chore only counts when the
+        assignee still holds it and it is genuinely theirs to do. A rotation chore
+        whose turn belongs to another assignee cannot be completed by this
+        assignee, so charging them for it would make the day unsatisfiable.
+
+        Uses the **claim mode** rather than the display state, because that is the
+        field encoding whether the chore belongs to this assignee. A
+        primary/standby chore reports `standby` both for a standby that may claim
+        and one that may not; only the claim mode separates them, and neither is
+        the standby's obligation — permission to help is not ownership.
+
+        Args:
+            chore_id: Chore internal ID.
+            chore_info: Chore definition.
+            assignee_id: Assignee internal ID.
+            today_iso: Today's local date key.
+
+        Returns:
+            True when the chore counts toward the assignee's day.
+        """
+        # Stale per-assignee entries can survive an assignment change, which
+        # used to inflate the dashboard's due-today count (issue #205).
+        if assignee_id not in chore_info.get(const.DATA_CHORE_ASSIGNED_USER_IDS, []):
+            return False
+
+        if not (
+            self._is_chore_scheduled_today_for_assignee(
+                chore_info, assignee_id, today_iso
+            )
+            or self._is_undated_one_timer(chore_info, assignee_id)
+        ):
+            return False
+
+        status_context = self.coordinator.chore_manager.get_chore_status_context(
+            assignee_id, chore_id
+        )
+        claim_mode = str(status_context.get(const.CHORE_CTX_CLAIM_MODE) or "")
+
+        if claim_mode in const.CHORE_CLAIM_MODES_COUNTING_TOWARD_DAY:
+            return True
+
+        if claim_mode == const.CHORE_CLAIM_MODE_BLOCKED_COMPLETED_BY_OTHER:
+            # Someone else did the work. That discharges the obligation only when
+            # one completion satisfies the chore for everyone (`shared_first`),
+            # where the non-completer was never on the hook personally. For a
+            # rotation-type chore it does not: the turn holder did not do their
+            # turn, so a standby covering for them is not their credit.
+            return ChoreEngine.is_rotation_mode(chore_info) and assignee_id == str(
+                chore_info.get(const.DATA_CHORE_ROTATION_CURRENT_ASSIGNEE_ID)
+            )
+
+        return False
+
+    def _is_chore_scheduled_today_for_assignee(
+        self,
+        chore_info: dict[str, Any],
+        assignee_id: str,
+        today_iso: str,
+    ) -> bool:
+        """Return True when a chore's schedule puts it on today for the assignee.
+
+        Schedule primitive only: it answers whether the calendar says the chore
+        falls on today. It says nothing about whether this assignee is the one
+        who owes it (turn order, standby) or can still act on it. Badge
+        eligibility must use `_chore_counts_toward_today` instead.
+        """
+        # Pause guard: Paused users have no actionable chores
+        user_data = self.coordinator._data.get(const.DATA_USERS, {}).get(
+            assignee_id, {}
+        )
+        if user_data.get(const.DATA_USER_CHORES_PAUSED):
+            return False
+
+        per_assignee_due_dates = cast(
+            "dict[str, str | None]",
+            chore_info.get(const.DATA_CHORE_PER_ASSIGNEE_DUE_DATES, {}),
+        )
+        due_date = per_assignee_due_dates.get(assignee_id) or chore_info.get(
+            const.DATA_CHORE_DUE_DATE
+        )
+        if isinstance(due_date, str):
+            return due_date[:10] == today_iso
+
+        return self.coordinator.chore_manager.no_due_date_daily_matches_today(
+            chore_info,
+            assignee_id,
+        )
+
+    @staticmethod
+    def _is_undated_one_timer(
+        chore_info: dict[str, Any],
+        assignee_id: str,
+    ) -> bool:
+        """Return True for an open one-timer with no date at all.
+
+        Such a chore has no schedule to say when it is due, so the schedule
+        primitive reports it as never on today. It is nonetheless owed: excluding
+        it would silently drop a chore the user explicitly selected, and a badge
+        scoped only to these chores would have an eligible count of zero every day
+        and neither advance nor break. It therefore counts every day, and keeps
+        counting once approved, like any other chore in scope.
+        """
+        if chore_info.get(const.DATA_CHORE_RECURRING_FREQUENCY) != const.FREQUENCY_NONE:
+            return False
+
+        per_assignee_due_dates = cast(
+            "dict[str, str | None]",
+            chore_info.get(const.DATA_CHORE_PER_ASSIGNEE_DUE_DATES, {}),
+        )
+        due_date = per_assignee_due_dates.get(assignee_id) or chore_info.get(
+            const.DATA_CHORE_DUE_DATE
+        )
+        return due_date is None
+
+    # =========================================================================
+    # Presentation Cache Methods
+    # =========================================================================
+
+    def _get_cache_entry(self, assignee_id: str) -> dict[str, Any]:
+        """Return the mutable cache entry for an assignee."""
+        return self._stats_cache.setdefault(assignee_id, {})
+
+    def _get_domain_cache(self, assignee_id: str, domain: str) -> dict[str, Any]:
+        """Return the mutable domain cache for an assignee."""
+        entry = self._get_cache_entry(assignee_id)
+        domain_cache = entry.get(domain)
+        if isinstance(domain_cache, dict):
+            return domain_cache
+
+        new_domain_cache: dict[str, Any] = {}
+        entry[domain] = new_domain_cache
+        return new_domain_cache
+
+    def _has_domain_cache(self, assignee_id: str, domain: str) -> bool:
+        """Return if a domain cache exists and contains data."""
+        cache_entry = self._stats_cache.get(assignee_id, {})
+        domain_cache = cache_entry.get(domain)
+        return isinstance(domain_cache, dict) and bool(domain_cache)
+
+    def _flatten_cache_entry(self, assignee_id: str) -> dict[str, Any]:
+        """Return the legacy flattened cache view for an assignee."""
+        cache_entry = self._stats_cache.get(assignee_id, {})
+        flat_cache: dict[str, Any] = {}
+
+        for domain in (
+            const.CACHE_DOMAIN_POINTS,
+            const.CACHE_DOMAIN_CHORES,
+            const.CACHE_DOMAIN_REWARDS,
+            const.CACHE_DOMAIN_META,
+        ):
+            domain_cache = cache_entry.get(domain, {})
+            if isinstance(domain_cache, dict):
+                flat_cache.update(domain_cache)
+
+        return flat_cache
+
+    def _mark_cache_updated(self, assignee_id: str) -> None:
+        """Update cache metadata for an assignee."""
+        meta_cache = self._get_domain_cache(assignee_id, const.CACHE_DOMAIN_META)
+        meta_cache[const.PRES_USER_LAST_UPDATED] = dt_now_local().isoformat()
+
+    def _build_default_chore_stats(self) -> dict[str, Any]:
+        """Return the stable chore presentation contract with zero defaults."""
+        return {
+            const.PRES_USER_CHORES_CURRENT_OVERDUE: 0,
+            const.PRES_USER_CHORES_CURRENT_CLAIMED: 0,
+            const.PRES_USER_CHORES_CURRENT_APPROVED: 0,
+            const.PRES_USER_CHORES_CURRENT_DUE_TODAY: 0,
+            const.PRES_USER_CHORES_APPROVED_TODAY: 0,
+            const.PRES_USER_CHORES_APPROVED_WEEK: 0,
+            const.PRES_USER_CHORES_APPROVED_MONTH: 0,
+            const.PRES_USER_CHORES_APPROVED_YEAR: 0,
+            const.PRES_USER_CHORES_COMPLETED_TODAY: 0,
+            const.PRES_USER_CHORES_COMPLETED_WEEK: 0,
+            const.PRES_USER_CHORES_COMPLETED_MONTH: 0,
+            const.PRES_USER_CHORES_COMPLETED_YEAR: 0,
+            const.PRES_USER_CHORES_CLAIMED_TODAY: 0,
+            const.PRES_USER_CHORES_CLAIMED_WEEK: 0,
+            const.PRES_USER_CHORES_CLAIMED_MONTH: 0,
+            const.PRES_USER_CHORES_CLAIMED_YEAR: 0,
+            const.PRES_USER_CHORES_MISSED_TODAY: 0,
+            const.PRES_USER_CHORES_MISSED_WEEK: 0,
+            const.PRES_USER_CHORES_MISSED_MONTH: 0,
+            const.PRES_USER_CHORES_MISSED_YEAR: 0,
+            const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_TODAY: 0.0,
+            const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_WEEK: 0.0,
+            const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_MONTH: 0.0,
+            const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_YEAR: 0.0,
+            const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_TODAY: 0,
+            const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_WEEK: 0,
+            const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_MONTH: 0,
+            const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_YEAR: 0,
+            const.PRES_USER_CHORES_POINTS_TODAY: 0.0,
+            const.PRES_USER_CHORES_POINTS_WEEK: 0.0,
+            const.PRES_USER_CHORES_POINTS_MONTH: 0.0,
+            const.PRES_USER_CHORES_POINTS_YEAR: 0.0,
+            const.PRES_USER_CHORES_AVG_PER_DAY_WEEK: 0.0,
+            const.PRES_USER_CHORES_AVG_PER_DAY_MONTH: 0.0,
+            const.PRES_USER_CHORES_AVG_PER_DAY_YEAR: 0.0,
+            const.PRES_USER_TOP_CHORES_WEEK: "",
+            const.PRES_USER_TOP_CHORES_MONTH: "",
+            const.PRES_USER_TOP_CHORES_YEAR: "",
+        }
+
+    def get_stats(self, assignee_id: str) -> dict[str, Any]:
+        """Get presentation statistics for a assignee (Phase 7.5 Cache API).
+
+        This is the primary API for sensors and dashboard helpers.
+        Returns cached PRES_* values derived from period buckets.
+        If cache miss, or if only a partial domain refresh created the cache
+        entry, rebuilds from buckets (lazy hydration).
+
+        Args:
+            assignee_id: The assignee's internal ID
+
+        Returns:
+            Dict with PRES_* keys for presentation, or empty dict if assignee not found.
+        """
+        if not all(
+            self._has_domain_cache(assignee_id, domain)
+            for domain in (
+                const.CACHE_DOMAIN_POINTS,
+                const.CACHE_DOMAIN_CHORES,
+                const.CACHE_DOMAIN_REWARDS,
+                const.CACHE_DOMAIN_META,
+            )
+        ):
+            # Cache miss or partial domain cache - rebuild from buckets
+            self._refresh_all_cache(assignee_id)
+
+        return self._flatten_cache_entry(assignee_id)
+
+    def get_chore_stats(self, assignee_id: str) -> dict[str, Any]:
+        """Get chore presentation statistics with a stable schema."""
+        if not self._has_domain_cache(assignee_id, const.CACHE_DOMAIN_CHORES):
+            self._refresh_chore_cache(assignee_id)
+
+        return {
+            **self._build_default_chore_stats(),
+            **self._get_domain_cache(assignee_id, const.CACHE_DOMAIN_CHORES),
+        }
+
+    async def _hydrate_cache_all_assignees(self) -> None:
+        """Hydrate presentation cache for all existing assignees at startup (Phase 7.5.7).
+
+        Called during async_setup() to ensure sensors have data immediately.
+        Runs synchronously since this is startup-time work.
+        """
+        assignees_data = self._coordinator.assignees_data
+        assignee_count = len(assignees_data)
+
+        if assignee_count == 0:
+            const.LOGGER.debug("StatisticsManager: No assignees to hydrate cache for")
+            return
+
+        for assignee_id in assignees_data:
+            self._refresh_all_cache(assignee_id)
+
+        const.LOGGER.info(
+            "StatisticsManager: Hydrated stats cache for %s assignees", assignee_count
+        )
+
+    def _refresh_all_cache(self, assignee_id: str) -> None:
+        """Refresh all cache domains for a assignee.
+
+        Called on cache miss or startup hydration.
+        Delegates to domain-specific refresh methods.
+
+        Args:
+            assignee_id: The assignee's internal ID
+        """
+        self._refresh_point_cache(assignee_id)
+        self._refresh_chore_cache(assignee_id)
+        self._refresh_reward_cache(assignee_id)
+
+        self._mark_cache_updated(assignee_id)
+
+    def _refresh_point_cache(self, assignee_id: str) -> None:
+        """Refresh point statistics cache for a assignee.
+
+        Derives temporal point stats from period buckets (point_periods).
+        Only runs on point-related events.
+
+        Args:
+            assignee_id: The assignee's internal ID
+        """
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            return
+
+        cache = self._get_domain_cache(assignee_id, const.CACHE_DOMAIN_POINTS)
+        pts_periods = assignee_info.get(const.DATA_USER_POINT_PERIODS, {})
+
+        now_local = dt_now_local()
+        today_local_iso = now_local.date().isoformat()
+        week_local_iso = now_local.strftime("%Y-W%V")
+        month_local_iso = now_local.strftime("%Y-%m")
+        year_local_iso = now_local.strftime("%Y")
+
+        def get_period_values(
+            period_key: str, period_id: str
+        ) -> tuple[float, float, float, dict[str, float]]:
+            """Extract earned, spent, net, and by_source from a period bucket.
+
+            Phase 7G.1: Now reads earned/spent directly from period entry,
+            derives net as (earned + spent). No longer reads points_total.
+            """
+            period = pts_periods.get(period_key, {})
+            entry = period.get(period_id, {})
+            by_source = entry.get(const.DATA_USER_POINT_PERIOD_BY_SOURCE, {})
+
+            # Read earned/spent directly from period entry (v44+ structure)
+            earned = round(
+                entry.get(const.DATA_USER_POINT_PERIOD_POINTS_EARNED, 0.0),
+                const.DATA_FLOAT_PRECISION,
+            )
+            spent = round(
+                entry.get(const.DATA_USER_POINT_PERIOD_POINTS_SPENT, 0.0),
+                const.DATA_FLOAT_PRECISION,
+            )
+            # Net is DERIVED (earned + spent, where spent is negative)
+            net = round(earned + spent, const.DATA_FLOAT_PRECISION)
+            return earned, spent, net, dict(by_source)
+
+        # Daily
+        earned, spent, net, by_source = get_period_values(
+            const.DATA_USER_POINT_PERIODS_DAILY, today_local_iso
+        )
+        cache[const.PRES_USER_POINTS_EARNED_TODAY] = earned
+        cache[const.PRES_USER_POINTS_SPENT_TODAY] = spent
+        cache[const.PRES_USER_POINTS_NET_TODAY] = net
+        cache[const.PRES_USER_POINTS_BY_SOURCE_TODAY] = by_source
+
+        # Weekly
+        earned, spent, net, by_source = get_period_values(
+            const.DATA_USER_POINT_PERIODS_WEEKLY, week_local_iso
+        )
+        cache[const.PRES_USER_POINTS_EARNED_WEEK] = earned
+        cache[const.PRES_USER_POINTS_SPENT_WEEK] = spent
+        cache[const.PRES_USER_POINTS_NET_WEEK] = net
+        cache[const.PRES_USER_POINTS_BY_SOURCE_WEEK] = by_source
+
+        # Monthly
+        earned, spent, net, by_source = get_period_values(
+            const.DATA_USER_POINT_PERIODS_MONTHLY, month_local_iso
+        )
+        cache[const.PRES_USER_POINTS_EARNED_MONTH] = earned
+        cache[const.PRES_USER_POINTS_SPENT_MONTH] = spent
+        cache[const.PRES_USER_POINTS_NET_MONTH] = net
+        cache[const.PRES_USER_POINTS_BY_SOURCE_MONTH] = by_source
+
+        # Yearly
+        earned, spent, net, by_source = get_period_values(
+            const.DATA_USER_POINT_PERIODS_YEARLY, year_local_iso
+        )
+        cache[const.PRES_USER_POINTS_EARNED_YEAR] = earned
+        cache[const.PRES_USER_POINTS_SPENT_YEAR] = spent
+        cache[const.PRES_USER_POINTS_NET_YEAR] = net
+        cache[const.PRES_USER_POINTS_BY_SOURCE_YEAR] = by_source
+
+        # Averages (derived from period aggregates)
+        days_in_week = 7
+        days_in_month = 30  # Approximate
+        week_earned = cache.get(const.PRES_USER_POINTS_EARNED_WEEK, 0.0)
+        month_earned = cache.get(const.PRES_USER_POINTS_EARNED_MONTH, 0.0)
+        cache[const.PRES_USER_POINTS_AVG_PER_DAY_WEEK] = round(
+            week_earned / days_in_week if week_earned else 0.0,
+            const.DATA_FLOAT_PRECISION,
+        )
+        cache[const.PRES_USER_POINTS_AVG_PER_DAY_MONTH] = round(
+            month_earned / days_in_month if month_earned else 0.0,
+            const.DATA_FLOAT_PRECISION,
+        )
+
+    def _refresh_chore_cache(self, assignee_id: str) -> None:
+        """Refresh chore statistics cache for a assignee.
+
+        Derives temporal chore stats from chore_data periods and computes
+        snapshot counts (current_overdue, current_claimed, etc.) inline.
+        Only runs on chore-related events.
+
+        Args:
+            assignee_id: The assignee's internal ID
+        """
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            return
+
+        cache = self._get_domain_cache(assignee_id, const.CACHE_DOMAIN_CHORES)
+
+        # === Temporal aggregates from period buckets ===
+        chore_data = assignee_info.get(const.DATA_USER_CHORE_DATA, {})
+
+        now_local = dt_now_local()
+        today_local = now_local.date()
+        today_local_iso = today_local.isoformat()
+        week_local_iso = now_local.strftime("%Y-W%V")
+        month_local_iso = now_local.strftime("%Y-%m")
+        year_local_iso = now_local.strftime("%Y")
+
+        # Aggregate chore stats from all chore_data entries
+        approved_today = 0
+        approved_week = 0
+        approved_month = 0
+        approved_year = 0
+        completed_today = 0
+        completed_week = 0
+        completed_month = 0
+        completed_year = 0
+        claimed_today = 0
+        claimed_week = 0
+        claimed_month = 0
+        claimed_year = 0
+        missed_today = 0
+        missed_week = 0
+        missed_month = 0
+        missed_year = 0
+        overdue_duration_total_today = 0
+        overdue_duration_total_week = 0
+        overdue_duration_total_month = 0
+        overdue_duration_total_year = 0
+        overdue_duration_count_today = 0
+        overdue_duration_count_week = 0
+        overdue_duration_count_month = 0
+        overdue_duration_count_year = 0
+        overdue_duration_max_today = 0
+        overdue_duration_max_week = 0
+        overdue_duration_max_month = 0
+        overdue_duration_max_year = 0
+        points_today = 0.0
+        points_week = 0.0
+        points_month = 0.0
+        points_year = 0.0
+
+        # Per-chore completed counts for top chores calculation
+        chore_completed_week: dict[str, int] = {}
+        chore_completed_month: dict[str, int] = {}
+        chore_completed_year: dict[str, int] = {}
+
+        # Snapshot counts (computed inline - no more generate_chore_stats() call)
+        current_overdue = 0
+        current_claimed = 0
+        current_approved = 0
+        current_due_today = 0
+
+        for chore_id, chore_info in chore_data.items():
+            periods = chore_info.get(const.DATA_USER_CHORE_DATA_PERIODS, {})
+
+            # === Snapshot counts based on derived assignee-facing state ===
+            status_context = self.coordinator.chore_manager.get_chore_status_context(
+                assignee_id,
+                chore_id,
+            )
+            display_state = status_context.get(
+                const.CHORE_CTX_STATE,
+                chore_info.get(const.DATA_USER_CHORE_DATA_STATE),
+            )
+
+            if display_state == const.CHORE_STATE_OVERDUE:
+                current_overdue += 1
+            elif display_state == const.CHORE_STATE_CLAIMED:
+                current_claimed += 1
+            elif display_state == const.CHORE_STATE_COMPLETED:
+                current_approved += 1
+
+            if self.coordinator.chore_manager.chore_counts_toward_due_today_summary(
+                assignee_id,
+                chore_id,
+                status_context=status_context,
+                local_today_iso=today_local_iso,
+            ):
+                current_due_today += 1
+
+            # Daily
+            daily_periods = periods.get(const.DATA_USER_CHORE_DATA_PERIODS_DAILY, {})
+            today_entry = daily_periods.get(today_local_iso, {})
+            approved_today += today_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_APPROVED, 0
+            )
+            completed_today += today_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_COMPLETED, 0
+            )
+            claimed_today += today_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED, 0
+            )
+            missed_today += today_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_MISSED, 0)
+            overdue_duration_total_today += today_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+                0,
+            )
+            overdue_duration_count_today += today_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+                0,
+            )
+            overdue_duration_max_today = max(
+                overdue_duration_max_today,
+                today_entry.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+                    0,
+                ),
+            )
+            points_today += today_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_POINTS, 0)
+
+            # Weekly
+            weekly_periods = periods.get(const.DATA_USER_CHORE_DATA_PERIODS_WEEKLY, {})
+            week_entry = weekly_periods.get(week_local_iso, {})
+            week_completed = week_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_COMPLETED, 0
+            )
+            approved_week += week_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_APPROVED, 0
+            )
+            completed_week += week_completed
+            claimed_week += week_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED, 0)
+            missed_week += week_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_MISSED, 0)
+            overdue_duration_total_week += week_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+                0,
+            )
+            overdue_duration_count_week += week_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+                0,
+            )
+            overdue_duration_max_week = max(
+                overdue_duration_max_week,
+                week_entry.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+                    0,
+                ),
+            )
+            points_week += week_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_POINTS, 0)
+            if week_completed > 0:
+                chore_completed_week[chore_id] = week_completed
+
+            # Monthly
+            monthly_periods = periods.get(
+                const.DATA_USER_CHORE_DATA_PERIODS_MONTHLY, {}
+            )
+            month_entry = monthly_periods.get(month_local_iso, {})
+            month_completed = month_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_COMPLETED, 0
+            )
+            approved_month += month_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_APPROVED, 0
+            )
+            completed_month += month_completed
+            claimed_month += month_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED, 0
+            )
+            missed_month += month_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_MISSED, 0)
+            overdue_duration_total_month += month_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+                0,
+            )
+            overdue_duration_count_month += month_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+                0,
+            )
+            overdue_duration_max_month = max(
+                overdue_duration_max_month,
+                month_entry.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+                    0,
+                ),
+            )
+            points_month += month_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_POINTS, 0)
+            if month_completed > 0:
+                chore_completed_month[chore_id] = month_completed
+
+            # Yearly
+            yearly_periods = periods.get(const.DATA_USER_CHORE_DATA_PERIODS_YEARLY, {})
+            year_entry = yearly_periods.get(year_local_iso, {})
+            year_completed = year_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_COMPLETED, 0
+            )
+            approved_year += year_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_APPROVED, 0
+            )
+            completed_year += year_completed
+            claimed_year += year_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_CLAIMED, 0)
+            missed_year += year_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_MISSED, 0)
+            overdue_duration_total_year += year_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_TOTAL_SECONDS,
+                0,
+            )
+            overdue_duration_count_year += year_entry.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_COUNT,
+                0,
+            )
+            overdue_duration_max_year = max(
+                overdue_duration_max_year,
+                year_entry.get(
+                    const.DATA_USER_CHORE_DATA_PERIOD_OVERDUE_DURATION_MAX_SECONDS,
+                    0,
+                ),
+            )
+            points_year += year_entry.get(const.DATA_USER_CHORE_DATA_PERIOD_POINTS, 0)
+            if year_completed > 0:
+                chore_completed_year[chore_id] = year_completed
+
+        # NOTE: all_time stats are NOT calculated here - they must be read from storage
+        # Reason: Retention/pruning means we can't recalculate historical all_time by summing periods
+        # All-time data lives in assignee["chore_periods"]["all_time"]["all_time"] and is maintained
+        # by _record_chore_transaction() writing to both per-chore and assignee-level buckets
+
+        # Store snapshot counts in cache (computed inline above)
+        cache[const.PRES_USER_CHORES_CURRENT_OVERDUE] = current_overdue
+        cache[const.PRES_USER_CHORES_CURRENT_CLAIMED] = current_claimed
+        cache[const.PRES_USER_CHORES_CURRENT_APPROVED] = current_approved
+        cache[const.PRES_USER_CHORES_CURRENT_DUE_TODAY] = current_due_today
+
+        # Store temporal aggregates in cache
+        cache[const.PRES_USER_CHORES_APPROVED_TODAY] = approved_today
+        cache[const.PRES_USER_CHORES_APPROVED_WEEK] = approved_week
+        cache[const.PRES_USER_CHORES_APPROVED_MONTH] = approved_month
+        cache[const.PRES_USER_CHORES_APPROVED_YEAR] = approved_year
+        # NOTE: all_time stats omitted from cache - must be read from storage only
+        cache[const.PRES_USER_CHORES_COMPLETED_TODAY] = completed_today
+        cache[const.PRES_USER_CHORES_COMPLETED_WEEK] = completed_week
+        cache[const.PRES_USER_CHORES_COMPLETED_MONTH] = completed_month
+        cache[const.PRES_USER_CHORES_COMPLETED_YEAR] = completed_year
+        # NOTE: all_time stats omitted from cache - must be read from storage only
+        cache[const.PRES_USER_CHORES_CLAIMED_TODAY] = claimed_today
+        cache[const.PRES_USER_CHORES_CLAIMED_WEEK] = claimed_week
+        cache[const.PRES_USER_CHORES_CLAIMED_MONTH] = claimed_month
+        cache[const.PRES_USER_CHORES_CLAIMED_YEAR] = claimed_year
+        # NOTE: all_time stats omitted from cache - must be read from storage only
+        cache[const.PRES_USER_CHORES_MISSED_TODAY] = missed_today
+        cache[const.PRES_USER_CHORES_MISSED_WEEK] = missed_week
+        cache[const.PRES_USER_CHORES_MISSED_MONTH] = missed_month
+        cache[const.PRES_USER_CHORES_MISSED_YEAR] = missed_year
+        # NOTE: all_time stats omitted from cache - must be read from storage only
+
+        cache[const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_TODAY] = calculate_average(
+            overdue_duration_total_today,
+            overdue_duration_count_today,
+        )
+        cache[const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_WEEK] = calculate_average(
+            overdue_duration_total_week,
+            overdue_duration_count_week,
+        )
+        cache[const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_MONTH] = calculate_average(
+            overdue_duration_total_month,
+            overdue_duration_count_month,
+        )
+        cache[const.PRES_USER_CHORES_AVG_OVERDUE_SECONDS_YEAR] = calculate_average(
+            overdue_duration_total_year,
+            overdue_duration_count_year,
+        )
+        cache[const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_TODAY] = (
+            overdue_duration_max_today
+        )
+        cache[const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_WEEK] = (
+            overdue_duration_max_week
+        )
+        cache[const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_MONTH] = (
+            overdue_duration_max_month
+        )
+        cache[const.PRES_USER_CHORES_LONGEST_OVERDUE_SECONDS_YEAR] = (
+            overdue_duration_max_year
+        )
+
+        cache[const.PRES_USER_CHORES_POINTS_TODAY] = round(
+            points_today, const.DATA_FLOAT_PRECISION
+        )
+        cache[const.PRES_USER_CHORES_POINTS_WEEK] = round(
+            points_week, const.DATA_FLOAT_PRECISION
+        )
+        cache[const.PRES_USER_CHORES_POINTS_MONTH] = round(
+            points_month, const.DATA_FLOAT_PRECISION
+        )
+        cache[const.PRES_USER_CHORES_POINTS_YEAR] = round(
+            points_year, const.DATA_FLOAT_PRECISION
+        )
+        # NOTE: all_time stats omitted from cache - must be read from storage only
+
+        # Averages (derived from temporal aggregates)
+        days_in_week = 7
+        days_in_month = 30  # Approximate
+        days_in_year = 365  # Approximate
+        cache[const.PRES_USER_CHORES_AVG_PER_DAY_WEEK] = round(
+            completed_week / days_in_week if completed_week else 0.0,
+            const.DATA_FLOAT_PRECISION,
+        )
+        cache[const.PRES_USER_CHORES_AVG_PER_DAY_MONTH] = round(
+            completed_month / days_in_month if completed_month else 0.0,
+            const.DATA_FLOAT_PRECISION,
+        )
+        cache[const.PRES_USER_CHORES_AVG_PER_DAY_YEAR] = round(
+            completed_year / days_in_year if completed_year else 0.0,
+            const.DATA_FLOAT_PRECISION,
+        )
+
+        # Top chores (most completed per period)
+        def get_top_chore(chore_counts: dict[str, int]) -> str:
+            """Return the name of the chore with highest count, or empty string."""
+            if not chore_counts:
+                return ""
+            top_chore_id = max(chore_counts, key=chore_counts.get)  # type: ignore[arg-type]
+            chore_def: ChoreData | dict[str, Any] = self.coordinator.chores_data.get(
+                top_chore_id, {}
+            )
+            return str(chore_def.get(const.DATA_CHORE_NAME, ""))
+
+        cache[const.PRES_USER_TOP_CHORES_WEEK] = get_top_chore(chore_completed_week)
+        cache[const.PRES_USER_TOP_CHORES_MONTH] = get_top_chore(chore_completed_month)
+        cache[const.PRES_USER_TOP_CHORES_YEAR] = get_top_chore(chore_completed_year)
+
+    def _refresh_reward_cache(self, assignee_id: str) -> None:
+        """Refresh reward statistics cache for a assignee.
+
+        Derives temporal reward stats from reward_data periods.
+        Only runs on reward-related events.
+
+        Args:
+            assignee_id: The assignee's internal ID
+        """
+        assignee_info = self._get_assignee(assignee_id)
+        if not assignee_info:
+            return
+
+        cache = self._get_domain_cache(assignee_id, const.CACHE_DOMAIN_REWARDS)
+        reward_data = assignee_info.get(const.DATA_USER_REWARD_DATA, {})
+
+        now_local = dt_now_local()
+        today_local_iso = now_local.date().isoformat()
+        week_local_iso = now_local.strftime("%Y-W%V")
+        month_local_iso = now_local.strftime("%Y-%m")
+
+        # Aggregate reward stats from all reward_data entries
+        claimed_today = 0
+        claimed_week = 0
+        claimed_month = 0
+        approved_today = 0
+        approved_week = 0
+        approved_month = 0
+
+        for _reward_id, reward_info in reward_data.items():
+            periods = reward_info.get(const.DATA_USER_REWARD_DATA_PERIODS, {})
+
+            # Daily
+            daily_periods = periods.get(const.DATA_USER_REWARD_DATA_PERIODS_DAILY, {})
+            today_entry = daily_periods.get(today_local_iso, {})
+            claimed_today += today_entry.get(
+                const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED, 0
+            )
+            approved_today += today_entry.get(
+                const.DATA_USER_REWARD_DATA_PERIOD_APPROVED, 0
+            )
+
+            # Weekly
+            weekly_periods = periods.get(const.DATA_USER_REWARD_DATA_PERIODS_WEEKLY, {})
+            week_entry = weekly_periods.get(week_local_iso, {})
+            claimed_week += week_entry.get(
+                const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED, 0
+            )
+            approved_week += week_entry.get(
+                const.DATA_USER_REWARD_DATA_PERIOD_APPROVED, 0
+            )
+
+            # Monthly
+            monthly_periods = periods.get(
+                const.DATA_USER_REWARD_DATA_PERIODS_MONTHLY, {}
+            )
+            month_entry = monthly_periods.get(month_local_iso, {})
+            claimed_month += month_entry.get(
+                const.DATA_USER_REWARD_DATA_PERIOD_CLAIMED, 0
+            )
+            approved_month += month_entry.get(
+                const.DATA_USER_REWARD_DATA_PERIOD_APPROVED, 0
+            )
+
+        # Store in cache
+        cache[const.PRES_USER_REWARDS_CLAIMED_TODAY] = claimed_today
+        cache[const.PRES_USER_REWARDS_CLAIMED_WEEK] = claimed_week
+        cache[const.PRES_USER_REWARDS_CLAIMED_MONTH] = claimed_month
+        cache[const.PRES_USER_REWARDS_APPROVED_TODAY] = approved_today
+        cache[const.PRES_USER_REWARDS_APPROVED_WEEK] = approved_week
+        cache[const.PRES_USER_REWARDS_APPROVED_MONTH] = approved_month
+
+    def invalidate_cache(self, assignee_id: str | None = None) -> None:
+        """Invalidate presentation cache (Phase 7.5).
+
+        Call when assignee is deleted or on midnight rollover.
+
+        Args:
+            assignee_id: Specific assignee to invalidate, or None to clear all.
+        """
+        if assignee_id is None:
+            self._stats_cache.clear()
+            # Cancel all pending timers
+            for timer in self._cache_timers.values():
+                timer.cancel()
+            self._cache_timers.clear()
+            const.LOGGER.debug("StatisticsManager: Cleared all cache entries")
+        elif assignee_id in self._stats_cache:
+            del self._stats_cache[assignee_id]
+            # Cancel any pending timer for this assignee
+            if assignee_id in self._cache_timers:
+                self._cache_timers[assignee_id].cancel()
+                del self._cache_timers[assignee_id]
+            const.LOGGER.debug(
+                "StatisticsManager: Invalidated cache for assignee %s", assignee_id
+            )
+
+    def _schedule_cache_refresh(self, assignee_id: str, domain: str = "all") -> None:
+        """Schedule a debounced cache refresh for a assignee (Phase 7.5).
+
+        Uses a 500ms debounce per assignee to prevent thundering herd on rapid events.
+        If a refresh is already scheduled, it's cancelled and rescheduled.
+
+        Args:
+            assignee_id: The assignee's internal ID
+            domain: Which domain to refresh: "point", "chore", "reward", or "all"
+        """
+        # Cancel existing timer if present
+        if assignee_id in self._cache_timers:
+            self._cache_timers[assignee_id].cancel()
+
+        # Create the refresh callback based on domain
+        @callback
+        def _do_refresh() -> None:
+            """Execute the cache refresh after debounce delay."""
+            # Remove timer reference
+            self._cache_timers.pop(assignee_id, None)
+
+            # Refresh based on domain
+            if domain == "point":
+                self._refresh_point_cache(assignee_id)
+            elif domain == "chore":
+                self._refresh_chore_cache(assignee_id)
+            elif domain == "reward":
+                self._refresh_reward_cache(assignee_id)
+            else:
+                self._refresh_all_cache(assignee_id)
+
+            const.LOGGER.debug(
+                "StatisticsManager: Refreshed %s cache for assignee %s (debounced)",
+                domain,
+                assignee_id,
+            )
+
+        # Schedule the refresh
+        self._cache_timers[assignee_id] = self.hass.loop.call_later(
+            CACHE_REFRESH_DEBOUNCE_SECONDS, _do_refresh
+        )
+
+    # ==========================================================================
+    # PUBLIC QUERY METHODS (Phase 3 Step 8 - v0.5.0 Smart Rotation)
+    # ==========================================================================
+
+    def get_chore_completed_counts(
+        self, chore_id: str, assignee_ids: list[str]
+    ) -> dict[str, int]:
+        """Get all-time completed counts for a specific chore across multiple assignees.
+
+        Used by ChoreManager._advance_rotation() for smart rotation fairness.
+        Returns cumulative completed counts (work done) from all_time period bucket.
+        This ensures fair rotation based on actual work performed, not approver
+        approval delays.
+
+        Args:
+            chore_id: The chore's internal ID
+            assignee_ids: List of assignee internal IDs to query
+
+        Returns:
+            Dictionary mapping assignee_id -> all_time_completed_count
+            Assignees with no completions return 0
+        """
+        result: dict[str, int] = {}
+
+        for assignee_id in assignee_ids:
+            assignee_info = self._get_assignee(assignee_id)
+            if not assignee_info:
+                result[assignee_id] = 0
+                continue
+
+            # Navigate to per-chore period data
+            chore_data = assignee_info.get(const.DATA_USER_CHORE_DATA, {})
+            assignee_chore_data = chore_data.get(chore_id, {})
+            periods = assignee_chore_data.get(const.DATA_USER_CHORE_DATA_PERIODS, {})
+
+            # Get all_time bucket (nested structure: periods["all_time"]["all_time"])
+            all_time_container = periods.get(
+                const.DATA_USER_CHORE_DATA_PERIODS_ALL_TIME, {}
+            )
+            all_time_data = all_time_container.get(const.PERIOD_ALL_TIME, {})
+
+            # Extract completed count (work done)
+            completed_count = all_time_data.get(
+                const.DATA_USER_CHORE_DATA_PERIOD_COMPLETED, 0
+            )
+            result[assignee_id] = int(completed_count)
+
+        const.LOGGER.debug(
+            "StatisticsManager.get_chore_completed_counts: chore=%s, results=%s",
+            chore_id,
+            result,
+        )
+        return result
+
+    def get_chore_last_completed_timestamps(
+        self, chore_id: str, assignee_ids: list[str]
+    ) -> dict[str, str | None]:
+        """Get last completion timestamps for a specific chore across multiple assignees.
+
+        Used by ChoreManager._advance_rotation() for smart rotation tie-breaking.
+        Uses last_completed (work date) not last_approved (approver action date)
+        for fair rotation based on when assignees actually did the work.
+
+        Args:
+            chore_id: The chore's internal ID
+            assignee_ids: List of assignee internal IDs to query
+
+        Returns:
+            Dictionary mapping assignee_id -> last_completed ISO timestamp or None
+        """
+        result: dict[str, str | None] = {}
+
+        for assignee_id in assignee_ids:
+            assignee_info = self._get_assignee(assignee_id)
+            if not assignee_info:
+                result[assignee_id] = None
+                continue
+
+            # Navigate to per-chore data
+            chore_data = assignee_info.get(const.DATA_USER_CHORE_DATA, {})
+            assignee_chore_data = chore_data.get(chore_id, {})
+
+            # Get last_completed timestamp (when assignee did the work)
+            last_completed = assignee_chore_data.get(
+                const.DATA_USER_CHORE_DATA_LAST_COMPLETED
+            )
+            result[assignee_id] = last_completed
+
+        const.LOGGER.debug(
+            "StatisticsManager.get_chore_last_completed_timestamps: chore=%s, results=%s",
+            chore_id,
+            result,
+        )
+        return result
