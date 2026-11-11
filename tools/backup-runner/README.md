@@ -187,7 +187,7 @@ echo "[+] MongoDB archive created: ${STAGING_DIR}/mongodb.archive"
 | `BACKUP_MODE` | — | `sqlite-auto` | Declarative strategy: `sqlite-auto`, `filesystem`, or `hook`. |
 | `BACKUP_SOURCE_DIR` | — | `/data` | Directory to snapshot (used by `sqlite-auto` and `filesystem`). |
 | `BACKUP_PASSPHRASE` | `BACKUP_ENCRYPTION_KEY` | *(Required)* | Master encryption passphrase for OpenSSL PBKDF2 AES-256-CBC. |
-| `CRON_SCHEDULE` | `BACKUP_CRON` | `0 16 * * *` | Cron schedule expression (runs in UTC within container crond). |
+| `CRON_SCHEDULE` | `BACKUP_CRON_SCHEDULE`, `BACKUP_CRON` | `0 16 * * *` | Cron schedule expression (runs in UTC within container crond). `BACKUP_CRON_SCHEDULE` takes precedence to prevent collision with application service crons. |
 | `BACKUP_ON_STARTUP` | — | `false` | When `true`, runs an immediate backup on container launch before starting cron. |
 | `BACKUP_DEST_BUCKET` | `B2_BUCKET_NAME`, `B2_BUCKET`, `RCLONE_B2_BUCKET` | *(Optional)* | Destination Backblaze B2 / S3 bucket name. |
 | `BACKUP_DEST_ACCESS_KEY_ID` | `B2_APPLICATION_KEY_ID`, `B2_KEY_ID` | *(Optional)* | Cloud storage Access Key ID / Application Key ID. |
@@ -214,9 +214,11 @@ Snapshot retention is managed **server-side** by Backblaze B2 bucket lifecycle r
    - Eliminates recurring `rclone delete` and `rclone lsl` sweeps on the server.
    - Eliminates unnecessary Class B/C API transactions and latency.
 
-3. **B2 Lifecycle Rule Configuration**:
+3. **B2 Lifecycle Rule Configuration & Audit Utility**:
    - `daysFromUploadingToHiding: 30` (marks versions older than 30 days as hidden).
    - `daysFromHidingToDeleting: 1` (permanently deletes hidden versions after 1 day).
+   - `daysFromStartingToCancelingUnfinishedLargeFiles: 1` (purges incomplete multi-part uploads).
+   - Audit, apply, or prune retention policies using `tools/backup-dr/manage-b2-lifecycle.py`.
    - See [`docs/BACKUP_ARCHITECTURE.md`](../../docs/BACKUP_ARCHITECTURE.md) Section 7 for full JSON rules and CLI instructions.
 
 ---

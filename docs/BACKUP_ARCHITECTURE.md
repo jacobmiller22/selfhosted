@@ -192,19 +192,39 @@ The B2 bucket `jacobmiller22-secure-backup` is configured with the following lif
 - **`daysFromUploadingToHiding: 30`**: Snapshots older than 30 days are automatically hidden (marked as non-current).
 - **`daysFromHidingToDeleting: 1`**: Hidden versions are permanently purged after 1 day, maintaining a clean 30-day rolling retention window.
 
-#### Applying Lifecycle Rules via B2 CLI or AWS S3 API
-Administrators can inspect or apply lifecycle policies from their management workstation:
+#### Managing Lifecycle Rules & Retention (`tools/backup-dr/manage-b2-lifecycle.py`)
+Administrators can inspect, apply, and audit lifecycle rules using the repository management utility:
+
+```bash
+# 1. Audit current bucket lifecycle rules and storage metrics:
+./tools/backup-dr/manage-b2-lifecycle.py status
+
+# 2. Declaratively apply B2 lifecycle rules (30-day retention, 1-day noncurrent version purge):
+./tools/backup-dr/manage-b2-lifecycle.py apply \
+  --key-id <MASTER_KEY_ID> --application-key <MASTER_KEY>
+
+# 3. Prune obsolete pre-migration versions and redundant sub-daily snapshots:
+./tools/backup-dr/manage-b2-lifecycle.py prune --dry-run
+./tools/backup-dr/manage-b2-lifecycle.py prune --execute
+```
+
+Declarative rule files are tracked under version control:
+- Native B2 format: [`tools/backup-dr/b2-lifecycle-rules.json`](../tools/backup-dr/b2-lifecycle-rules.json)
+- AWS S3 compatible format: [`tools/backup-dr/s3-lifecycle-configuration.json`](../tools/backup-dr/s3-lifecycle-configuration.json)
+
+Alternatively, apply policies via standard CLIs:
 
 ```bash
 # Using Backblaze B2 CLI:
 b2 update-bucket \
-  --lifecycleRule '{"daysFromUploadingToHiding": 30, "daysFromHidingToDeleting": 1, "fileNamePrefix": "backups/"}' \
+  --lifecycleRule '{"daysFromUploadingToHiding": 30, "daysFromHidingToDeleting": 1, "daysFromStartingToCancelingUnfinishedLargeFiles": 1, "fileNamePrefix": "backups/"}' \
   jacobmiller22-secure-backup allPrivate
 
 # Or using AWS S3 API:
 aws s3api put-bucket-lifecycle-configuration \
   --bucket jacobmiller22-secure-backup \
-  --lifecycle-configuration file://b2-lifecycle.json
+  --endpoint-url https://s3.us-east-005.backblazeb2.com \
+  --lifecycle-configuration file://tools/backup-dr/s3-lifecycle-configuration.json
 ```
 
 ---
