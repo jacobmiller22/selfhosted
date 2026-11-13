@@ -2,8 +2,7 @@
 """
 Enforce default-deny folder permissions on Grafana SQLite database.
 - Strips global Viewer permission (dashboard_id = -1) so non-admin Viewers have no default access.
-- Restricts 'Infrastructure' and 'Financial Intelligence' folders to Editor and Admin only.
-- Explicitly grants 'Viewer' read permission (permission = 1) to 'BTC Up/Down' folder.
+- Restricts all managed folders ('Infrastructure', 'Infrastructure Alerts', 'Financial Intelligence') to Editor and Admin only (default-deny for Viewer).
 """
 
 import argparse
@@ -55,7 +54,6 @@ def enforce_acls(db_path: Path) -> dict:
             "infrastructure": [("Editor", 2), ("Admin", 4)],
             "infrastructure-alerts": [("Editor", 2), ("Admin", 4)],
             "financial-intelligence": [("Editor", 2), ("Admin", 4)],
-            "btcupdown": [("Viewer", 1), ("Editor", 2), ("Admin", 4)],
         }
 
         for folder_key, allowed_roles in folder_policy.items():
